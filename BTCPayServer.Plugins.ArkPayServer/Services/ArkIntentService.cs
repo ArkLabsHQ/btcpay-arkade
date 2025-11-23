@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Ark.V1;
@@ -32,10 +33,16 @@ public class ArkIntentService(
     ILogger<ArkIntentService> logger)
     : IHostedService, IDisposable
 {
-    private record BatchSessionWithConnection(
-        BatchSession BatchSession,
+    private record BatchSessionWithConnectionId(
+        int ConnectionId,
+        BatchSession BatchSession
+    );
+
+    private record Connection(
+        int Id,
         Task ConnectionTask,
-        CancellationTokenSource CancellationTokenSource);
+        CancellationTokenSource CancellationTokenSource
+    );
     
     // Polling intervals
     private static readonly TimeSpan SubmissionPollingInterval = TimeSpan.FromMinutes(5);
@@ -43,13 +50,14 @@ public class ArkIntentService(
     private static readonly TimeSpan DefaultIntentExpiry = TimeSpan.FromMinutes(5);
     
     private readonly ConcurrentDictionary<string, ArkIntent> _activeIntents = new();
-    private readonly ConcurrentDictionary<string, BatchSessionWithConnection> _activeBatchSessions = new();
+    private readonly ConcurrentDictionary<string, BatchSessionWithConnectionId> _activeBatchSessions = new();
     
-    private CancellationTokenSource? _serviceCts;
-    private CancellationTokenSource? _eventStreamCts;
-    private Task? _submissionTask;
-    private Task? _eventStreamTask;
+    private readonly Dictionary<int, Connection> _connections = [];
+    private readonly Dictionary<int, bool> _isReservedConnections = [];
+    private readonly SemaphoreSlim _connectionManipulationSemaphore = new(1, 1);
 
+    private CancellationTokenSource? _serviceCts;
+    private Task? _submissionTask;
     private Timer? _submissionTriggerTimer;
     private bool _disposed;
 
@@ -75,10 +83,38 @@ public class ArkIntentService(
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            if (_eventStreamCts is not null)
-                await _eventStreamCts.CancelAsync();
-            if (_eventStreamTask?.IsCompleted is null or true)
-                _eventStreamTask = RunSharedEventStreamAsync(cancellationToken);
+            try
+            {
+                await _connectionManipulationSemaphore.WaitAsync(cancellationToken);
+
+                var unreservedConnections = _isReservedConnections.Where(kvp => !kvp.Value).ToList();
+                foreach (var (connId, conn) in unreservedConnections)
+                {   
+                    if (_connections.TryGetValue(connId, out var connection))
+                    {
+                        logger.LogInformation("Disposing unreserved connection {ConnectionId}", connId);
+                        _ = connection.CancellationTokenSource.CancelAsync();
+                        _connections.Remove(connId);
+                        _isReservedConnections.Remove(connId);
+                    }
+                }
+
+                int connectionId = RandomNumberGenerator.GetInt32(int.MinValue, int.MaxValue);
+                var newCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                var newFreeConnection = RunSharedEventStreamAsync(connectionId, newCts.Token);
+                _connections[connectionId] = new Connection(
+                    connectionId,
+                    newFreeConnection,
+                    newCts
+                );
+                _isReservedConnections[connectionId] = false;
+            
+            }
+            finally
+            {
+                _connectionManipulationSemaphore.Release();
+            }
+
             await eventAggregator.WaitNext<IntentsUpdated>(cancellationToken);
         }
     }
@@ -88,16 +124,13 @@ public class ArkIntentService(
         logger.LogInformation("Stopping ArkIntentService");
         if(_serviceCts != null)
             await _serviceCts!.CancelAsync();
-        
-        // Stop event stream
-        if (_eventStreamCts != null)
-            await _eventStreamCts.CancelAsync();
 
-        foreach (var (_, batchSessionWithConn) in _activeBatchSessions)
+
+        foreach (var (_, connection) in _connections)
         {
             try
             {
-                await batchSessionWithConn.CancellationTokenSource.CancelAsync();
+                await connection.CancellationTokenSource.CancelAsync();
             }
             catch
             {
@@ -108,11 +141,9 @@ public class ArkIntentService(
         // Wait for tasks to complete
         if (_submissionTask != null)
             await _submissionTask;
-        if (_eventStreamTask != null)
-            await _eventStreamTask;
 
-        foreach (var (_, batchSessionWithConn) in _activeBatchSessions)
-            await batchSessionWithConn.ConnectionTask;
+        foreach (var (_, connection) in _connections)
+            await connection.ConnectionTask;
         
         _activeIntents.Clear();
         _activeBatchSessions.Clear();
@@ -524,7 +555,7 @@ public class ArkIntentService(
         logger.LogInformation("Loaded {Count} active intents", waitingIntents.Count);
     }
 
-    private async Task RunSharedEventStreamAsync(CancellationToken cancellationToken)
+    private async Task RunSharedEventStreamAsync(int connectionId, CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -552,16 +583,19 @@ public class ArkIntentService(
                 logger.LogInformation("Opening shared event stream with {TopicCount} topics for {IntentCount} intents",
                     topics.Count, _activeIntents.Count);
 
-                _eventStreamCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-
                 var streamCall =
                     arkServiceClient.GetEventStream(eventStreamRequest, cancellationToken: cancellationToken);
 
-                await foreach (var eventResponse in streamCall.ResponseStream.ReadAllAsync(_eventStreamCts.Token))
+                logger.LogInformation("Shared event stream connection {ConnectionId} established", connectionId);
+
+                await foreach (var eventResponse in streamCall.ResponseStream.ReadAllAsync(cancellationToken))
                 {
-                    _eventStreamCts.Token.ThrowIfCancellationRequested();
+                    cancellationToken.ThrowIfCancellationRequested();
                     
-                    await ProcessEventForAllIntentsAsync(eventResponse, CancellationToken.None);
+                    logger.LogDebug("Received event on shared stream {ConnectionId}: {EventType}",
+                        connectionId, eventResponse.EventCase);
+                        
+                    await ProcessEventForAllIntentsAsync(connectionId, eventResponse, CancellationToken.None);
                 }
             }
             catch (OperationCanceledException) 
@@ -579,22 +613,23 @@ public class ArkIntentService(
             }
             finally
             {
-                _eventStreamCts?.Dispose();
-                _eventStreamCts = null;
+                _connections[connectionId].CancellationTokenSource.Dispose();
+                _connections.Remove(connectionId);
+                _isReservedConnections.Remove(connectionId);
             }
         }
 
         logger.LogInformation("Shared event stream stopped");
     }
 
-    private async Task ProcessEventForAllIntentsAsync(GetEventStreamResponse eventResponse, CancellationToken cancellationToken)
+    private async Task ProcessEventForAllIntentsAsync(int connectionId, GetEventStreamResponse eventResponse, CancellationToken cancellationToken)
     {
         await using var dbContext = dbContextFactory.CreateContext();
 
         // Handle BatchStarted event first - check all intents at once
         if (eventResponse.EventCase == GetEventStreamResponse.EventOneofCase.BatchStarted)
         {
-            await HandleBatchStartedForAllIntentsAsync(eventResponse.BatchStarted, dbContext, cancellationToken);
+            await HandleBatchStartedForAllIntentsAsync(connectionId, eventResponse.BatchStarted, dbContext, cancellationToken);
         }
 
         // Process event for each active intent that might be affected
@@ -605,11 +640,32 @@ public class ArkIntentService(
                 // If we have an active batch session, pass all events to it
                 if (_activeBatchSessions.TryGetValue(intentId, out var batchSession))
                 {
+                    if (batchSession.ConnectionId != connectionId)
+                    {
+                        // This event is from a different connection, skip
+                        logger.LogDebug("Skipping event for intent {IntentId} from different connection {ConnectionId}",
+                            intentId, connectionId);
+                        continue;
+                    }
+
                     var isComplete = await batchSession.BatchSession.ProcessEventAsync(eventResponse, cancellationToken);
                     if (isComplete)
                     {
                         _activeBatchSessions.TryRemove(intentId, out _);
                         _activeIntents.TryRemove(intentId, out _);
+                        
+                        try
+                        {
+                            await _connectionManipulationSemaphore.WaitAsync(_serviceCts!.Token);
+                            logger.LogInformation("Releasing connection {ConnectionId} from intent {IntentId}",
+                                connectionId, intentId);
+                            _isReservedConnections[connectionId] = false;
+                        }
+                        finally
+                        {
+                            _connectionManipulationSemaphore.Release();
+                        }
+
                         TriggerStreamUpdate();
                     }
                 }
@@ -646,6 +702,7 @@ public class ArkIntentService(
     }
 
     private async Task HandleBatchStartedForAllIntentsAsync(
+        int connectionId,
         BatchStartedEvent batchEvent,
         ArkPluginDbContext dbContext,
         CancellationToken cancellationToken)
@@ -767,15 +824,24 @@ public class ArkIntentService(
                 await session.InitializeAsync(cancellationToken);
             
                 // Store the session so events can be passed to it
-                _activeBatchSessions[intent.IntentId!] = new BatchSessionWithConnection(
-                    session,
-                    _eventStreamTask!,
-                    _eventStreamCts!
-                );
-                _eventStreamCts = null;
-                _eventStreamTask = null;
+                try
+                {
+                    await _connectionManipulationSemaphore.WaitAsync(_serviceCts!.Token);
+                    logger.LogInformation("Reserving connection {ConnectionId} for intent {IntentId} batch session",
+                        connectionId, intentId);
+                    _activeBatchSessions[intent.IntentId!] = new BatchSessionWithConnectionId(
+                        connectionId,
+                        session
+                    );
+                    _isReservedConnections[connectionId] = true;
+                }
+                finally
+                {
+                    _connectionManipulationSemaphore.Release();
+                }
+
                 _ = RunSharedEventStreamController(_serviceCts!.Token);
-            
+
                 logger.LogInformation("Batch session initialized for intent {IntentId}", intent.InternalId);
             }
             catch (Exception ex)
@@ -848,19 +914,47 @@ public class ArkIntentService(
         {
             // Already disposed, ignore
         }
-        
+    
+
         _serviceCts?.Dispose();
         
         try
         {
-            _eventStreamCts?.Cancel();
+            _connectionManipulationSemaphore.Wait(_serviceCts!.Token);
+
+            foreach (var (_, connection) in _connections)
+            {
+                try
+                {
+                    connection.CancellationTokenSource.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // ignored
+                }
+
+                try
+                {
+                    connection.CancellationTokenSource.Dispose();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // ignored
+                }
+            }   
         }
-        catch (ObjectDisposedException)
+        finally
         {
-            // Already disposed, ignore
+            try
+            {
+                _connectionManipulationSemaphore?.Dispose();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Already disposed, ignore
+            }
         }
         
-        _eventStreamCts?.Dispose();
         _submissionTriggerTimer?.Dispose();
         
         _activeIntents.Clear();

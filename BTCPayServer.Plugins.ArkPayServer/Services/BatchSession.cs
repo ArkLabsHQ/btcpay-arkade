@@ -362,7 +362,6 @@ public class BatchSession
                     connectorCoin,
                     operatorTerms.ForfeitAddress,
                     cancellationToken);
-                _logger.LogInformation(forfeitTx.ToHex());
                 signedForfeits.Add(forfeitTx.ToBase64());
                 _logger.LogDebug("Forfeit tx constructed for VTXO {Outpoint}", vtxoCoin.Outpoint);
             }
