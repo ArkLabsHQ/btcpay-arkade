@@ -83,10 +83,9 @@ public class ArkIntentService(
     {
         while (!cancellationToken.IsCancellationRequested)
         {
+            await _connectionManipulationSemaphore.WaitAsync(cancellationToken);
             try
             {
-                await _connectionManipulationSemaphore.WaitAsync(cancellationToken);
-
                 var unreservedConnections = _isReservedConnections.Where(kvp => !kvp.Value).ToList();
                 foreach (var (connId, conn) in unreservedConnections)
                 {   
@@ -653,10 +652,10 @@ public class ArkIntentService(
                     {
                         _activeBatchSessions.TryRemove(intentId, out _);
                         _activeIntents.TryRemove(intentId, out _);
-                        
+
+                        await _connectionManipulationSemaphore.WaitAsync(_serviceCts!.Token);
                         try
                         {
-                            await _connectionManipulationSemaphore.WaitAsync(_serviceCts!.Token);
                             logger.LogInformation("Releasing connection {ConnectionId} from intent {IntentId}",
                                 connectionId, intentId);
                             _isReservedConnections[connectionId] = false;
@@ -824,9 +823,10 @@ public class ArkIntentService(
                 await session.InitializeAsync(cancellationToken);
             
                 // Store the session so events can be passed to it
+                
+                await _connectionManipulationSemaphore.WaitAsync(_serviceCts!.Token);
                 try
                 {
-                    await _connectionManipulationSemaphore.WaitAsync(_serviceCts!.Token);
                     logger.LogInformation("Reserving connection {ConnectionId} for intent {IntentId} batch session",
                         connectionId, intentId);
                     _activeBatchSessions[intent.IntentId!] = new BatchSessionWithConnectionId(
@@ -918,10 +918,10 @@ public class ArkIntentService(
 
         _serviceCts?.Dispose();
         
+        _connectionManipulationSemaphore.Wait(_serviceCts!.Token);
+
         try
         {
-            _connectionManipulationSemaphore.Wait(_serviceCts!.Token);
-
             foreach (var (_, connection) in _connections)
             {
                 try
