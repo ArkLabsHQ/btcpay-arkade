@@ -436,7 +436,7 @@ public class ArkIntentService(
                                 logger.LogInformation("Submitted delete proof for intent {IntentId}", intentToCancel.InternalId);
                             }
                         }
-                        catch (Exception e)
+                        catch
                         { 
                             // ignored
                         }
@@ -740,9 +740,9 @@ public class ArkIntentService(
             .Where(wid => wid != null)
             .Select(wid => wid!)
             .Distinct()
-            .ToList();
+            .ToArray();
         
-        if (walletIds.Count == 0)
+        if (walletIds.Length == 0)
         {
             logger.LogWarning("No valid wallet IDs found for selected intents");
             return;
@@ -756,7 +756,7 @@ public class ArkIntentService(
             .ToHashSet();
         
         // Get spendable coins for all wallets, filtered by the specific VTXOs locked in intents
-        var walletCoins = await arkadeSpender.GetSpendableCoins(walletIds.ToArray(), allVtxoOutpoints, true, cancellationToken);
+        var walletCoins = await arkadeSpender.GetSpendableCoins(walletIds, allVtxoOutpoints, true, cancellationToken);
         var terms = await operatorTermsService.GetOperatorTerms(cancellationToken);
         // Confirm registration and create batch sessions for all selected intents
         foreach (var intentId in selectedIntentIds)

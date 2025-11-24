@@ -12,7 +12,12 @@ using NBitcoin;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
 
-public class ArkadeSpendingService(ArkWalletService arkWalletService, ArkadeSpender arkadeSpender, IOperatorTermsService operatorTermsService, PaymentMethodHandlerDictionary paymentMethodHandlerDictionary)
+public class ArkadeSpendingService(
+    ArkWalletService arkWalletService,
+    ArkadeSpender arkadeSpender,
+    IOperatorTermsService operatorTermsService,
+    PaymentMethodHandlerDictionary paymentMethodHandlerDictionary,
+    ArkIntentService arkIntentService)
 {
     public async Task<string?> Spend(StoreData store, string destination, CancellationToken cancellationToken)
     {
@@ -86,6 +91,22 @@ public class ArkadeSpendingService(ArkWalletService arkWalletService, ArkadeSpen
                 {
                     throw new ArkadePaymentFailedException(e.Message);
                 }
+            }
+            else if (BitcoinAddress.Create(host, terms.Network) is {} onchainAddress)
+            {
+                var amount = 
+                    decimal.Parse(qs["amount"] ?? "0", CultureInfo.InvariantCulture);
+
+                if (amount < terms.Dust.ToDecimal(MoneyUnit.BTC))
+                {
+                    throw new ArkadePaymentFailedException("Amount is below dust threshold.");
+                }
+
+                var (coins, intentOutputs) = await arkadeSpender.PrepareOnChainSpend(config.WalletId, new TxOut(Money.Coins(amount), onchainAddress), cancellationToken);
+
+                var intentId = await arkIntentService.CreateIntentAsync(config.WalletId, coins, intentOutputs, cancellationToken: cancellationToken);
+
+                return intentId.ToString();
             }
         }
 

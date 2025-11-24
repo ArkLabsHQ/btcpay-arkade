@@ -10,7 +10,6 @@ using NArk.Scripts;
 using NArk.Services;
 using NArk.Services.Abstractions;
 using NBitcoin;
-using NBitcoin.Secp256k1;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
 
@@ -25,6 +24,69 @@ public class ArkadeSpender(
     ArkVtxoSynchronizationService arkVtxoSynchronizationService,
     BitcoinTimeChainProvider bitcoinTimeChainProvider)
 {
+    public async Task<(SpendableArkCoinWithSigner[], IntentTxOut[])> PrepareOnChainSpend(string walletId, TxOut onchainDestination, CancellationToken cancellationToken = default)
+    {
+        using var l = await asyncKeyedLocker.LockAsync($"ark-{walletId}-txs-spending", cancellationToken);
+
+        var coinSet = await GetSpendableCoins([walletId],false, cancellationToken);
+
+        if (!coinSet.TryGetValue(walletId, out var coins) || coins.Count == 0)
+        {
+            throw new InvalidOperationException($"No coins to spend for wallet {walletId}");
+        }
+
+        logger.LogInformation($"Found {coins.Count} VTXOs to spend for wallet {walletId}");
+
+        var wallet = 
+            await arkWalletService.GetWallet(walletId, cancellationToken) 
+                ?? throw new InvalidOperationException($"Wallet {walletId} not found");
+
+        var operatorTerms = await operatorTermsService.GetOperatorTerms(cancellationToken);
+
+        var changeAddress = await GetDestination(wallet, operatorTerms);
+
+        var totalOutput = onchainDestination.Value;
+        var availableCoins = coins.OrderByDescending(x => x.TxOut.Value).ToList();
+        
+        // Check if output is explicitly subdust
+        if (onchainDestination.Value < operatorTerms.Dust)
+        {
+            throw new NotImplementedException("Sending explicit subdust outputs is not supported yet.");
+        }
+        
+        // Select coins based on useAllCoins parameter
+        List<SpendableArkCoinWithSigner>? selectedCoins =
+            SelectCoins(availableCoins, totalOutput, operatorTerms.Dust, 0);
+
+        if (selectedCoins == null || selectedCoins.Count == 0)
+            throw new InvalidOperationException(
+                $"Insufficient funds. Available: {availableCoins.Sum(x => x.TxOut.Value)}, Required: {totalOutput}");
+        
+        var totalInput = selectedCoins.Sum(x => x.TxOut.Value);
+        var change = totalInput - totalOutput;
+        
+        IntentTxOut[] intentOutputs;
+
+        // Add change output if it's at or above dust threshold
+        if (change >= operatorTerms.Dust)
+        {
+            var onchainIntentDestination = 
+                new IntentTxOut(onchainDestination, IntentTxOut.IntentOutputType.OnChain);
+
+            intentOutputs = [onchainIntentDestination, new IntentTxOut(new TxOut(Money.Satoshis(change), changeAddress), IntentTxOut.IntentOutputType.VTXO)];
+        }
+        else if (change > 0)
+        {
+            throw new NotImplementedException("Sending subdust change is not supported yet.");
+        }
+        else
+        {
+            intentOutputs = [new IntentTxOut(onchainDestination, IntentTxOut.IntentOutputType.OnChain)];
+        }
+
+        return ([.. selectedCoins], intentOutputs);
+    }
+
     public async Task<uint256> Spend(string walletId, TxOut[] outputs, CancellationToken cancellationToken = default)
     {
         var coinSet = await GetSpendableCoins([walletId],false, cancellationToken);
@@ -35,7 +97,14 @@ public class ArkadeSpender(
         }
 
         logger.LogInformation($"Found {coins.Count} VTXOs to spend for wallet {walletId}");
+
         var wallet = await arkWalletService.GetWallet(walletId, cancellationToken);
+
+        if (wallet is null)
+        {
+            throw new InvalidOperationException($"Wallet {walletId} not found");
+        }
+
         return await Spend(wallet, coins, outputs, cancellationToken);
     }
 
@@ -64,7 +133,7 @@ public class ArkadeSpender(
         var hasExplicitSubdustOutput = outputs.Count(o => o.Value < operatorTerms.Dust);
         
         // Select coins based on useAllCoins parameter
-        List<SpendableArkCoinWithSigner> selectedCoins;
+        List<SpendableArkCoinWithSigner>? selectedCoins;
         if (useAllCoins)
         {
             // Use all available coins
@@ -87,14 +156,14 @@ public class ArkadeSpender(
         // Add change output if it's at or above dust threshold
         if (change >= operatorTerms.Dust)
         {
-            outputs = outputs.Concat([new TxOut(Money.Satoshis(change), changeAddress)]).ToArray();
+            outputs = [.. outputs, new TxOut(Money.Satoshis(change), changeAddress)];
         }
         else if (change > 0 && (hasExplicitSubdustOutput + 1) <= ArkTransactionBuilder.MaxOpReturnOutputs)
         {
             // We have subdust change - log it as it will become an OP_RETURN
             logger.LogWarning("Transaction will create subdust change of {Change} sats (< {Dust} dust threshold). " +
                             "This will be converted to an OP_RETURN output.", change, operatorTerms.Dust);
-            outputs = outputs.Concat([new TxOut(Money.Satoshis(change), changeAddress)]).ToArray();
+            outputs = [.. outputs, new TxOut(Money.Satoshis(change), changeAddress)];
         }
 
         try
@@ -105,7 +174,7 @@ public class ArkadeSpender(
                 arkServiceClient,
                 cancellationToken);
         }
-        catch (Exception ex)
+        catch
         {
             var scripts = selectedCoins.Select(x => x.Contract.GetArkAddress().ScriptPubKey.ToHex())
                 .Concat(
@@ -183,7 +252,7 @@ public class ArkadeSpender(
                     }
                 }
 
-                if (!operatorTerms.SignerKey.ToBytes().SequenceEqual(contract.Server.ToBytes()))
+                if (!operatorTerms.SignerKey.ToBytes().SequenceEqual(contract.Server!.ToBytes()))
                 {
                     continue;
                 }
