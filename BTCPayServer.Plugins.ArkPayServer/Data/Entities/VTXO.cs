@@ -9,6 +9,7 @@ public class VTXO
     public string TransactionId { get; set; }
     public int TransactionOutputIndex { get; set; }
     public string? SpentByTransactionId { get; set; }
+    public string? SettledByTransactionId { get; set; }
     // public int? SpentByTransactionIdInputIndex { get; set; }
     public long Amount { get; set; }
     public DateTimeOffset SeenAt { get; set; }
@@ -25,25 +26,32 @@ public class VTXO
         return new Coin(outpoint, txout);
     }
 
+    public bool IsSpent()
+    {
+        return !string.IsNullOrEmpty(SpentByTransactionId) || !string.IsNullOrEmpty(SettledByTransactionId);
+    }
+
     public override int GetHashCode()
     {
         // Hash all properties to detect changes
-        return HashCode.Combine(
-            TransactionId,
-            TransactionOutputIndex,
-            Amount,
-            Recoverable,
-            SeenAt,
-            ExpiresAt,
-            SpentByTransactionId,
-            Script
-        );
+        var hash = new HashCode();
+        hash.Add(TransactionId);
+        hash.Add(TransactionOutputIndex);
+        hash.Add(Amount);
+        hash.Add(Recoverable);
+        hash.Add(SeenAt);
+        hash.Add(ExpiresAt);
+        hash.Add(SpentByTransactionId);
+        hash.Add(Script);
+        hash.Add(SettledByTransactionId);
+        return hash.ToHashCode();
     }
     
     internal static void OnModelCreating(ModelBuilder builder)
     {
         var entity = builder.Entity<VTXO>();
         entity.Property(vtxo => vtxo.SpentByTransactionId).HasDefaultValue(null);
+        entity.Property(vtxo => vtxo.SettledByTransactionId).HasDefaultValue(null);
         
         entity.HasKey(e => new { e.TransactionId, e.TransactionOutputIndex });
     }
