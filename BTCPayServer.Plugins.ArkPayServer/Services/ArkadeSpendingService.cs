@@ -102,11 +102,12 @@ public class ArkadeSpendingService(
                     throw new ArkadePaymentFailedException("Amount is below dust threshold.");
                 }
 
-                var (coins, intentOutputs) = await arkadeSpender.PrepareOnChainSpend(config.WalletId, new TxOut(Money.Coins(amount), onchainAddress), cancellationToken);
+                var (coins, intentOutputs) =
+                    await arkadeSpender.PrepareOnchainSpend(config.WalletId, new TxOut(Money.Coins(amount), onchainAddress), cancellationToken);
 
                 var intentId = await arkIntentService.CreateIntentAsync(config.WalletId, coins, intentOutputs, cancellationToken: cancellationToken);
 
-                return intentId.ToString();
+                return intentId;
             }
         }
 

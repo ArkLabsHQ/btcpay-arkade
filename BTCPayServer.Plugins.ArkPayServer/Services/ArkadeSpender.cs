@@ -24,7 +24,7 @@ public class ArkadeSpender(
     ArkVtxoSynchronizationService arkVtxoSynchronizationService,
     BitcoinTimeChainProvider bitcoinTimeChainProvider)
 {
-    public async Task<(SpendableArkCoinWithSigner[], IntentTxOut[])> PrepareOnChainSpend(string walletId, TxOut onchainDestination, CancellationToken cancellationToken = default)
+    public async Task<(SpendableArkCoinWithSigner[], IntentTxOut[])> PrepareOnchainSpend(string walletId, TxOut onchainDestination, CancellationToken cancellationToken = default)
     {
         using var l = await asyncKeyedLocker.LockAsync($"ark-{walletId}-txs-spending", cancellationToken);
 
@@ -35,7 +35,7 @@ public class ArkadeSpender(
             throw new InvalidOperationException($"No coins to spend for wallet {walletId}");
         }
 
-        logger.LogInformation($"Found {coins.Count} VTXOs to spend for wallet {walletId}");
+        logger.LogInformation("Found {VtxoCount} VTXOs to spend for wallet {WalletId}", coins.Count, walletId);
 
         var wallet = 
             await arkWalletService.GetWallet(walletId, cancellationToken) 
@@ -45,7 +45,7 @@ public class ArkadeSpender(
 
         var changeAddress = await GetDestination(wallet, operatorTerms);
 
-        var totalOutput = onchainDestination.Value;
+        var totalOutput = onchainDestination.Value + (operatorTerms.FeeTerms.OnchainOutput * 2);
         var availableCoins = coins.OrderByDescending(x => x.TxOut.Value).ToList();
         
         // Check if output is explicitly subdust
@@ -56,14 +56,14 @@ public class ArkadeSpender(
         
         // Select coins based on useAllCoins parameter
         List<SpendableArkCoinWithSigner>? selectedCoins =
-            SelectCoins(availableCoins, totalOutput, operatorTerms.Dust, 0);
+            SelectCoins(availableCoins, totalOutput, operatorTerms, 0);
 
         if (selectedCoins == null || selectedCoins.Count == 0)
             throw new InvalidOperationException(
                 $"Insufficient funds. Available: {availableCoins.Sum(x => x.TxOut.Value)}, Required: {totalOutput}");
         
         var totalInput = selectedCoins.Sum(x => x.TxOut.Value);
-        var change = totalInput - totalOutput;
+        var change = totalInput - onchainDestination.Value - (selectedCoins.Count * operatorTerms.FeeTerms.OffchainInput);
         
         IntentTxOut[] intentOutputs;
 
@@ -73,15 +73,11 @@ public class ArkadeSpender(
             var onchainIntentDestination = 
                 new IntentTxOut(onchainDestination, IntentTxOut.IntentOutputType.OnChain);
 
-            intentOutputs = [onchainIntentDestination, new IntentTxOut(new TxOut(Money.Satoshis(change), changeAddress), IntentTxOut.IntentOutputType.VTXO)];
-        }
-        else if (change > 0)
-        {
-            throw new NotImplementedException("Sending subdust change is not supported yet.");
+            intentOutputs = [onchainIntentDestination, new IntentTxOut(new TxOut(Money.Satoshis(change) - (operatorTerms.FeeTerms.OffchainOutput + operatorTerms.FeeTerms.OnchainOutput), changeAddress), IntentTxOut.IntentOutputType.VTXO)];
         }
         else
         {
-            intentOutputs = [new IntentTxOut(onchainDestination, IntentTxOut.IntentOutputType.OnChain)];
+            intentOutputs = [new IntentTxOut(new TxOut(onchainDestination.Value + change, onchainDestination.ScriptPubKey),IntentTxOut.IntentOutputType.OnChain)];
         }
 
         return ([.. selectedCoins], intentOutputs);
@@ -126,7 +122,7 @@ public class ArkadeSpender(
     private async Task<uint256> SpendWalletCoins(IEnumerable<SpendableArkCoinWithSigner> coins,
         ArkOperatorTerms operatorTerms, TxOut[] outputs, ArkAddress changeAddress, bool useAllCoins, CancellationToken cancellationToken)
     {
-        var totalOutput = outputs.Sum(x => x.Value);
+        var totalOutput = outputs.Sum(x => x.Value) + (outputs.Length * operatorTerms.FeeTerms.OffchainOutput);
         var availableCoins = coins.OrderByDescending(x => x.TxOut.Value).ToList();
         
         // Check if any output is explicitly subdust (user wants to send subdust amount)
@@ -143,7 +139,7 @@ public class ArkadeSpender(
         else
         {
             // Perform coin selection to avoid subdust change unless necessary
-            selectedCoins = SelectCoins(availableCoins, totalOutput, operatorTerms.Dust, hasExplicitSubdustOutput);
+            selectedCoins = SelectCoins(availableCoins, totalOutput, operatorTerms, hasExplicitSubdustOutput);
         }
         
         if (selectedCoins == null || selectedCoins.Count == 0)
@@ -151,14 +147,17 @@ public class ArkadeSpender(
                 $"Insufficient funds. Available: {availableCoins.Sum(x => x.TxOut.Value)}, Required: {totalOutput}");
         
         var totalInput = selectedCoins.Sum(x => x.TxOut.Value);
-        var change = totalInput - totalOutput;
+        var change =
+            totalInput -
+            totalOutput -
+            (selectedCoins.Count * operatorTerms.FeeTerms.OffchainInput);
         
         // Add change output if it's at or above dust threshold
         if (change >= operatorTerms.Dust)
         {
             outputs = [.. outputs, new TxOut(Money.Satoshis(change), changeAddress)];
         }
-        else if (change > 0 && (hasExplicitSubdustOutput + 1) <= ArkTransactionBuilder.MaxOpReturnOutputs)
+        else if (change > 0UL && (hasExplicitSubdustOutput + 1) <= ArkTransactionBuilder.MaxOpReturnOutputs)
         {
             // We have subdust change - log it as it will become an OP_RETURN
             logger.LogWarning("Transaction will create subdust change of {Change} sats (< {Dust} dust threshold). " +
@@ -350,7 +349,7 @@ public class ArkadeSpender(
     private List<SpendableArkCoinWithSigner>? SelectCoins(
         List<SpendableArkCoinWithSigner> availableCoins,
         Money targetAmount,
-        Money dustThreshold,
+        ArkOperatorTerms operatorTerms,
         int currentSubDustOutputs)
     {
         if (availableCoins.Count == 0)
@@ -372,7 +371,7 @@ public class ArkadeSpender(
                 var change = currentTotal - targetAmount;
                 // Check if change is acceptable (either 0, > dust, or we can add another subdust OP_RETURN)
                 var canAddSubdustChange = (currentSubDustOutputs + 1) <= ArkTransactionBuilder.MaxOpReturnOutputs;
-                if (change == Money.Zero || change >= dustThreshold || canAddSubdustChange)
+                if (change == Money.Zero || change >= operatorTerms.Dust || canAddSubdustChange)
                     break;
             }
 
@@ -384,7 +383,7 @@ public class ArkadeSpender(
         
         // If we have subdust change and can't add another OP_RETURN, try to find better combination
         var canAddSubdust = (currentSubDustOutputs + 1) <= ArkTransactionBuilder.MaxOpReturnOutputs;
-        if (finalChange > Money.Zero && finalChange < dustThreshold && !canAddSubdust)
+        if (finalChange > Money.Zero && finalChange < operatorTerms.Dust && !canAddSubdust)
         {
             logger.LogDebug("Greedy selection resulted in subdust change ({Change} sats). Attempting to find better combination.", finalChange);
             
@@ -393,7 +392,7 @@ public class ArkadeSpender(
             foreach (var extraCoin in remainingCoins)
             {
                 var newChange = finalChange + extraCoin.TxOut.Value;
-                if (newChange >= dustThreshold)
+                if (newChange >= operatorTerms.Dust)
                 {
                     logger.LogDebug("Adding extra coin ({CoinValue} sats) pushes change above dust threshold ({NewChange} sats).", 
                         extraCoin.TxOut.Value, newChange);
@@ -405,7 +404,7 @@ public class ArkadeSpender(
             logger.LogDebug("Could not push change above dust by adding single coin. Trying alternative combinations.");
             
             // Strategy 3: Try to find combination that results in no change or change > dust
-            var betterSelection = TryFindBetterCombination(availableCoins, targetAmount, dustThreshold);
+            var betterSelection = TryFindBetterCombination(availableCoins, targetAmount, operatorTerms);
             if (betterSelection != null)
             {
                 logger.LogDebug("Found better coin combination avoiding subdust change.");
@@ -426,13 +425,13 @@ public class ArkadeSpender(
     private List<SpendableArkCoinWithSigner>? TryFindBetterCombination(
         List<SpendableArkCoinWithSigner> availableCoins,
         Money targetAmount,
-        Money dustThreshold)
+        ArkOperatorTerms terms)
     {
         // Try combinations of 1-3 coins (to keep it performant)
         // Look for exact match first
         foreach (var coin in availableCoins)
         {
-            if (coin.TxOut.Value == targetAmount)
+            if (coin.TxOut.Value == targetAmount + terms.FeeTerms.OffchainInput)
                 return [coin];
         }
 
@@ -442,11 +441,11 @@ public class ArkadeSpender(
             for (int j = i + 1; j < availableCoins.Count; j++)
             {
                 var total = availableCoins[i].TxOut.Value + availableCoins[j].TxOut.Value;
-                if (total < targetAmount)
+                if (total < targetAmount + (2 * terms.FeeTerms.OffchainInput))
                     continue;
                     
-                var change = total - targetAmount;
-                if (change == Money.Zero || change >= dustThreshold)
+                var change = total - (targetAmount + (2 * terms.FeeTerms.OffchainInput));
+                if (change == Money.Zero || change >= terms.Dust)
                     return [availableCoins[i], availableCoins[j]];
             }
         }
@@ -459,11 +458,11 @@ public class ArkadeSpender(
                 for (int k = j + 1; k < availableCoins.Count && k < 10; k++)
                 {
                     var total = availableCoins[i].TxOut.Value + availableCoins[j].TxOut.Value + availableCoins[k].TxOut.Value;
-                    if (total < targetAmount)
+                    if (total < targetAmount + (3 * terms.FeeTerms.OffchainInput))
                         continue;
                         
-                    var change = total - targetAmount;
-                    if (change == Money.Zero || change >= dustThreshold)
+                    var change = total - (targetAmount + (3 * terms.FeeTerms.OffchainInput));
+                    if (change == Money.Zero || change >= terms.Dust)
                         return [availableCoins[i], availableCoins[j], availableCoins[k]];
                 }
             }

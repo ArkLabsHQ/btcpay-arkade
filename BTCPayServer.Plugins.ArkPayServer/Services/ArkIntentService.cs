@@ -914,9 +914,6 @@ public class ArkIntentService(
         {
             // Already disposed, ignore
         }
-    
-
-        _serviceCts?.Dispose();
         
         _connectionManipulationSemaphore.Wait(_serviceCts!.Token);
 
@@ -947,13 +944,15 @@ public class ArkIntentService(
         {
             try
             {
-                _connectionManipulationSemaphore?.Dispose();
+                _connectionManipulationSemaphore.Dispose();
             }
             catch (ObjectDisposedException)
             {
                 // Already disposed, ignore
             }
         }
+        
+        _serviceCts?.Dispose();
         
         _submissionTriggerTimer?.Dispose();
         

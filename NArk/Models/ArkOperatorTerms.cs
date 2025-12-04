@@ -13,4 +13,14 @@ public record ArkOperatorTerms(
     Sequence BoardingExit,
     BitcoinAddress ForfeitAddress,
     ECXOnlyPubKey ForfeitPubKey,
-    UnilateralPathArkTapScript CheckpointTapscript);
+    UnilateralPathArkTapScript CheckpointTapscript,
+    ArkOperatorFeeTerms FeeTerms
+);
+
+public record ArkOperatorFeeTerms(
+    Money TxFeeRate,
+    Money OffchainOutput,
+    Money OnchainOutput,
+    Money OffchainInput,
+    Money OnchainInput
+);

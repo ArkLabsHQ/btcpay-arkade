@@ -275,6 +275,8 @@ public class ArkIntentScheduler : IHostedService, IDisposable
     {
         try
         {
+            var terms = await _operatorTermsService.GetOperatorTerms(cancellationToken);
+            
             _logger.LogInformation(
                 "Creating scheduled intent for wallet {WalletId}: {Reason} with {Count} coins",
                 wallet.Id, intentSpec.Reason, intentSpec.InputCoins.Length);
@@ -290,8 +292,11 @@ public class ArkIntentScheduler : IHostedService, IDisposable
             else
             {
                 // Default: send all funds back to wallet (refreshes VTXOs, moves from recoverable state, etc.)
-                var destination = await _arkadeSpender.GetDestination(wallet, await _operatorTermsService.GetOperatorTerms(cancellationToken));
-                
+                var destination = await _arkadeSpender.GetDestination(wallet, terms);
+
+                var fees =
+                    (terms.FeeTerms.OffchainInput * intentSpec.InputCoins.Length) +
+                    terms.FeeTerms.OffchainOutput;
                 
                 outputs =
                 [
@@ -302,7 +307,7 @@ public class ArkIntentScheduler : IHostedService, IDisposable
                         Value = (ulong)totalAmount
                     }
                 ];
-            }
+            }            
             // Create the intent
             var intentId = await _intentService.CreateIntentAsync(
                 wallet.Id,

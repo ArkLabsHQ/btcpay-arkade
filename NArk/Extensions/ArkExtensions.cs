@@ -23,9 +23,9 @@ public static class ArkExtensions
     {
         var network = Network.GetNetwork(response.Network)?? (response.Network.Equals("bitcoin", StringComparison.InvariantCultureIgnoreCase)? Network.Main : null);
         
-        
-        if(network == null)
+        if (network == null)
             throw new ArgumentException($"Unknown network {response.Network}");
+        
         return new ArkOperatorTerms(
             Dust: Money.Satoshis(response.Dust),
             SignerKey: response.ServerKey(),
@@ -36,7 +36,20 @@ public static class ArkExtensions
             BoardingExit: Parse(response.BoardingExitDelay),
             ForfeitAddress: BitcoinAddress.Create(response.ForfeitAddress, network),
             ForfeitPubKey: response.ForfeitPubkey.ToECXOnlyPubKey(),
-            CheckpointTapscript: new CheckpointTapscript(Script.FromHex(response.CheckpointTapscript)));
+            CheckpointTapscript: new CheckpointTapscript(Script.FromHex(response.CheckpointTapscript)),
+            FeeTerms: response.Fees.ArkOperatorFeeTerms()
+        );
+    }
+
+    public static ArkOperatorFeeTerms ArkOperatorFeeTerms(this FeeInfo feeInfo)
+    {
+        return new ArkOperatorFeeTerms(
+            TxFeeRate: Money.Satoshis(decimal.Parse(feeInfo.TxFeeRate)), 
+            OffchainOutput: Money.Satoshis(decimal.Parse(feeInfo.IntentFee.OffchainOutput)),
+            OnchainOutput: Money.Satoshis(decimal.Parse(feeInfo.IntentFee.OnchainOutput)),
+            OffchainInput: Money.Satoshis(decimal.Parse(feeInfo.IntentFee.OffchainInput)),
+            OnchainInput: Money.Satoshis(decimal.Parse(feeInfo.IntentFee.OnchainInput))
+        );
     }
 
     class CheckpointTapscript( Script serverProvidedScript)
