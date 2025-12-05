@@ -41,14 +41,14 @@ public static class ArkExtensions
         );
     }
 
-    public static ArkOperatorFeeTerms ArkOperatorFeeTerms(this FeeInfo feeInfo)
+    public static ArkOperatorFeeTerms ArkOperatorFeeTerms(this FeeInfo? feeInfo)
     {
         return new ArkOperatorFeeTerms(
-            TxFeeRate: Money.Satoshis(decimal.Parse(feeInfo.TxFeeRate)), 
-            OffchainOutput: Money.Satoshis(decimal.Parse(feeInfo.IntentFee.OffchainOutput)),
-            OnchainOutput: Money.Satoshis(decimal.Parse(feeInfo.IntentFee.OnchainOutput)),
-            OffchainInput: Money.Satoshis(decimal.Parse(feeInfo.IntentFee.OffchainInput)),
-            OnchainInput: Money.Satoshis(decimal.Parse(feeInfo.IntentFee.OnchainInput))
+            TxFeeRate: Money.Satoshis(decimal.Parse(feeInfo?.TxFeeRate ?? "0")), 
+            OffchainOutput: Money.Satoshis(decimal.Parse(feeInfo?.IntentFee.OffchainOutput ?? "0")),
+            OnchainOutput: Money.Satoshis(decimal.Parse(feeInfo?.IntentFee.OnchainOutput ?? "0")),
+            OffchainInput: Money.Satoshis(decimal.Parse(feeInfo?.IntentFee.OffchainInput ?? "0")),
+            OnchainInput: Money.Satoshis(decimal.Parse(feeInfo?.IntentFee.OnchainInput ?? "0"))
         );
     }
 
