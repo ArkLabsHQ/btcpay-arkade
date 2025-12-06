@@ -76,7 +76,7 @@ public class BatchSession
         
         // Get operator terms to build sweep tap tree
         var terms = await _operatorTermsService.GetOperatorTerms(cancellationToken);
-        var batchExpiry = new Sequence((uint) _batchStartedEvent.BatchExpiry);
+        var batchExpiry = ArkExtensions.Parse(_batchStartedEvent.BatchExpiry);
         var sweepTapScript = new UnilateralPathArkTapScript(batchExpiry, new NofNMultisigTapScript([terms.ForfeitPubKey]));
         _sweepTapTreeRoot = sweepTapScript.Build().LeafHash;
     }
@@ -116,12 +116,17 @@ public class BatchSession
                 case GetEventStreamResponse.EventOneofCase.TreeNonces:
                     if (_signingSession != null)
                     {
-                        var val = eventResponse.TreeNonces.Nonces.Values.Select(s =>
-                            new MusigPubNonce(Encoders.Hex.DecodeData(s)));
-                        var txid = uint256.Parse(eventResponse.TreeNonces.Txid)!;
-                        await _signingSession.AggregateNonces(txid, val.ToArray(), cancellationToken);
-
-
+                        var nonces = 
+                            eventResponse
+                                .TreeNonces
+                                .Nonces
+                                .Values
+                                .Select(s =>
+                                    new MusigPubNonce(Encoders.Hex.DecodeData(s))
+                                )
+                                .ToArray();
+                        var txId = uint256.Parse(eventResponse.TreeNonces.Txid)!;
+                        await _signingSession.AggregateNonces(txId, nonces, cancellationToken);
                     }
 
                     break;
@@ -254,10 +259,13 @@ public class BatchSession
     {
         _logger.LogInformation("Tree nonces aggregated for batch {BatchId}", _batchId);
         
-        
         // Process nonces in the session
-        await session.VerifyAggregatedNonces(
-            aggregatedEvent.TreeNonces.ToDictionary(pair => uint256.Parse(pair.Key), pair => new MusigPubNonce(Encoders.Hex.DecodeData(pair.Value))), cancellationToken);
+        session.VerifyAggregatedNonces(
+            aggregatedEvent
+                .TreeNonces
+                .ToDictionary(pair => uint256.Parse(pair.Key), pair => new MusigPubNonce(Encoders.Hex.DecodeData(pair.Value))),
+            cancellationToken
+        );
 
         // Sign and submit signatures
         var signatures = await session.SignAsync(cancellationToken);

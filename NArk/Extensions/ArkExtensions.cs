@@ -41,15 +41,28 @@ public static class ArkExtensions
         );
     }
 
-    public static ArkOperatorFeeTerms ArkOperatorFeeTerms(this FeeInfo? feeInfo)
+    private static ArkOperatorFeeTerms ArkOperatorFeeTerms(this FeeInfo? feeInfo)
     {
-        return new ArkOperatorFeeTerms(
-            TxFeeRate: Money.Satoshis(decimal.Parse(feeInfo?.TxFeeRate ?? "0")), 
-            OffchainOutput: Money.Satoshis(decimal.Parse(feeInfo?.IntentFee.OffchainOutput ?? "0")),
-            OnchainOutput: Money.Satoshis(decimal.Parse(feeInfo?.IntentFee.OnchainOutput ?? "0")),
-            OffchainInput: Money.Satoshis(decimal.Parse(feeInfo?.IntentFee.OffchainInput ?? "0")),
-            OnchainInput: Money.Satoshis(decimal.Parse(feeInfo?.IntentFee.OnchainInput ?? "0"))
+        var defaults = new ArkOperatorFeeTerms(
+            TxFeeRate: Money.Zero, 
+            OffchainOutput: Money.Zero,
+            OnchainOutput: Money.Zero,
+            OffchainInput: Money.Zero,
+            OnchainInput: Money.Zero
         );
+
+        if (decimal.TryParse(feeInfo?.TxFeeRate, out var txFeeRate))
+            defaults = defaults with { TxFeeRate = Money.Satoshis(txFeeRate) };
+        if (decimal.TryParse(feeInfo?.IntentFee.OffchainOutput, out var offchainOutputFee))
+            defaults = defaults with { OffchainOutput = Money.Satoshis(offchainOutputFee) };
+        if (decimal.TryParse(feeInfo?.IntentFee.OffchainInput, out var offchainInput))
+            defaults = defaults with { OffchainInput = Money.Satoshis(offchainInput) };
+        if (decimal.TryParse(feeInfo?.IntentFee.OnchainOutput, out var onchainOutputFee))
+            defaults = defaults with { OnchainOutput = Money.Satoshis(onchainOutputFee) };
+        if (decimal.TryParse(feeInfo?.IntentFee.OnchainInput, out var onchainInput))
+            defaults = defaults with { OnchainInput = Money.Satoshis(onchainInput) };
+
+        return defaults;
     }
 
     class CheckpointTapscript( Script serverProvidedScript)

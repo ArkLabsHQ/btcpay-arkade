@@ -15,7 +15,7 @@ public class OperatorTermsService(
     {
         try
         {
-            var info = await arkClient.GetInfoAsync(new GetInfoRequest(), cancellationToken: cancellationToken);
+            var info = await arkClient.GetInfoAsync(new GetInfoRequest() , cancellationToken: cancellationToken);
             var terms = info.ArkOperatorTerms();
             return terms;
         }

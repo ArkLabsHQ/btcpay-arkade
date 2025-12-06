@@ -19,6 +19,15 @@ public class VTXO
 
     public virtual ICollection<ArkIntentVtxo> IntentVtxos { get; set; } = null!;
 
+    public bool IsExpired((long Timestamp, uint Height) now)
+    {
+        if (ExpiresAt is not null && DateTimeOffset.FromUnixTimeSeconds(now.Timestamp) >= ExpiresAt)
+            return true;
+        if (ExpiresAtHeight is not null && now.Height >= ExpiresAtHeight)
+            return true;
+        return false;
+    }
+
     public ICoinable ToCoin()
     { 
         var outpoint = new OutPoint(new uint256(TransactionId), (uint) TransactionOutputIndex);

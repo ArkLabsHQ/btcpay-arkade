@@ -914,42 +914,35 @@ public class ArkIntentService(
         {
             // Already disposed, ignore
         }
-        
-        _connectionManipulationSemaphore.Wait(_serviceCts!.Token);
-
-        try
-        {
-            foreach (var (_, connection) in _connections)
-            {
-                try
-                {
-                    connection.CancellationTokenSource.Cancel();
-                }
-                catch (ObjectDisposedException)
-                {
-                    // ignored
-                }
-
-                try
-                {
-                    connection.CancellationTokenSource.Dispose();
-                }
-                catch (ObjectDisposedException)
-                {
-                    // ignored
-                }
-            }   
-        }
-        finally
+    
+        foreach (var (_, connection) in _connections)
         {
             try
             {
-                _connectionManipulationSemaphore.Dispose();
+                connection.CancellationTokenSource.Cancel();
             }
             catch (ObjectDisposedException)
             {
-                // Already disposed, ignore
+                // ignored
             }
+
+            try
+            {
+                connection.CancellationTokenSource.Dispose();
+            }
+            catch (ObjectDisposedException)
+            {
+                // ignored
+            }
+        }   
+        
+        try
+        {
+            _connectionManipulationSemaphore.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Already disposed, ignore
         }
         
         _serviceCts?.Dispose();

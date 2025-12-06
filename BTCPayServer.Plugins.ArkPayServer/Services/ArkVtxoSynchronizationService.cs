@@ -12,8 +12,6 @@ using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using NArk;
 using PayoutData = BTCPayServer.Data.PayoutData;
 
-using BitcoinTimeChain = (long Timestamp, uint Height);
-
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
 
 public class ArkVtxoSynchronizationService(
@@ -22,11 +20,8 @@ public class ArkVtxoSynchronizationService(
     EventAggregator eventAggregator,
     TrackedContractsCache contractsCache,
     ArkPluginDbContextFactory arkPluginDbContextFactory,
-    IndexerService.IndexerServiceClient indexerClient,
-    BitcoinTimeChainProvider bitcoinTimeChainProvider) : EventHostedServiceBase(eventAggregator, logger)
+    IndexerService.IndexerServiceClient indexerClient) : EventHostedServiceBase(eventAggregator, logger)
 {
-    private const int MinAllowedTimestamp = 512;
-    
     private Task? _lastListeningLoop = null;
     private string? _subscriptionId = null;
     private readonly TaskCompletionSource _startedTcs = new();
@@ -352,8 +347,7 @@ public class ArkVtxoSynchronizationService(
             while (response is null || response.Page.Next != response.Page.Total)
             {
                 response = await indexerClient.GetVtxosAsync(request, cancellationToken: cancellationToken);
-                var timechain = await bitcoinTimeChainProvider.Get(cancellationToken);
-                
+
                 var vtxosToProcess = new Queue<IndexerVtxo>(response.Vtxos);
 
                 while (vtxosToProcess.TryDequeue(out var vtxoToProccess))
@@ -364,7 +358,7 @@ public class ArkVtxoSynchronizationService(
                     {
                         // Compute hash before and after to detect actual changes
                         var hashBefore = existing.GetHashCode();
-                        Map(timechain, vtxoToProccess, existing);
+                        Map(vtxoToProccess, existing);
                         var hashAfter = existing.GetHashCode();
                         
                         // Only publish if the VTXO actually changed
@@ -375,7 +369,7 @@ public class ArkVtxoSynchronizationService(
                     }
                     else
                     {
-                        var newVtxo = Map(timechain, vtxoToProccess);
+                        var newVtxo = Map(vtxoToProccess);
                         await dbContext.Vtxos.AddAsync(newVtxo, cancellationToken);
                         vtxosUpdated.Add(newVtxo);
                     }
@@ -393,15 +387,7 @@ public class ArkVtxoSynchronizationService(
         }
     }
 
-    private static bool IsExpired(BitcoinTimeChain timeChain, IndexerVtxo vtxo)
-    {
-        if (vtxo.ExpiresAt < MinAllowedTimestamp)
-            return vtxo.ExpiresAt < timeChain.Height;
-
-        return DateTimeOffset.FromUnixTimeSeconds(vtxo.ExpiresAt) < DateTimeOffset.UtcNow;
-    }
-    
-    private static VTXO Map(BitcoinTimeChain timeChain, IndexerVtxo vtxo, VTXO? existing = null)
+    private static VTXO Map(IndexerVtxo vtxo, VTXO? existing = null)
     {
         var isNew = existing == null;
         existing ??= new VTXO();
@@ -416,7 +402,7 @@ public class ArkVtxoSynchronizationService(
         if (isNew || existing.Amount != (long)vtxo.Amount)
             existing.Amount = (long)vtxo.Amount;
 
-        var recoverable = vtxo.IsSwept || IsExpired(timeChain, vtxo);
+        var recoverable = vtxo.IsSwept && !vtxo.IsSpent;
         if (isNew || existing.Recoverable != recoverable)
             existing.Recoverable = recoverable;
         
@@ -424,13 +410,14 @@ public class ArkVtxoSynchronizationService(
         if (isNew || existing.SeenAt != seenAt)
             existing.SeenAt = seenAt;
 
-        DateTimeOffset? expiresAt =
-            vtxo.ExpiresAt < MinAllowedTimestamp ? null : DateTimeOffset.FromUnixTimeSeconds(vtxo.ExpiresAt);
+        DateTimeOffset? expiresAt = null;
+        DateTimeOffset maybeExpiresAt = DateTimeOffset.FromUnixTimeSeconds(vtxo.ExpiresAt);
+        if (maybeExpiresAt.Year >= 2025)
+            expiresAt = maybeExpiresAt;            
         if (isNew || existing.ExpiresAt != expiresAt)
             existing.ExpiresAt = expiresAt;
 
-        uint? expiresAtHeight =
-            vtxo.ExpiresAt < MinAllowedTimestamp ? (uint)vtxo.ExpiresAt : null;
+        uint? expiresAtHeight = expiresAt.HasValue ? null : (uint)vtxo.ExpiresAt;
         if (isNew || existing.ExpiresAtHeight != expiresAtHeight)
             existing.ExpiresAtHeight = expiresAtHeight;
         

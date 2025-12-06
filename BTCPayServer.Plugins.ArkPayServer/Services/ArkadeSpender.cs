@@ -216,7 +216,7 @@ public class ArkadeSpender(
             if (!vtxosAndContracts.TryGetValue(walletId, out var group))
                 continue;
             // No need to filter again - already filtered at DB level
-            var coins = await GetSpendableCoins(group, signer, operatorTerms, false, null, cancellationToken);
+            var coins = await GetSpendableCoins(group, signer, operatorTerms, includeRecoverable, null, cancellationToken);
             res.Add(walletId, coins);
         }
         

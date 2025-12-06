@@ -87,21 +87,17 @@ public class TreeSignerSession
         return _myNonces.ToDictionary(pair => pair.Key, pair => pair.Value.pubNonce);
     }
 
-    public Task VerifyAggregatedNonces(Dictionary<uint256, MusigPubNonce> expectedAggregateNonces,
+    public void VerifyAggregatedNonces(Dictionary<uint256, MusigPubNonce> expectedAggregateNonces,
         CancellationToken cancellationToken = default)
     {
-
         if (_musigContexts is null)
-        {
             throw new InvalidOperationException("musig contexts not created");
-        }
 
         if (_myNonces is null)
-        {
             throw new InvalidOperationException("nonces not generated");
-        }
-
-        return _musigContexts.Any(musigContext => !expectedAggregateNonces[musigContext.Key].ToBytes().SequenceEqual(musigContext.Value.AggregateNonce!.ToBytes())) ? throw new InvalidOperationException("aggregated nonces do not match") : Task.CompletedTask;
+        
+        if (_musigContexts.Any(musigContext => !expectedAggregateNonces[musigContext.Key].ToBytes().SequenceEqual(musigContext.Value.AggregateNonce!.ToBytes())))
+            throw new InvalidOperationException("aggregated nonces do not match");
     }
 
     public async Task<Dictionary<uint256, MusigPartialSignature>> SignAsync(CancellationToken cancellationToken = default)
@@ -228,6 +224,7 @@ public class TreeSignerSession
         {
             throw new InvalidOperationException("missing my nonce");
         }
+        
         musigContext.ProcessNonces(toArray);
     }
 }
