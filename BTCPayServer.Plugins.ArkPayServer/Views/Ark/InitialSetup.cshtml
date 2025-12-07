@@ -1,12 +1,6 @@
 @using BTCPayServer
 @using BTCPayServer.Abstractions.Contracts
 @using BTCPayServer.Abstractions.Extensions
-@using BTCPayServer.Plugins.ArkPayServer
-@using BTCPayServer.Plugins.ArkPayServer.Services
-@using NArk.Services.Abstractions
-@using NBitcoin
-@using NArk.Contracts
-@using NArk.Services
 @model BTCPayServer.Plugins.ArkPayServer.Models.InitialWalletSetupViewModel
 @inject IScopeProvider ScopeProvider
 
@@ -86,7 +80,8 @@
                         <strong>Info:</strong> A new hot wallet will be generated automatically for you.
                     </div>
                     <p>This will create a new Ark wallet that is stored on your BTCPay Server. Make sure to back up your wallet after creation.</p>
-                    <button name="command" type="submit" value="save" class="btn btn-primary">Create Wallet</button>
+                    <button name="command" type="submit" value="save-single" class="btn btn-primary">Create Wallet</button>
+                    <button name="command" type="submit" value="save-hd" class="btn btn-primary">Create HD Wallet</button>
                 </form>
             </div>
         </div>

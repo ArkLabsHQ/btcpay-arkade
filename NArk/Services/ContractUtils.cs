@@ -7,10 +7,8 @@ namespace NArk.Services;
 
 public static class ContractUtils
 {
-    
     public static ArkContract DerivePaymentContract(DeriveContractRequest request)
     {
-
         if (request.Tweak is null)
         {
             return new ArkPaymentContract(request.OperatorTerms.SignerKey, request.OperatorTerms.UnilateralExit,

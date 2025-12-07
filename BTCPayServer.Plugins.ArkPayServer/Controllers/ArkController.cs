@@ -83,7 +83,7 @@ IAuthorizationService authorizationService,
 
     [HttpPost("stores/{storeId}/initial-setup")]
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
-    public async Task<IActionResult> InitialSetup(string storeId, InitialWalletSetupViewModel model)
+    public async Task<IActionResult> InitialSetup(string storeId, string command, InitialWalletSetupViewModel model)
     {
         var store = HttpContext.GetStoreData();
         if (store == null)
@@ -91,7 +91,7 @@ IAuthorizationService authorizationService,
 
         try
         {
-            var walletSettings = await GetFromInputWallet(model.Wallet);
+            var walletSettings = await GetFromInputWallet(model.Wallet, command == "save-hd");
 
             if (walletSettings.Wallet is not null)
             {
@@ -289,7 +289,7 @@ IAuthorizationService authorizationService,
             BoltzSubmarineMinerFee = boltzSubmarineMinerFee
         });
     }
-
+    
     [HttpGet("stores/{storeId}/spend")]
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> SpendOverview(string[]? destinations, CancellationToken token)
@@ -1236,24 +1236,24 @@ IAuthorizationService authorizationService,
         return lnEnabled;
     }
 
-    private async Task<TemporaryWalletSettings> GetFromInputWallet(string? wallet)
+    private async Task<TemporaryWalletSettings> GetFromInputWallet(string? wallet, bool userWantsHdWallet)
     {
         if (string.IsNullOrWhiteSpace(wallet))
-            return new TemporaryWalletSettings(GenerateWallet(), null, null, true);
+            return new TemporaryWalletSettings(GenerateWallet(userWantsHdWallet), null, null, true);
 
         if (wallet.StartsWith("nsec", StringComparison.InvariantCultureIgnoreCase))
         {
             return new TemporaryWalletSettings(wallet, null, null, true);
         }
 
-        if (ArkAddress.TryParse(wallet, out var addr))
+        if (!userWantsHdWallet && ArkAddress.TryParse(wallet, out var addr))
         {
             var terms = await operatorTermsService.GetOperatorTerms();
 
             if (!terms.SignerKey.ToBytes().SequenceEqual(addr!.ServerKey.ToBytes()))
                 throw new Exception("Invalid destination address");
 
-            return new TemporaryWalletSettings(GenerateWallet(), null, wallet, true);
+            return new TemporaryWalletSettings(GenerateWallet(userWantsHdWallet), null, wallet, true);
         }
 
         if (HexEncoder.IsWellFormed(wallet) &&
@@ -1269,14 +1269,27 @@ IAuthorizationService authorizationService,
 
         throw new Exception("Unsupported value.");
     }
-    private static string GenerateWallet()
+    
+    private static string GenerateWallet(bool userWantsHdWallet)
     {
-        var key = RandomUtils.GetBytes(32)!;
-        var encoder = Encoders.Bech32("nsec");
-        encoder.SquashBytes = true;
-        encoder.StrictLength = false;
-        var nsec = encoder.EncodeData(key, Bech32EncodingType.BECH32);
-        return nsec;
+        if (!userWantsHdWallet)
+        {
+            var key = RandomUtils.GetBytes(32)!;
+            var encoder = Encoders.Bech32("nsec");
+            encoder.SquashBytes = true;
+            encoder.StrictLength = false;
+            var nsec = encoder.EncodeData(key, Bech32EncodingType.BECH32);
+            return nsec;
+        }
+        else
+        {
+            Mnemonic mnemo = new Mnemonic(Wordlist.English, WordCount.Twelve);
+            var encoder = Encoders.Bech32("nseed");
+            encoder.SquashBytes = true;
+            encoder.StrictLength = false;
+            var nseed = encoder.EncodeData(mnemo.DeriveSeed(), Bech32EncodingType.BECH32);
+            return nseed;
+        }
     }
 
     private static PaymentMethodId GetLightningPaymentMethod() => PaymentTypes.LN.GetPaymentMethodId("BTC");
