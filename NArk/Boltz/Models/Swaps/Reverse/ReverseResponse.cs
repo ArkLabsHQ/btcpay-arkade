@@ -18,9 +18,6 @@ public class ReverseResponse
     
     [JsonPropertyName("invoice")]
     public string Invoice { get; set; }
-    
-    [JsonPropertyName("onchainAmount")]
-    public int OnchainAmount { get; set; }
 
  
 }

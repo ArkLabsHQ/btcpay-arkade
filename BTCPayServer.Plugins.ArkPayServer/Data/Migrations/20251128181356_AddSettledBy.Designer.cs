@@ -3,6 +3,7 @@ using System;
 using BTCPayServer.Plugins.ArkPayServer.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
 {
     [DbContext(typeof(ArkPluginDbContext))]
-    partial class ArkPluginDbContextModelSnapshot : ModelSnapshot
+    [Migration("20251128181356_AddSettledBy")]
+    partial class AddSettledBy
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -164,18 +167,11 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
                     b.Property<string>("IntentSchedulingPolicy")
                         .HasColumnType("text");
 
-                    b.Property<int>("LatestIndexUsed")
-                        .HasColumnType("integer");
-
                     b.Property<string>("Wallet")
                         .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<string>("WalletDestination")
-                        .HasColumnType("text");
-
-                    b.Property<string>("WalletType")
-                        .IsRequired()
                         .HasColumnType("text");
 
                     b.HasKey("Id");
@@ -226,11 +222,8 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
                     b.Property<long>("Amount")
                         .HasColumnType("bigint");
 
-                    b.Property<DateTimeOffset?>("ExpiresAt")
+                    b.Property<DateTimeOffset>("ExpiresAt")
                         .HasColumnType("timestamp with time zone");
-
-                    b.Property<long?>("ExpiresAtHeight")
-                        .HasColumnType("bigint");
 
                     b.Property<bool>("Recoverable")
                         .HasColumnType("boolean");

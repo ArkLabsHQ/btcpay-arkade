@@ -71,11 +71,12 @@ public class BoltzSwapService(
         logger.LogInformation("Generated preimage hash: {PreimageHash}", Encoders.Hex.EncodeData(preimageHash));
 
         // First make the Boltz request to get the swap details including timeout block heights
+        // Use OnchainAmount so the merchant receives the full requested amount (user pays swap fees)
         var request = new ReverseRequest
         {
             From = "BTC",
             To = "ARK",
-            InvoiceAmount = createInvoiceRequest.Amount.MilliSatoshi/1000,
+            OnchainAmount = createInvoiceRequest.Amount.MilliSatoshi/1000,
             ClaimPublicKey = receiver.ToHex(), // Receiver will claim the VTXO
             PreimageHash = Encoders.Hex.EncodeData(preimageHash),
             AcceptZeroConf = true,
@@ -107,10 +108,18 @@ public class BoltzSwapService(
         {
             throw new InvalidOperationException("Boltz did not provide the correct preimage hash");
         }
-        if(bolt11.MinimumAmount != LightMoney.Satoshis(request.InvoiceAmount))
+        
+        // Verify the invoice amount is greater than onchain amount (includes fees)
+        var invoiceAmountSats = bolt11.MinimumAmount.ToUnit(LightMoneyUnit.Satoshi);
+        var onchainAmountSats = createInvoiceRequest.Amount.ToUnit(LightMoneyUnit.Satoshi);
+        if (invoiceAmountSats <= onchainAmountSats)
         {
-            throw new InvalidOperationException("Boltz did not provide the correct invoice amount");
+            throw new InvalidOperationException($"Invoice amount ({invoiceAmountSats} sats) must be greater than onchain amount ({onchainAmountSats} sats) to cover swap fees");
         }
+        
+        var swapFee = invoiceAmountSats - onchainAmountSats;
+        logger.LogInformation("Reverse swap created: onchain amount = {OnchainAmount} sats, invoice amount = {InvoiceAmount} sats, swap fee = {SwapFee} sats",
+            onchainAmountSats, invoiceAmountSats, swapFee);
         
         
         var sender = response.RefundPublicKey.ToECXOnlyPubKey();

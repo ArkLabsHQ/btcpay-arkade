@@ -15,6 +15,7 @@ using NArk.Boltz.Models.WebSocket;
 using NArk.Contracts;
 using NArk.Models;
 using NArk.Services;
+using NArk.Services.Abstractions;
 using NBitcoin;
 using NBitcoin.Crypto;
 using NBXplorer;
@@ -29,11 +30,13 @@ public class BoltzService(
     BoltzClient boltzClient,
     ArkWalletService walletService,
     ArkVtxoSynchronizationService arkVtxoSynchronizationService,
+    IOperatorTermsService operatorTermsService,
     ILogger<BoltzService> logger) : IHostedService
 {
     private CompositeDisposable _leases = new();
     private BoltzWebsocketClient? _wsClient;
     private CancellationTokenSource? _periodicPollCts;
+    private async Task<Network> Network(CancellationToken cancellationToken) => (await operatorTermsService.GetOperatorTerms(cancellationToken)).Network;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -421,6 +424,7 @@ public class BoltzService(
             throw new InvalidOperationException($"Wallet with ID {walletId} not found");
         }
         
+        var network = await Network(cancellationToken);
         
 
         ReverseSwapResult? swapResult = null;
@@ -436,7 +440,12 @@ public class BoltzService(
             
             try
             {
-                var (isValid, errorMessage) = await ValidateFeesAsync(amountSats, swapResult.Swap.OnchainAmount, isReverse: true, cancellationToken);
+                // Parse the invoice to get the actual invoice amount (which includes fees)
+                var bolt11 = BOLT11PaymentRequest.Parse(swapResult.Swap.Invoice, network);
+                var invoiceAmountSats = (long)bolt11.MinimumAmount.ToUnit(LightMoneyUnit.Satoshi);
+                
+                // Validate fees: user pays invoiceAmountSats, merchant receives onchainAmount
+                var (isValid, errorMessage) = await ValidateFeesAsync(invoiceAmountSats, amountSats, isReverse: true, cancellationToken);
                 if (!isValid)
                 {
                     throw new InvalidOperationException(errorMessage);
@@ -474,7 +483,7 @@ public class BoltzService(
             WalletId = walletId,
             SwapType =  ArkSwapType.ReverseSubmarine,
             Invoice = swapResult.Swap.Invoice,
-            ExpectedAmount = swapResult.Swap.OnchainAmount,
+            ExpectedAmount = amountSats,
             ContractScript = contractScript,
             Contract = arkWalletContract!,
             Status = ArkSwapStatus.Pending,

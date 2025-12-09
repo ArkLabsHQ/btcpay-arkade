@@ -425,6 +425,10 @@ public class ArkVtxoSynchronizationService(
         if (isNew || existing.SpentByTransactionId != spentBy)
             existing.SpentByTransactionId = spentBy;
         
+        var settledBy = string.IsNullOrEmpty(vtxo.SettledBy) ? null : vtxo.SettledBy;
+        if (isNew || existing.SettledByTransactionId != settledBy)
+            existing.SettledByTransactionId = settledBy;
+        
         if (isNew || existing.Script != vtxo.Script)
             existing.Script = vtxo.Script;
 

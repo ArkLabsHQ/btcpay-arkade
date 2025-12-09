@@ -342,7 +342,7 @@ public class ArkWalletService(
             
             var vtxos = await dbContext.Vtxos
                 .Where(vtxo =>
-                    (allowSpent || vtxo.SpentByTransactionId == null) &&
+                    (allowSpent || (vtxo.SpentByTransactionId == null && vtxo.SettledByTransactionId == null))  &&
                     (allowNote || !vtxo.Recoverable) &&
                     contractScripts.Contains(vtxo.Script))
                 .OrderByDescending(vtxo => vtxo.SeenAt)
@@ -407,7 +407,7 @@ public class ArkWalletService(
             .Where(v => string.IsNullOrEmpty(searchText) || 
                         v.TransactionId.Contains(searchText) ||
                         v.Script.Contains(searchText))
-            .Where(v => includeSpent || v.SpentByTransactionId == null)
+            .Where(v => includeSpent || (v.SpentByTransactionId == null && v.SettledByTransactionId == null))
             .Where(v => includeRecoverable || !v.Recoverable)
             .OrderByDescending(v => v.SeenAt)
             .Skip(skip)
@@ -539,7 +539,7 @@ public class ArkWalletService(
         
         var vtxosQuery = dbContext.Vtxos
             .Where(vtxo =>
-                (allowSpent || vtxo.SpentByTransactionId == null) &&
+                (allowSpent || (vtxo.SpentByTransactionId == null  && vtxo.SettledByTransactionId == null)) &&
                 (allowNote || !vtxo.Recoverable) &&
                 contractScripts.Contains(vtxo.Script));
         
