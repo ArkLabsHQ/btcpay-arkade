@@ -328,15 +328,14 @@ public class ArkadeSpender(
         return new SpendableArkCoinWithSigner(c, expiry, expiryHeight, vtxo.Outpoint, vtxo.TxOut, signer, leaf, witness, lockTime, sequence, recoverable);
     }
 
-    public async Task<ArkAddress> GetDestination(ArkWallet wallet, ArkOperatorTerms arkOperatorTerms)
+    public Task<ArkAddress> GetDestination(ArkWallet wallet, ArkOperatorTerms arkOperatorTerms)
     {
-        var (privKey, _) = await arkWalletService.GetAndIncrementLastIndexUsed(wallet.Id);
         var destination = wallet.Destination;
         destination ??= 
             ContractUtils
-                .DerivePaymentContract(new DeriveContractRequest(arkOperatorTerms, privKey.CreateXOnlyPubKey()))
+                .DerivePaymentContract(new DeriveContractRequest(arkOperatorTerms, wallet.PublicKey))
                 .GetArkAddress();
-        return destination;
+        return Task.FromResult(destination);
     }
 
     /// <summary>

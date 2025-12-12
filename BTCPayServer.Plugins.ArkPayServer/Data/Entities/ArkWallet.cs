@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using System.ComponentModel.DataAnnotations.Schema;
 using BTCPayServer.Client.Models;
 using Microsoft.EntityFrameworkCore;
@@ -7,7 +6,6 @@ using NArk.Extensions;
 using NArk.Services;
 using NArk.Models;
 using NBitcoin.Secp256k1;
-using BTCPayServer.Plugins.ArkPayServer.Data.Entities.Enums;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 
@@ -15,9 +13,6 @@ public class ArkWallet
 {
     public string Id { get; set; }
     public string Wallet { get; set; }
-    [DefaultValue(WalletType.PrivateKey)]
-    public WalletType WalletType { get; set; } = WalletType.PrivateKey;
-    public int LatestIndexUsed { get; set; } = -1;
     public string? WalletDestination { get; set; }
     public List<ArkWalletContract> Contracts { get; set; } = [];
     
@@ -26,12 +21,7 @@ public class ArkWallet
     /// </summary>
     public string? IntentSchedulingPolicy { get; set; }
 
-    public ECXOnlyPubKey RequestNewPublicKey(int? index = null) => WalletType switch
-    {
-        WalletType.Seed => KeyExtensions.GetXOnlyPubKeyFromWallet(Wallet, index ?? LatestIndexUsed + 1),
-        WalletType.PrivateKey => KeyExtensions.GetXOnlyPubKeyFromWallet(Wallet),
-        _ => throw new ArgumentOutOfRangeException()
-    };
+    public ECXOnlyPubKey PublicKey => KeyExtensions.GetXOnlyPubKeyFromWallet(Wallet);
     
     public ArkAddress? Destination => string.IsNullOrEmpty(WalletDestination)? null: ArkAddress.Parse(WalletDestination);
 
@@ -42,8 +32,6 @@ public class ArkWallet
         var entity = builder.Entity<ArkWallet>();
         entity.HasKey(w => w.Id);
         entity.HasIndex(w => w.Wallet).IsUnique();
-        entity.Property(e => e.WalletType)
-            .HasConversion<string>();
         entity.HasMany(w => w.Contracts)
             .WithOne(contract => contract.Wallet)
             .HasForeignKey(contract => contract.WalletId);

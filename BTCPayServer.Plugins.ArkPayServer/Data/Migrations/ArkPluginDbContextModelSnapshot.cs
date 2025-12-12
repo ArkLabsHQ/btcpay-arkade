@@ -164,18 +164,11 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
                     b.Property<string>("IntentSchedulingPolicy")
                         .HasColumnType("text");
 
-                    b.Property<int>("LatestIndexUsed")
-                        .HasColumnType("integer");
-
                     b.Property<string>("Wallet")
                         .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<string>("WalletDestination")
-                        .HasColumnType("text");
-
-                    b.Property<string>("WalletType")
-                        .IsRequired()
                         .HasColumnType("text");
 
                     b.HasKey("Id");
