@@ -3,7 +3,7 @@
 ROOT_DIR=$(pwd)
 PLUGIN_DIR="BTCPayServer.Plugins.ArkPayServer"
 OUTPUT_DIR="$ROOT_DIR/$PLUGIN_DIR/bin/Debug/net8.0"
-PROJECTS=("NArk" "NArk.Grpc")
+PROJECTS=("NArk")
 
 # Remove old build artifacts
 if [ -d "$OUTPUT_DIR" ]; then

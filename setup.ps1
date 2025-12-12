@@ -36,7 +36,7 @@ if (-not (Test-Path $appsettings -PathType Leaf)) {
 $root = Get-Location
 $pluginDir = "BTCPayServer.Plugins.ArkPayServer"
 $publishDir = Join-Path $root "$pluginDir/bin/Debug/net8.0"
-$projects = @($pluginDir, "NArk", "NArk.Grpc")
+$projects = @($pluginDir, "NArk")
 
 # Remove old build artifacts
 if (Test-Path $publishDir) {
