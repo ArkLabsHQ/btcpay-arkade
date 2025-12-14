@@ -34,7 +34,7 @@ public class UnitTest1
         var contract = new HashLockedArkPaymentContract(
             ServerPubKey,
             new Sequence(10),
-            UserPubKey,
+            KeyExtensions.ParseOutputDescriptor(UserPubKey.ToHex(), Network.RegTest),
             _preimage,
             HashLockTypeOption.SHA256
         );

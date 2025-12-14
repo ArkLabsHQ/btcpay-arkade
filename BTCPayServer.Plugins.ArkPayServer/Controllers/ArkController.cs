@@ -32,6 +32,7 @@ using Microsoft.EntityFrameworkCore;
 using NArk;
 using NArk.Boltz.Client;
 using NArk.Contracts;
+using NArk.Extensions;
 using NArk.Services.Abstractions;
 using NBitcoin;
 using NBitcoin.DataEncoders;
@@ -205,7 +206,7 @@ IAuthorizationService authorizationService,
             {
                 var terms = await operatorTermsService.GetOperatorTerms(cancellationToken);
                 var script = Script.FromHex(activeContract.Script);
-                var address = ArkAddress.FromScriptPubKey(script, terms.SignerKey);
+                var address = ArkAddress.FromScriptPubKey(script, terms.SignerKey.ToXOnlyPubKey());
                 defaultAddress = address.ToString(terms.Network.ChainName == ChainName.Mainnet);
             }
         }
@@ -273,6 +274,7 @@ IAuthorizationService authorizationService,
             Wallet = walletInfo?.Wallet,
             DefaultAddress = defaultAddress,
             AllowSubDustAmounts = config.AllowSubDustAmounts,
+            WalletType = walletInfo?.WalletType ?? WalletType.Nsec,
             ArkOperatorUrl = arkOperatorUrl,
             ArkOperatorConnected = arkOperatorConnected,
             ArkOperatorError = arkOperatorError,
@@ -1174,16 +1176,17 @@ IAuthorizationService authorizationService,
 
         try
         {
+            
+            var terms = await operatorTermsService.GetOperatorTerms(cancellationToken);
             // Parse the contract string to extract type and data
             // Try to parse the contract to validate it
-            var arkContract = ArkContract.Parse(contractString);
+            var arkContract = ArkContract.Parse(contractString, terms.Network);
             if (arkContract == null)
             {
                 TempData[WellKnownTempData.ErrorMessage] = "Failed to parse contract. Invalid contract type or data.";
                 return RedirectToAction(nameof(Contracts), new { storeId });
             }
 
-            var terms = await operatorTermsService.GetOperatorTerms(cancellationToken);
             var script = arkContract.GetArkAddress().ScriptPubKey;
             var scriptHex = script.ToHex();
 
@@ -1241,7 +1244,16 @@ IAuthorizationService authorizationService,
         if (string.IsNullOrWhiteSpace(wallet))
             return new TemporaryWalletSettings(GenerateWallet(), null, null, true);
 
+        // Normalize whitespace for mnemonic detection
+        wallet = wallet.Trim();
+
         if (wallet.StartsWith("nsec", StringComparison.InvariantCultureIgnoreCase))
+        {
+            return new TemporaryWalletSettings(wallet, null, null, true);
+        }
+
+        // Check if it's a mnemonic seed phrase (12, 15, 18, 21, or 24 words)
+        if (IsMnemonic(wallet))
         {
             return new TemporaryWalletSettings(wallet, null, null, true);
         }
@@ -1250,7 +1262,7 @@ IAuthorizationService authorizationService,
         {
             var terms = await operatorTermsService.GetOperatorTerms();
 
-            if (!terms.SignerKey.ToBytes().SequenceEqual(addr!.ServerKey.ToBytes()))
+            if (!terms.SignerKey.ToXOnlyPubKey().ToBytes().SequenceEqual(addr!.ServerKey.ToBytes()))
                 throw new Exception("Invalid destination address");
 
             return new TemporaryWalletSettings(GenerateWallet(), null, wallet, true);
@@ -1268,6 +1280,19 @@ IAuthorizationService authorizationService,
         }
 
         throw new Exception("Unsupported value.");
+    }
+
+    private static bool IsMnemonic(string input)
+    {
+        try
+        {
+            _ = new Mnemonic(input);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
     private static string GenerateWallet()
     {
@@ -1481,7 +1506,7 @@ IAuthorizationService authorizationService,
             {
                 var terms = await operatorTermsService.GetOperatorTerms(cancellationToken);
                 var script = Script.FromHex(activeContract.Script);
-                var address = ArkAddress.FromScriptPubKey(script, terms.SignerKey);
+                var address = ArkAddress.FromScriptPubKey(script, terms.SignerKey.ToXOnlyPubKey());
                 defaultAddress = address.ToString(terms.Network.ChainName == ChainName.Mainnet);
             }
         }
@@ -1527,6 +1552,7 @@ IAuthorizationService authorizationService,
             SignerAvailable = signerAvailable,
             Wallet = walletInfo?.Wallet,
             DefaultAddress = defaultAddress,
+            WalletType = walletInfo?.WalletType ?? WalletType.Nsec,
             ArkOperatorUrl = arkOperatorUrl,
             ArkOperatorConnected = arkOperatorConnected,
             ArkOperatorError = arkOperatorError,

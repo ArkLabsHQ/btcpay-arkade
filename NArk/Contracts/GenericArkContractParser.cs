@@ -1,12 +1,14 @@
-﻿namespace NArk.Contracts;
+﻿using NBitcoin;
 
-public class GenericArkContractParser(string type, Func<Dictionary<string, string>, ArkContract?> parse)
+namespace NArk.Contracts;
+
+public class GenericArkContractParser(string type, Func<Dictionary<string, string>, Network, ArkContract?> parse)
     : IArkContractParser
 {
     public string Type { get; } = type;
 
-    public ArkContract? Parse(Dictionary<string, string> contractData)
+    public ArkContract? Parse(Dictionary<string, string> contractData, Network network)
     {
-        return parse(contractData);
+        return parse(contractData, network);
     }
 }

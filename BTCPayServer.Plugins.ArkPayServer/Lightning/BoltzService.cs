@@ -18,6 +18,7 @@ using NArk.Services;
 using NArk.Services.Abstractions;
 using NBitcoin;
 using NBitcoin.Crypto;
+using NBitcoin.Scripting;
 using NBXplorer;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Lightning;
@@ -413,27 +414,28 @@ public class BoltzService(
              throw new InvalidOperationException("No signer found for wallet");
         }
 
-        var signer =await  walletService.CreateSigner(walletId, cancellationToken);
-
         await using var dbContext = dbContextFactory.CreateContext();
-        
-        // Get the wallet from the database to extract the receiver key
-        var wallet = await dbContext.Wallets.FirstOrDefaultAsync(w => w.Id == walletId, cancellationToken);
-        if (wallet == null)
-        {
-            throw new InvalidOperationException($"Wallet with ID {walletId} not found");
-        }
-        
+
+
         var network = await Network(cancellationToken);
-        
+
 
         ReverseSwapResult? swapResult = null;
         ArkWalletContract? arkWalletContract = null;
         var contract = await walletService.DeriveNewContract(walletId, async wallet =>
         {
-            var receiverKey = await signer.GetPublicKey(cancellationToken);
-
+            var index = -1;
+            
+            if (wallet.WalletType == WalletType.Mnemonic)
+            {
+                index = await walletService.GetNextDerivationIndex(walletId, cancellationToken);
+            }
+            
+            var receiverKey = HDKeyDerivationService.GetDescriptorAtIndex(wallet.AccountDescriptor, index, network);
+            
+            
             // Create reverse swap with just the receiver key - sender key comes from Boltz response
+            // For HD wallets, include the receiver descriptor so the sweeper knows where to sweep
             swapResult = await boltzSwapService.CreateReverseSwap(
                 createInvoiceRequest,
                 receiverKey, cancellationToken);
@@ -509,23 +511,29 @@ public class BoltzService(
         {
             throw new InvalidOperationException("No signer found for wallet");
         }
-        
-        var signer = await walletService.CreateSigner(walletId, cancellationToken);
 
         await using var dbContext = dbContextFactory.CreateContext();
-        
-        var swap = await dbContext.Swaps.FirstOrDefaultAsync(s => s.Invoice == paymentRequest.ToString(), cancellationToken);
-        if (swap != null)
+
+        var existingSwap = await dbContext.Swaps.FirstOrDefaultAsync(s => s.Invoice == paymentRequest.ToString(), cancellationToken);
+        if (existingSwap != null)
         {
-            return swap;
+            return existingSwap;
         }
         
-        
+        var network = await Network(cancellationToken);
         SubmarineSwapResult? swapResult = null;
         ArkWalletContract? arkWalletContract = null;
         var contract = await walletService.DeriveNewContract(walletId, async wallet =>
         {
-            var sender = await signer.GetPublicKey(cancellationToken);
+            var index = -1;
+            
+            if (wallet.WalletType == WalletType.Mnemonic)
+            {
+                index = await walletService.GetNextDerivationIndex(walletId, cancellationToken);
+            }
+            
+            var sender = HDKeyDerivationService.GetDescriptorAtIndex(wallet.AccountDescriptor, index, network);
+
 
             // Create reverse swap with just the receiver key - sender key comes from Boltz response
             swapResult = await boltzSwapService.CreateSubmarineSwap(
@@ -565,7 +573,7 @@ public class BoltzService(
             throw new InvalidOperationException("Failed to create reverse swap");
         }       
 
-        var contractScript = htlcContract.GetArkAddress().ScriptPubKey.ToHex(); 
+        var contractScript = htlcContract.GetArkAddress().ScriptPubKey.ToHex();
         dbContext.ChangeTracker.TrackGraph(arkWalletContract, node => node.Entry.State = EntityState.Unchanged);
         var submarineSwap = new ArkSwap
         {
@@ -582,9 +590,9 @@ public class BoltzService(
         await dbContext.Swaps.AddAsync(submarineSwap, cancellationToken);
         await dbContext.SaveChangesAsync(cancellationToken);
         PublishUpdates(new ArkSwapUpdated { Swap = submarineSwap });
-        
+
         await arkadeSpender.Spend(walletId, [ new TxOut(Money.Satoshis(submarineSwap.ExpectedAmount), htlcContract.GetArkAddress())], cancellationToken);
-        
+
         return submarineSwap;
     }
     

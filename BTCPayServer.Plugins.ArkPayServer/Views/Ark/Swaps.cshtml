@@ -16,10 +16,12 @@
     ViewData.SetActivePage(category: "Ark", activePage: "Swaps", title: "Ark - Swaps");
     var storeId = ScopeProvider.GetCurrentStoreId();
     var mainnet = true;
+    Network network = Network.Main;
     try
     {
         var terms = await Terms.GetOperatorTerms();
         mainnet = terms.Network.ChainName == ChainName.Mainnet;
+        network = terms.Network;
     }
     catch
     {
@@ -182,7 +184,7 @@
             <tbody>
                 @foreach (var swap in Model.Swaps)
                 {
-                    var arkContract = swap.Contract != null ? ArkContract.Parse(swap.Contract.Type, swap.Contract.ContractData) : null;
+                    var arkContract = swap.Contract != null ? ArkContract.Parse(swap.Contract.Type, swap.Contract.ContractData, network) : null;
                     var link = arkContract != null ? ArkadeLinkHelper.GetIndexerLinkForContract(ArkConfiguration.ArkUri, arkContract) : "#";
                     var boltzSwapLink = ArkadeLinkHelper.GetBoltzSwapLink(ArkConfiguration.BoltzUri, swap.SwapId);
 

@@ -14,6 +14,7 @@ using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NArk;
+using NArk.Extensions;
 using NArk.Services.Abstractions;
 using NBitcoin;
 using NBXplorer;
@@ -66,7 +67,7 @@ public class ArkContractInvoiceListener(
         foreach (var scriptVtxos in arg.Vtxos.GroupBy(c => c.Script))
         {
            var script = Script.FromHex(scriptVtxos.Key);
-            var address = ArkAddress.FromScriptPubKey(script, terms.SignerKey);
+            var address = ArkAddress.FromScriptPubKey(script, terms.SignerKey.ToXOnlyPubKey());
             var network = terms.Network;
             var inv = await invoiceRepository.GetInvoiceFromAddress(ArkadePlugin.ArkadePaymentMethodId, address.ToString(network.ChainName == ChainName.Mainnet)); 
             if (inv is null)

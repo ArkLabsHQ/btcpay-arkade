@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Logging;
 using NArk.Contracts;
 using NArk.Scripts;
 using NArk.Models;

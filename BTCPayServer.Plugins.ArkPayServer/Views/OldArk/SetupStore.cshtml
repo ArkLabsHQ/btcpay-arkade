@@ -19,6 +19,7 @@
     ViewData.SetActivePage("Ark", "Arkade Payments", "Ark");
 string connectionStatus = "Unknown";
 var mainnet = true;
+Network network = Network.Main;
     try
     {
 
@@ -26,6 +27,7 @@ var mainnet = true;
         var subStatus = ArkVtxoSyncronizationService.IsActive;
         connectionStatus = subStatus ? "Active" : "Inactive";
         mainnet =  terms.Network.ChainName == ChainName.Mainnet;
+        network = terms.Network;
     }
     catch (Exception ex)
     {
@@ -162,7 +164,7 @@ var mainnet = true;
             <tbody>
             @foreach (var group in Model.Contracts)
             {
-                var arkContract = ArkContract.Parse(group.Key.Type, group.Key.ContractData);
+                var arkContract = ArkContract.Parse(group.Key.Type, group.Key.ContractData, network);
 
                 var link = $"{ArkConfiguration.ArkUri}/v1/vtxos?scripts={arkContract.GetArkAddress().ScriptPubKey.ToHex()}";
                 <tr>

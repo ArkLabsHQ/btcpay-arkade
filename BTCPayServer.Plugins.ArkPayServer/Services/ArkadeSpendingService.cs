@@ -16,7 +16,7 @@ public class ArkadeSpendingService(
     ArkWalletService arkWalletService,
     ArkadeSpender arkadeSpender,
     IOperatorTermsService operatorTermsService,
-    PaymentMethodHandlerDictionary paymentMethodHandlerDictionary,
+    PaymentMethodHandlerDictionary paymentMethodHandlerDictionary, 
     ArkIntentService arkIntentService)
 {
     public async Task<string?> Spend(StoreData store, string destination, CancellationToken cancellationToken)

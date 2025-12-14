@@ -11,6 +11,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NArk;
+using NArk.Extensions;
 using NArk.Helpers;
 using NArk.Services;
 using NBitcoin;
@@ -209,7 +210,7 @@ public class ArkIntentService(
         var effectiveValidFrom = validFrom ?? DateTimeOffset.UtcNow;
         var effectiveValidUntil = validUntil ?? DateTimeOffset.UtcNow.Add(DefaultIntentExpiry);
         
-        var cosigners = new[] { await signer.GetPublicKey(cancellationToken) };
+        var cosigners = new[] { coins.First().SignerDescriptor.Extract().pubKey! };
         var terms = await operatorTermsService.GetOperatorTerms(cancellationToken);
         var (registerTx, deleteTx, registerMsg, deleteMsg) = await IntentUtils.CreateIntent(
             terms.Network,
@@ -279,7 +280,7 @@ public class ArkIntentService(
         if (wallet is null) throw new Exception("Destination wallet did not exist");
         
         // Default: send all funds back to wallet (refreshes VTXOs, moves from recoverable state, etc.)
-        var destination = await arkadeSpender.GetDestination(wallet, await operatorTermsService.GetOperatorTerms(cancellationToken));
+        var destination = await arkadeSpender.GetDestination(wallet, await operatorTermsService.GetOperatorTerms(cancellationToken), cancellationToken);
 
         return [
             new IntentTxOut
@@ -828,6 +829,7 @@ public class ArkIntentService(
                     arkTransactionBuilder,
                     terms.Network,
                     signer,
+                    KeyExtensions.ParseOutputDescriptor(intent.SignerDescriptor, terms.Network),
                     intent,
                     spendableCoins.ToArray(),
                     batchEvent,

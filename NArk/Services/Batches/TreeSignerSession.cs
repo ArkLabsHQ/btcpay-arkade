@@ -1,5 +1,7 @@
-﻿using NArk.Services.Abstractions;
+﻿using NArk.Extensions;
+using NArk.Services.Abstractions;
 using NBitcoin;
+using NBitcoin.Scripting;
 using NBitcoin.Secp256k1;
 using NBitcoin.Secp256k1.Musig;
 
@@ -11,20 +13,20 @@ namespace NArk.Services.Batches;
 public class TreeSignerSession
 {
     private readonly IArkadeWalletSigner _signer;
+    private readonly OutputDescriptor _outputDescriptor;
     private Dictionary<uint256, (MusigPrivNonce secNonce, MusigPubNonce pubNonce)>? _myNonces;
     private Dictionary<uint256, MusigContext>? _musigContexts;
     private readonly TxTree _graph;
     private readonly uint256? _tapsciptMerkleRoot;
     private readonly Money _rootSharedOutputAmount;
 
-    private readonly Task<ECPubKey> _myPublicKey;
 
-    public TreeSignerSession(IArkadeWalletSigner signer, TxTree tree, uint256? tapsciptMerkleRoot, Money rootInputAmount)
+    public TreeSignerSession(IArkadeWalletSigner signer, OutputDescriptor outputDescriptor, TxTree tree, uint256? tapsciptMerkleRoot, Money rootInputAmount)
     {
-        _myPublicKey = signer.GetPublicKey();
         _signer = signer;
+        _outputDescriptor = outputDescriptor;
         _graph = tree;
-        _tapsciptMerkleRoot = tapsciptMerkleRoot;
+        _tapsciptMerkleRoot = tapsciptMerkleRoot; 
         _rootSharedOutputAmount = rootInputAmount;
     }
 
@@ -34,7 +36,7 @@ public class TreeSignerSession
         if(_musigContexts != null)
             throw new InvalidOperationException("musig contexts already created");
         _musigContexts = new Dictionary<uint256, MusigContext>();
-        var myPubKey = await _signer.GetPublicKey(cancellationToken);
+        var myPubKey = _outputDescriptor.ToPubKey();
         foreach (var g in _graph)
         {
             var tx = g.Root.GetGlobalTransaction();
@@ -77,7 +79,7 @@ public class TreeSignerSession
 
     public async Task<ECPubKey> GetPublicKeyAsync(CancellationToken cancellationToken = default)
     {
-        return await _signer.GetPublicKey(cancellationToken);
+        return _outputDescriptor.ToPubKey();
     }
 
     public async Task<Dictionary<uint256, MusigPubNonce>> GetNoncesAsync(CancellationToken cancellationToken = default)
@@ -126,7 +128,7 @@ public class TreeSignerSession
         if (_myNonces != null)
             throw new InvalidOperationException("nonces already generated");
 
-        var myPubKey = await _myPublicKey.WithCancellation(cancellationToken);
+        var myPubKey = _outputDescriptor.ToPubKey();
 
         var res = new Dictionary<uint256, (MusigPrivNonce secNonce, MusigPubNonce pubNonce)>();
         foreach (var (txid, musigContext) in _musigContexts!)
@@ -158,7 +160,7 @@ public class TreeSignerSession
         
         // Use the wallet signer to create a MUSIG2 partial signature
         // The context already has the correct sighash from nonce generation
-        var partialSig = await _signer.SignMusig(musigContext, myNonce.secNonce, cancellationToken);
+        var partialSig = await _signer.SignMusig(musigContext, _outputDescriptor, myNonce.secNonce, cancellationToken);
         
         return partialSig;
     }

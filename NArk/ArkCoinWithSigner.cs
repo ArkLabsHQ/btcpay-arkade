@@ -1,8 +1,10 @@
 ﻿using NArk.Contracts;
+using NArk.Extensions;
 using NArk.Scripts;
 using NArk.Services;
 using NArk.Services.Abstractions;
 using NBitcoin;
+using NBitcoin.Scripting;
 
 namespace NArk;
 
@@ -60,6 +62,7 @@ public class SpendableArkCoin : ArkCoin
 
 public class SpendableArkCoinWithSigner : SpendableArkCoin
 {
+    public OutputDescriptor SignerDescriptor { get; }
     public IArkadeWalletSigner Signer { get; }
 
 
@@ -69,17 +72,19 @@ public class SpendableArkCoinWithSigner : SpendableArkCoin
         OutPoint outpoint,
         TxOut txout,
         IArkadeWalletSigner signer,
+        OutputDescriptor signerDescriptor,
         ScriptBuilder spendingScriptBuilder,
         WitScript? spendingConditionWitness,
         LockTime? lockTime,
         Sequence? sequence, bool recoverable) : base(contract, expiresAt, expiresAtHeight, outpoint, txout, spendingScriptBuilder,
         spendingConditionWitness, lockTime, sequence, recoverable)
     {
+        SignerDescriptor = signerDescriptor;
         Signer = signer;
     }
     
     internal SpendableArkCoinWithSigner(SpendableArkCoinWithSigner other) : this(
-        other.Contract, other.ExpiresAt, other.ExpiresAtHeight, other.Outpoint.Clone(), other.TxOut.Clone(), other.Signer,
+        other.Contract, other.ExpiresAt, other.ExpiresAtHeight, other.Outpoint.Clone(), other.TxOut.Clone(), other.Signer, other.SignerDescriptor,
         other.SpendingScriptBuilder, other.SpendingConditionWitness?.Clone(), other.SpendingLockTime, other.SpendingSequence,
         other.Recoverable)
     {
@@ -103,7 +108,8 @@ public class SpendableArkCoinWithSigner : SpendableArkCoin
             {
                 SigHash = sigHash
             });
-        var (sig, ourKey) = await Signer.Sign(hash, cancellationToken);
+        
+        var (sig, ourKey) = await Signer.Sign(hash, SignerDescriptor, cancellationToken);
 
         psbtInput.SetTaprootScriptSpendSignature(ourKey, SpendingScript.LeafHash, sig);
     }

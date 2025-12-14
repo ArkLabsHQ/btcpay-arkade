@@ -35,7 +35,7 @@
                             <vc:truncate-center text="@wallet.Id" classes="truncate-center-id"/>
                         </td>
                         <td>
-                            <vc:truncate-center text="@wallet.PublicKey.ToHex()" classes="truncate-center-id"/>
+                            <vc:truncate-center text="@wallet.AccountDescriptor" classes="truncate-center-id"/>
                         </td>
                         <td>
                             @if (wallet.Contracts?.Any() == true)
@@ -100,8 +100,8 @@
                                             <div class="font-monospace small text-break">@wallet.Id</div>
                                         </div>
                                         <div class="mb-3">
-                                            <label class="text-muted small">Public Key</label>
-                                            <div class="font-monospace small text-break">@wallet.PublicKey.ToHex()</div>
+                                            <label class="text-muted small">Account Descriptor</label>
+                                            <div class="font-monospace small text-break">@wallet.AccountDescriptor</div>
                                         </div>
                                         <p class="mb-2"><strong>This will delete:</strong></p>
                                         <ul>

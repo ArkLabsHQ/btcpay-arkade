@@ -25,7 +25,6 @@ public class ArkSwap
 
     public string Hash { get; set; }
 
-
     public static void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<ArkSwap>(entity =>

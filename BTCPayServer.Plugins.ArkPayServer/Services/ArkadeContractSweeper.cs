@@ -1,25 +1,20 @@
+using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using BTCPayServer.Plugins.ArkPayServer.Models.Events;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using NArk.Services.Abstractions;
-using NBitcoin;
+using NArk;
+using NArk.Contracts;
+using NArk.Extensions;
 using NBXplorer;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
 
 public class ArkadeContractSweeper : IHostedService
 {
-    /// <summary>
-    /// When true, each coin will be swept in its own dedicated transaction.
-    /// When false, all coins for a wallet will be swept together in a single transaction.
-    /// </summary>
-    private const bool SweepEachCoinIndividually = true;
-
     private readonly ArkadeSpender _arkadeSpender;
     private readonly ArkWalletService _arkWalletService;
     private readonly EventAggregator _eventAggregator;
     private readonly ILogger<ArkadeContractSweeper> _logger;
-    private readonly IOperatorTermsService _operatorTermsService;
     private readonly ArkVtxoSynchronizationService _arkSubscriptionService;
     private CompositeDisposable _leases = new();
     private CancellationTokenSource _cts = new();
@@ -30,14 +25,12 @@ public class ArkadeContractSweeper : IHostedService
         ArkWalletService arkWalletService,
         EventAggregator eventAggregator,
         ILogger<ArkadeContractSweeper> logger,
-        IOperatorTermsService operatorTermsService,
         ArkVtxoSynchronizationService arkSubscriptionService)
     {
         _arkadeSpender = arkadeSpender;
         _arkWalletService = arkWalletService;
         _eventAggregator = eventAggregator;
         _logger = logger;
-        _operatorTermsService = operatorTermsService;
         _arkSubscriptionService = arkSubscriptionService;
     }
 
@@ -51,7 +44,7 @@ public class ArkadeContractSweeper : IHostedService
 
     private async Task PollForVTXOToSweep()
     {
-        await _arkSubscriptionService.Started.WithCancellation(_cts.Token);
+        await _arkSubscriptionService.Started;
         while (!_cts.IsCancellationRequested)
         {
             _logger.LogInformation("Polling for vtxos to sweep.");
@@ -59,55 +52,22 @@ public class ArkadeContractSweeper : IHostedService
             {
                 var spendableCoinsByWallet = await _arkadeSpender.GetSpendableCoins(null, false, _cts.Token);
                 var wallets = await _arkWalletService.GetWallets(spendableCoinsByWallet.Keys.ToArray(), _cts.Token);
-                var walletsById = wallets.ToDictionary(w => w.Id);
-                var terms = await _operatorTermsService.GetOperatorTerms(_cts.Token);
+                
                 foreach (var group in spendableCoinsByWallet)
                 {
                     try
                     {
-                        var wallet = walletsById[group.Key];
-                        var destination = await _arkadeSpender.GetDestination(wallet, terms);
-        
-                        // Only sweep if we have coins not at the destination to avoid infinite sweeping loops
-                        if (group.Value.All(x => x.TxOut.IsTo(destination)))
+                        var wallet = wallets.First(x => x.Id == group.Key);
+                        var coinsToSweep = GetCoinsToSweep(wallet, group.Value);
+
+                        if (coinsToSweep.Count == 0)
                         {
-                            _logger.LogInformation("Skipping sweep for wallet {WalletId}: all {ValueCount} coins worth {Sum} are already at destination", wallet.Id, group.Value.Count, group.Value.Sum(x => x.TxOut.Value));
+                            _logger.LogTrace("Skipping sweep for wallet {WalletId}: no coins need sweeping", wallet.Id);
                             continue;
                         }
-                        
-                        if(group.Value.Count == 0)
-                        {
-                            _logger.LogInformation("Skipping sweep for wallet {WalletId}: no coins to sweep", wallet.Id);
-                            continue;
-                        }
-                        
-                        if (SweepEachCoinIndividually)
-                        {
-                            // Sweep each coin in its own dedicated transaction
-                            foreach (var coin in group.Value)
-                            {
-                                // Skip coins already at destination to avoid infinite loops
-                                if (coin.TxOut.IsTo(destination))
-                                {
-                                    _logger.LogTrace("Skipping coin {CoinOutpoint} for wallet {WalletId}: already at destination", coin.Outpoint, wallet.Id);
-                                    continue;
-                                }
-                                try
-                                {
-                                    _logger.LogInformation("Sweeping individual coin for wallet {WalletId}: {SpendableArkCoinWithSigner}", wallet.Id, coin);
-                                    await _arkadeSpender.Spend(wallet, [coin], [], _cts.Token);
-                                }
-                                catch (Exception coinEx)
-                                {
-                                    _logger.LogError(coinEx, "Error while sweeping individual coin {CoinOutpoint} for wallet {WalletId}", coin.Outpoint, wallet.Id);
-                                }
-                            }
-                        }
-                        else
-                        {
-                            // Sweep all coins together in a single transaction
-                            await _arkadeSpender.Spend(wallet, group.Value, [], _cts.Token);
-                        }
+
+                        _logger.LogInformation("Sweeping {Count} coins for wallet {WalletId}", coinsToSweep.Count, wallet.Id);
+                        await _arkadeSpender.Spend(wallet, coinsToSweep, [], _cts.Token);
                     }
                     catch (Exception ex)
                     {
@@ -117,8 +77,9 @@ public class ArkadeContractSweeper : IHostedService
                 
                 _tcsWaitForNextPoll = new TaskCompletionSource();
                 using var cts2 = new CancellationTokenSource(TimeSpan.FromMinutes(5));
-                await _tcsWaitForNextPoll.Task.WithCancellation(CancellationTokenSource
-                    .CreateLinkedTokenSource(_cts.Token, cts2.Token).Token);
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, cts2.Token);
+                linkedCts.Token.Register(() => _tcsWaitForNextPoll.TrySetCanceled());
+                await _tcsWaitForNextPoll.Task;
             }
             catch (OperationCanceledException)
             {
@@ -128,10 +89,56 @@ public class ArkadeContractSweeper : IHostedService
                 _logger.LogError(ex, "Error while sweeping vtxos");
                 await Task.Delay(TimeSpan.FromMinutes(1), _cts.Token);
             }
-            
         }
     }
-    
+
+    /// <summary>
+    /// Filters coins that need to be swept based on wallet type and contract type.
+    /// - Single-key wallets: sweep all coins not at default destination or explicit destination
+    /// - HD wallets: only sweep non-payment contracts (VHTLCs, etc.)
+    /// </summary>
+    private List<SpendableArkCoinWithSigner> GetCoinsToSweep(ArkWallet wallet, List<SpendableArkCoinWithSigner> coins)
+    {
+        var isHDWallet = wallet.WalletType == WalletType.Mnemonic;
+        var coinsToSweep = new List<SpendableArkCoinWithSigner>();
+
+        foreach (var coin in coins)
+        {
+            // Skip coins already at explicit destination
+            if (wallet.Destination is not null && coin.TxOut.IsTo(wallet.Destination))
+            {
+                continue;
+            }
+
+            if (isHDWallet)
+            {
+                // For HD wallets, only sweep non-payment contracts
+                // Payment contracts are the final destination - don't sweep
+                if (coin.Contract is ArkPaymentContract or HashLockedArkPaymentContract)
+                {
+                    continue;
+                }
+            }
+            else
+            {
+                // For single-key wallets, skip coins already at the wallet's default payment contract
+                // (coins belonging to the wallet's own key)
+                if (coin.Contract is ArkPaymentContract paymentContract)
+                {
+                    // Check if this payment contract belongs to this wallet
+                    if (paymentContract.User.WalletId().Equals(wallet.Id, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+                }
+            }
+
+            coinsToSweep.Add(coin);
+        }
+
+        return coinsToSweep;
+    }
+
     private Task OnVTXOsUpdated(VTXOsUpdated arg)
     {
         _tcsWaitForNextPoll?.TrySetResult();

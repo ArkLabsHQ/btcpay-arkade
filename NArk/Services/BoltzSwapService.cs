@@ -10,6 +10,7 @@ using NArk.Services.Abstractions;
 using NBitcoin;
 using NBitcoin.Crypto;
 using NBitcoin.DataEncoders;
+using NBitcoin.Scripting;
 using NBitcoin.Secp256k1;
 
 namespace NArk.Services;
@@ -19,25 +20,27 @@ public class BoltzSwapService(
     IOperatorTermsService operatorTermsService,
     ILogger<BoltzSwapService> logger)
 {
-    public async Task<SubmarineSwapResult> CreateSubmarineSwap(BOLT11PaymentRequest invoice, ECPubKey sender,
+    public async Task<SubmarineSwapResult> CreateSubmarineSwap(BOLT11PaymentRequest invoice, OutputDescriptor sender,
         CancellationToken cancellationToken = default)
     {
         var operatorTerms = await operatorTermsService.GetOperatorTerms(cancellationToken);
 
+        
         var response = await boltzClient.CreateSubmarineSwapAsync(new SubmarineRequest()
         {
             Invoice = invoice.ToString(),
-            RefundPublicKey = sender.ToHex(),
+            RefundPublicKey = sender.ToPubKey().ToHex(),
             From = "ARK",
             To = "BTC",
         }, cancellationToken);
 
         var hash = new uint160(Hashes.RIPEMD160(invoice.PaymentHash.ToBytes(false)), false);
-        var receiver = response.ClaimPublicKey.ToECXOnlyPubKey();
+        var receiver =
+            KeyExtensions.ParseOutputDescriptor(response.ClaimPublicKey, operatorTerms.Network);
 
         var vhtlcContract = new VHTLCContract(
             server: operatorTerms.SignerKey,
-            sender: sender.ToXOnlyPubKey(),
+            sender: sender,
             receiver: receiver,
             hash: hash,
             refundLocktime: new LockTime(response.TimeoutBlockHeights.Refund),
@@ -56,11 +59,14 @@ public class BoltzSwapService(
     }
 
     public async Task<ReverseSwapResult> CreateReverseSwap(CreateInvoiceParams createInvoiceRequest,
-        ECPubKey receiver,
+        OutputDescriptor receiver,
         CancellationToken cancellationToken = default)
     {
+        var claimPublicKey = receiver.ToPubKey().ToHex();
+        
+        
         logger.LogInformation("Creating reverse swap with invoice amount {InvoiceAmount} for receiver {Receiver}",
-            createInvoiceRequest.Amount.ToUnit(LightMoneyUnit.BTC), receiver.ToHex());
+            createInvoiceRequest.Amount.ToUnit(LightMoneyUnit.BTC), claimPublicKey);
 
         // Get operator terms 
         var operatorTerms = await operatorTermsService.GetOperatorTerms(cancellationToken);
@@ -77,7 +83,7 @@ public class BoltzSwapService(
             From = "BTC",
             To = "ARK",
             OnchainAmount = createInvoiceRequest.Amount.MilliSatoshi/1000,
-            ClaimPublicKey = receiver.ToHex(), // Receiver will claim the VTXO
+            ClaimPublicKey = claimPublicKey, // Receiver will claim the VTXO
             PreimageHash = Encoders.Hex.EncodeData(preimageHash),
             AcceptZeroConf = true,
             DescriptionHash = createInvoiceRequest.DescriptionHash?.ToString(),
@@ -120,20 +126,21 @@ public class BoltzSwapService(
         var swapFee = invoiceAmountSats - onchainAmountSats;
         logger.LogInformation("Reverse swap created: onchain amount = {OnchainAmount} sats, invoice amount = {InvoiceAmount} sats, swap fee = {SwapFee} sats",
             onchainAmountSats, invoiceAmountSats, swapFee);
-        
-        
-        var sender = response.RefundPublicKey.ToECXOnlyPubKey();
+
+
+        var sender = KeyExtensions.ParseOutputDescriptor(response.RefundPublicKey, operatorTerms.Network);
         logger.LogDebug("Using sender key: {SenderKey}", response.RefundPublicKey);
+
 
         var vhtlcContract = new VHTLCContract(
             server: operatorTerms.SignerKey,
             sender: sender,
-            receiver: receiver.ToXOnlyPubKey(),
+            receiver: receiver,
             preimage: preimage,
             refundLocktime: new LockTime(response.TimeoutBlockHeights.Refund),
             unilateralClaimDelay: ArkExtensions.Parse(response.TimeoutBlockHeights.UnilateralClaim),
-            unilateralRefundDelay:ArkExtensions.Parse( response.TimeoutBlockHeights.UnilateralRefund),
-            unilateralRefundWithoutReceiverDelay: ArkExtensions.Parse( response.TimeoutBlockHeights
+            unilateralRefundDelay: ArkExtensions.Parse(response.TimeoutBlockHeights.UnilateralRefund),
+            unilateralRefundWithoutReceiverDelay: ArkExtensions.Parse(response.TimeoutBlockHeights
                 .UnilateralRefundWithoutReceiver)
         );
 

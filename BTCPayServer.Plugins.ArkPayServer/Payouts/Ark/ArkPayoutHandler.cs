@@ -22,6 +22,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using NArk;
+using NArk.Extensions;
 using NArk.Services.Abstractions;
 using NBitcoin;
 using NBitcoin.Payment;
@@ -160,7 +161,7 @@ public class ArkPayoutHandler(
 
             var terms = await operatorTermsService.GetOperatorTerms();
             var newVtxos = vtxoEvent.Vtxos.Where(vtxo => vtxo.SpentByTransactionId is null)
-                .GroupBy(vtxo => vtxo.Script).ToDictionary(g => ArkAddress.FromScriptPubKey(Script.FromHex(g.Key), terms.SignerKey).ToString(terms.Network.ChainName == ChainName.Mainnet), g => g.ToArray());           
+                .GroupBy(vtxo => vtxo.Script).ToDictionary(g => ArkAddress.FromScriptPubKey(Script.FromHex(g.Key), terms.SignerKey.ToXOnlyPubKey()).ToString(terms.Network.ChainName == ChainName.Mainnet), g => g.ToArray());           
             
             var addresses = newVtxos.Keys.ToArray();
             

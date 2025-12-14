@@ -15,10 +15,12 @@
     ViewData.SetActivePage(category: "Ark", activePage: "Contracts", title: "Ark - Contracts");
     var storeId = ScopeProvider.GetCurrentStoreId();
     var mainnet = true;
+    Network network = Network.Main;
     try
     {
         var terms = await Terms.GetOperatorTerms();
         mainnet = terms.Network.ChainName == ChainName.Mainnet;
+        network = terms.Network;
     }
     catch
     {
@@ -172,7 +174,7 @@
             <tbody>
                 @foreach (var contract in Model.Contracts)
                 {
-                    var arkContract = ArkContract.Parse(contract.Type, contract.ContractData);
+                    var arkContract = ArkContract.Parse(contract.Type, contract.ContractData, network);
                     if (arkContract is null) continue;
                     var link = ArkadeLinkHelper.GetIndexerLinkForContract(ArkConfiguration.ArkUri, arkContract);
                     var detailsId = $"contract_details_{contract.Script.GetHashCode()}";

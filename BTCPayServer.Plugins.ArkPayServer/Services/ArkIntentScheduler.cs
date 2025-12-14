@@ -273,7 +273,7 @@ public class ArkIntentScheduler(
             else
             {
                 // Default: send all funds back to wallet (refreshes VTXOs, moves from recoverable state, etc.)
-                var destination = await arkadeSpender.GetDestination(wallet, terms);
+                var destination = await arkadeSpender.GetDestination(wallet, terms, cancellationToken);
 
                 var fees =
                     (terms.FeeTerms.OffchainInput * intentSpec.InputCoins.Length) +

@@ -1,12 +1,13 @@
 using NArk.Scripts;
 using NBitcoin;
+using NBitcoin.Scripting;
 using NBitcoin.Secp256k1;
 
 namespace NArk.Models;
 
 public record ArkOperatorTerms(
     Money Dust,
-    ECXOnlyPubKey SignerKey,
+    OutputDescriptor SignerKey,
     Dictionary<ECXOnlyPubKey, long> DeprecatedSigners,
     Network Network,
     Sequence UnilateralExit,

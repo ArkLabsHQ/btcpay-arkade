@@ -5,6 +5,7 @@ using NArk.Models;
 using NArk.Scripts;
 using NArk.Services.Abstractions;
 using NBitcoin;
+using NBitcoin.Scripting;
 
 namespace NArk.Services
 {
@@ -124,7 +125,7 @@ namespace NArk.Services
         /// The existing forfeit must have the VTXO input signed with ANYONECANPAY|ALL sighash.
         /// This method adds the connector coin and signs it with DEFAULT sighash.
         /// </summary>
-        public async Task<PSBT> CompleteForfeitTx(PSBT existingForfeit, Coin connector, IArkadeWalletSigner delegateSigner, CancellationToken cancellationToken = default)
+        public async Task<PSBT> CompleteForfeitTx(PSBT existingForfeit, Coin connector, IArkadeWalletSigner delegateSigner,OutputDescriptor delegateOutputDescriptor, CancellationToken cancellationToken = default)
         {
             logger.LogDebug("Completing forfeit transaction by adding connector {ConnectorOutpoint}", connector.Outpoint);
             
@@ -156,7 +157,7 @@ namespace NArk.Services
             var hash = gtx.GetSignatureHashTaproot(precomputedTransactionData,
                 new TaprootExecutionData((int)vtxo.Index, leafScript.leafScript.LeafHash));
             
-            var (signature, pubKey) = await delegateSigner.Sign(hash, cancellationToken);
+            var (signature, pubKey) = await delegateSigner.Sign(hash,delegateOutputDescriptor, cancellationToken);
             
             vtxo.SetTaprootScriptSpendSignature(pubKey, leafScript.leafScript.LeafHash, signature);
            
@@ -301,6 +302,7 @@ namespace NArk.Services
                         outpoint,
                         txout.GetTxOut()!,
                         coin.Signer,
+                        coin.SignerDescriptor,
                         coin.SpendingScriptBuilder,
                         coin.SpendingConditionWitness,
                         coin.SpendingLockTime,

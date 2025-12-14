@@ -2,6 +2,7 @@
 @using BTCPayServer.Abstractions.Contracts
 @using BTCPayServer.Abstractions.Extensions
 @using BTCPayServer.Plugins.ArkPayServer
+@using BTCPayServer.Plugins.ArkPayServer.Data.Entities
 @using BTCPayServer.Plugins.ArkPayServer.Enums
 @using BTCPayServer.Plugins.ArkPayServer.Services
 @using NArk.Services.Abstractions
@@ -115,6 +116,17 @@ else
                     @if (!string.IsNullOrEmpty(Model.WalletId))
                     {
                         <vc:truncate-center text="@Model.WalletId" classes="truncate-center-id"/>
+                    }
+                </div>
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <span class="text-muted">Wallet Type</span>
+                    @if (Model.WalletType == WalletType.Mnemonic)
+                    {
+                        <span class="badge text-bg-primary" title="HD wallet with BIP-86 Taproot derivation">HD Wallet</span>
+                    }
+                    else
+                    {
+                        <span class="badge text-bg-secondary" title="Single-key wallet">Single Key</span>
                     }
                 </div>
                 <div class="d-flex justify-content-between align-items-center mb-2">

@@ -44,7 +44,7 @@ public class ArkadePaymentMethodHandler(
         }
 
         var contract = await arkWalletService.DerivePaymentContract(arkadePaymentMethodConfig.WalletId, CancellationToken.None);
-        var details = new ArkadePromptDetails(arkadePaymentMethodConfig.WalletId, contract);
+        var details = new ArkadePromptDetails(arkadePaymentMethodConfig.WalletId, contract.ToString());
         var address = contract.GetArkAddress();
        
         context.Prompt.Destination = address.ToString(btcPayServerEnvironment.NetworkType == ChainName.Mainnet);

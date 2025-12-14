@@ -5,11 +5,13 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using NArk;
 using NArk.Contracts;
+using NArk.Extensions;
 using NArk.Models;
 using NArk.Scripts;
 using NArk.Services;
 using NArk.Services.Abstractions;
 using NBitcoin;
+using NBitcoin.Scripting;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
 
@@ -43,7 +45,7 @@ public class ArkadeSpender(
 
         var operatorTerms = await operatorTermsService.GetOperatorTerms(cancellationToken);
 
-        var changeAddress = await GetDestination(wallet, operatorTerms);
+        var changeAddress = await GetDestination(wallet, operatorTerms, cancellationToken);
 
         var totalOutput = onchainDestination.Value + (operatorTerms.FeeTerms.OnchainOutput * 2);
         var availableCoins = coins.OrderByDescending(x => x.TxOut.Value).ToList();
@@ -115,12 +117,12 @@ public class ArkadeSpender(
     {
         using var l = await asyncKeyedLocker.LockAsync($"ark-{wallet.Id}-txs-spending", cancellationToken);
         var operatorTerms = await operatorTermsService.GetOperatorTerms(cancellationToken);
-        var destination = await GetDestination(wallet, operatorTerms);
-        return await SpendWalletCoins(coins, operatorTerms, outputs, destination, useAllCoins, cancellationToken);
+        // Pass wallet instead of pre-computed destination - GetDestination will only be called if change is needed
+        return await SpendWalletCoins(wallet, coins, operatorTerms, outputs, useAllCoins, cancellationToken);
     }
 
-    private async Task<uint256> SpendWalletCoins(IEnumerable<SpendableArkCoinWithSigner> coins,
-        ArkOperatorTerms operatorTerms, TxOut[] outputs, ArkAddress changeAddress, bool useAllCoins, CancellationToken cancellationToken)
+    private async Task<uint256> SpendWalletCoins(ArkWallet wallet, IEnumerable<SpendableArkCoinWithSigner> coins,
+        ArkOperatorTerms operatorTerms, TxOut[] outputs, bool useAllCoins, CancellationToken cancellationToken)
     {
         var totalOutput = outputs.Sum(x => x.Value) + (outputs.Length * operatorTerms.FeeTerms.OffchainOutput);
         var availableCoins = coins.OrderByDescending(x => x.TxOut.Value).ToList();
@@ -152,26 +154,47 @@ public class ArkadeSpender(
             totalOutput -
             (selectedCoins.Count * operatorTerms.FeeTerms.OffchainInput);
         
+        // Only derive a new change address if we actually need change
+        // This is important for HD wallets as it consumes a derivation index
+        ArkAddress? changeAddress = null;
+        var needsChange = change >= operatorTerms.Dust || 
+                          (change > 0UL && (hasExplicitSubdustOutput + 1) <= ArkTransactionBuilder.MaxOpReturnOutputs);
+        
+        if (needsChange)
+        {
+            // GetDestination uses DerivePaymentContract which saves the contract to DB
+            changeAddress = await GetDestination(wallet, operatorTerms, cancellationToken);
+        }
+        
         // Add change output if it's at or above dust threshold
         if (change >= operatorTerms.Dust)
         {
-            outputs = [.. outputs, new TxOut(Money.Satoshis(change), changeAddress)];
+            outputs = [.. outputs, new TxOut(Money.Satoshis(change), changeAddress!)];
         }
         else if (change > 0UL && (hasExplicitSubdustOutput + 1) <= ArkTransactionBuilder.MaxOpReturnOutputs)
         {
             // We have subdust change - log it as it will become an OP_RETURN
             logger.LogWarning("Transaction will create subdust change of {Change} sats (< {Dust} dust threshold). " +
                             "This will be converted to an OP_RETURN output.", change, operatorTerms.Dust);
-            outputs = [.. outputs, new TxOut(Money.Satoshis(change), changeAddress)];
+            outputs = [.. outputs, new TxOut(Money.Satoshis(change), changeAddress!)];
         }
 
         try
         {
-            return await arkTransactionBuilder.ConstructAndSubmitArkTransaction(
+            var txId = await arkTransactionBuilder.ConstructAndSubmitArkTransaction(
                 selectedCoins,
                 outputs,
                 arkServiceClient,
                 cancellationToken);
+            
+            // After successful tx submission, sync all contracts for inputs/outputs
+            var scripts = selectedCoins.Select(x => x.Contract.GetArkAddress().ScriptPubKey.ToHex())
+                .Concat(outputs.Select(y => y.ScriptPubKey.ToHex())).ToHashSet();
+            
+            // Fire and forget the sync - don't block the return
+            _ = arkVtxoSynchronizationService.PollScriptsForVtxos(scripts, cancellationToken);
+            
+            return txId;
         }
         catch
         {
@@ -231,7 +254,7 @@ public class ArkadeSpender(
 
         foreach (var contractData in group)
         {
-            var contract = ArkContract.Parse(contractData.Key.Type, contractData.Key.ContractData);
+            var contract = ArkContract.Parse(contractData.Key.Type, contractData.Key.ContractData, operatorTerms.Network);
             if (contract is null)
                 continue;
             foreach (var vtxo in contractData.Value)
@@ -251,7 +274,7 @@ public class ArkadeSpender(
                     }
                 }
 
-                if (!operatorTerms.SignerKey.ToBytes().SequenceEqual(contract.Server!.ToBytes()))
+                if (!operatorTerms.SignerKey.ToString().Equals(contract.Server.ToString(), StringComparison.InvariantCultureIgnoreCase))
                 {
                     continue;
                 }
@@ -268,29 +291,29 @@ public class ArkadeSpender(
     private async Task<SpendableArkCoinWithSigner?> GetSpendableCoin(IArkadeWalletSigner signer,
         ArkContract contract, ICoinable vtxo, bool recoverable, DateTimeOffset? expiresAt, uint? expiresAtHeight, CancellationToken cancellationToken)
     {
-        var user = await signer.GetXOnlyPublicKey(cancellationToken);
+        var user = await signer.GetFingerprint(cancellationToken);
         switch (contract)
         {
             case ArkPaymentContract arkPaymentContract:
-                if (arkPaymentContract.User.ToBytes().SequenceEqual(user.ToBytes()))
+                if (arkPaymentContract.User.WalletId().Equals(user, StringComparison.InvariantCultureIgnoreCase))
                 {
-                    return ToArkCoin(contract, vtxo, signer, arkPaymentContract.CollaborativePath(), null, null, null, recoverable, expiresAt, expiresAtHeight);
+                    return  ToArkCoin(contract, vtxo, signer, arkPaymentContract.User, arkPaymentContract.CollaborativePath(), null, null, null, recoverable, expiresAt, expiresAtHeight);
                 }
 
                 break;
             case HashLockedArkPaymentContract hashLockedArkPaymentContract:
-                if (hashLockedArkPaymentContract.User!.ToBytes().SequenceEqual(user.ToBytes()))
+                if (hashLockedArkPaymentContract.User.WalletId().Equals(user, StringComparison.InvariantCultureIgnoreCase))
                 {
-                    return ToArkCoin(contract, vtxo, signer,
+                    return ToArkCoin(contract, vtxo, signer,hashLockedArkPaymentContract.User,
                         hashLockedArkPaymentContract.CreateClaimScript(),
                         new WitScript(Op.GetPushOp(hashLockedArkPaymentContract.Preimage)), null, null, recoverable, expiresAt, expiresAtHeight);
                 }
 
                 break;
             case VHTLCContract htlc:
-                if (htlc.Preimage is not null && htlc.Receiver.ToBytes().SequenceEqual(user.ToBytes()))
+                if (htlc.Preimage is not null && htlc.Receiver.WalletId().Equals(user, StringComparison.InvariantCultureIgnoreCase))
                 {
-                    return ToArkCoin(contract, vtxo, signer,
+                    return ToArkCoin(contract, vtxo, signer,htlc.Receiver,
                         htlc.CreateClaimScript(),
                         new WitScript(Op.GetPushOp(htlc.Preimage!)), null, null, recoverable, expiresAt, expiresAtHeight);
                 }
@@ -300,17 +323,17 @@ public class ArkadeSpender(
                 switch (htlc.RefundLocktime.IsTimeLock)
                 {
                     case true:
-                        if (htlc.RefundLocktime.Date <= Utils.UnixTimeToDateTime(timestamp) && htlc.Sender.ToBytes().SequenceEqual(user.ToBytes()))
+                        if (htlc.RefundLocktime.Date <= Utils.UnixTimeToDateTime(timestamp) && htlc.Sender.WalletId().Equals(user, StringComparison.InvariantCultureIgnoreCase))
                         {
-                            return ToArkCoin(contract, vtxo, signer,
+                            return ToArkCoin(contract, vtxo, signer,htlc.Sender,
                                 htlc.CreateRefundWithoutReceiverScript(),
                                 null, htlc.RefundLocktime, null, recoverable, expiresAt, expiresAtHeight);
                         }
                         break;
                     case false:
-                        if (htlc.RefundLocktime.Height <= height && htlc.Sender.ToBytes().SequenceEqual(user.ToBytes()))
+                        if (htlc.RefundLocktime.Height <= height && htlc.Sender.WalletId().Equals(user, StringComparison.InvariantCultureIgnoreCase))
                         {
-                            return ToArkCoin(contract, vtxo, signer,
+                            return ToArkCoin(contract, vtxo, signer,htlc.Sender,
                                 htlc.CreateRefundWithoutReceiverScript(),
                                 null, htlc.RefundLocktime, null, recoverable, expiresAt, expiresAtHeight);
                         }
@@ -322,20 +345,48 @@ public class ArkadeSpender(
         return null;
     }
 
-    private static SpendableArkCoinWithSigner ToArkCoin(ArkContract c, ICoinable vtxo, IArkadeWalletSigner signer,
-        ScriptBuilder leaf, WitScript? witness, LockTime? lockTime, Sequence? sequence, bool recoverable, DateTimeOffset? expiry, uint? expiryHeight)
+    private static SpendableArkCoinWithSigner ToArkCoin(ArkContract c, ICoinable vtxo, IArkadeWalletSigner signer,OutputDescriptor signerDescriptor,
+        ScriptBuilder leaf, WitScript? witness, LockTime? lockTime, Sequence? sequence, bool recoverable,
+        DateTimeOffset? expiry, uint? expiryHeight)
     {
-        return new SpendableArkCoinWithSigner(c, expiry, expiryHeight, vtxo.Outpoint, vtxo.TxOut, signer, leaf, witness, lockTime, sequence, recoverable);
+        return new SpendableArkCoinWithSigner(c, expiry, expiryHeight, vtxo.Outpoint, vtxo.TxOut, signer, signerDescriptor, leaf, witness, lockTime, sequence, recoverable);
     }
 
-    public Task<ArkAddress> GetDestination(ArkWallet wallet, ArkOperatorTerms arkOperatorTerms)
+    /// <summary>
+    /// Gets the destination address for a wallet. Uses the explicit destination
+    /// or derives a new payment contract from the wallet's descriptor at the next index.
+    /// WARNING: For HD wallets, this consumes a derivation index. Only call when you actually need a new address.
+    /// The derived contract is saved to the database.
+    /// </summary>
+    /// <param name="wallet">The wallet</param>
+    /// <param name="arkOperatorTerms">Operator terms</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>The destination ArkAddress</returns>
+    public async Task<ArkAddress> GetDestination(ArkWallet wallet, ArkOperatorTerms arkOperatorTerms, CancellationToken cancellationToken = default)
     {
-        var destination = wallet.Destination;
-        destination ??= 
-            ContractUtils
-                .DerivePaymentContract(new DeriveContractRequest(arkOperatorTerms, wallet.PublicKey))
-                .GetArkAddress();
-        return Task.FromResult(destination);
+        // If explicit destination is set, always use it (no index consumed)
+        if (wallet.Destination is not null)
+        {
+            return wallet.Destination;
+        }
+
+        // Derive a new payment contract and save it to DB
+        var contract = await arkWalletService.DerivePaymentContract(wallet.Id, cancellationToken);
+        return contract.GetArkAddress();
+    }
+
+    /// <summary>
+    /// Gets the destination address from a receiver descriptor.
+    /// Used by the sweeper to determine where to sweep VHTLC funds for HD wallets.
+    /// </summary>
+    /// <param name="receiverDescriptor">The receiver's contract descriptor</param>
+    /// <param name="arkOperatorTerms">Operator terms</param>
+    /// <returns>The derived payment contract address</returns>
+    public ArkContract GetDestinationFromDescriptor(OutputDescriptor receiverDescriptor, ArkOperatorTerms arkOperatorTerms)
+    {
+
+        return ContractUtils
+            .DerivePaymentContract(new DeriveContractRequest(arkOperatorTerms, receiverDescriptor));
     }
 
     /// <summary>

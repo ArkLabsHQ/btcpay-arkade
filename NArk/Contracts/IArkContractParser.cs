@@ -1,9 +1,11 @@
-﻿namespace NArk.Contracts;
+﻿using NBitcoin;
+
+namespace NArk.Contracts;
 
 public interface IArkContractParser
 {
     string Type { get; }
-    ArkContract? Parse( Dictionary<string, string> contractData);
+    ArkContract? Parse( Dictionary<string, string> contractData, Network network);
 
     public static  Dictionary<string, string> GetContractData(string contract)
     {

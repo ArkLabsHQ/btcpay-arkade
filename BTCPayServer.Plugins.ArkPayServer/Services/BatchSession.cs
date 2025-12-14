@@ -11,6 +11,7 @@ using NArk.Services.Abstractions;
 using NArk.Services.Batches;
 using NBitcoin;
 using NBitcoin.DataEncoders;
+using NBitcoin.Scripting;
 using NBitcoin.Secp256k1;
 using NBitcoin.Secp256k1.Musig;
 
@@ -26,6 +27,7 @@ public class BatchSession
     private readonly ArkTransactionBuilder _arkTransactionBuilder;
     private readonly Network _network;
     private readonly IArkadeWalletSigner _signer;
+    private readonly OutputDescriptor _signerOutputDescriptor;
     private readonly ArkIntent _arkIntent;
     private readonly SpendableArkCoinWithSigner[] _ins;
     private readonly BatchStartedEvent _batchStartedEvent;
@@ -39,6 +41,7 @@ public class BatchSession
         ArkTransactionBuilder arkTransactionBuilder,
         Network network,
         IArkadeWalletSigner signer,
+        OutputDescriptor signerOutputDescriptor,
         ArkIntent arkIntent,
         SpendableArkCoinWithSigner[] ins,
         BatchStartedEvent batchStartedEvent,
@@ -49,6 +52,7 @@ public class BatchSession
         _arkTransactionBuilder = arkTransactionBuilder;
         _network = network;
         _signer = signer;
+        _signerOutputDescriptor = signerOutputDescriptor;
         _arkIntent = arkIntent;
         _ins = ins;
         _batchStartedEvent = batchStartedEvent;
@@ -231,7 +235,7 @@ public class BatchSession
             throw new InvalidOperationException("Shared output not found in commitment transaction");
 
         // Create signing session
-        var session = new TreeSignerSession(_signer, vtxoGraph, sweepTapTreeRoot, sharedOutput.Value);
+        var session = new TreeSignerSession(_signer,_signerOutputDescriptor, vtxoGraph, sweepTapTreeRoot, sharedOutput.Value);
 
         // Generate and submit nonces
         var nonces = await session.GetNoncesAsync(cancellationToken);
@@ -356,7 +360,7 @@ public class BatchSession
             if (partialForfeits.TryGetValue(vtxoCoin.Outpoint, out var forfeit))
             {
                 var forfeitTx =
-                    await _arkTransactionBuilder.CompleteForfeitTx(forfeit, connectorCoin, _signer, cancellationToken);
+                    await _arkTransactionBuilder.CompleteForfeitTx(forfeit, connectorCoin, _signer, _signerOutputDescriptor,cancellationToken);
 
                 signedForfeits.Add(forfeitTx.ToBase64());
                 _logger.LogDebug("Forfeit tx constructed for VTXO {Outpoint}", vtxoCoin.Outpoint);

@@ -8,10 +8,6 @@ namespace NArk.Extensions;
 
 public static class ArkExtensions
 {
-    public static ECXOnlyPubKey ServerKey(this GetInfoResponse response)
-    {
-        return response.SignerPubkey.ToECXOnlyPubKey();
-    }
 
     public static Sequence Parse(long val)
     {
@@ -28,7 +24,7 @@ public static class ArkExtensions
         
         return new ArkOperatorTerms(
             Dust: Money.Satoshis(response.Dust),
-            SignerKey: response.ServerKey(),
+            SignerKey: KeyExtensions.ParseOutputDescriptor(response.SignerPubkey, network),
             DeprecatedSigners: response.DeprecatedSigners.ToDictionary(signer => signer.Pubkey.ToECXOnlyPubKey(),
                 signer => signer.CutoffDate),
             Network: network,

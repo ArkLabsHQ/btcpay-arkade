@@ -40,6 +40,7 @@ public class ArkIntent
     public int InternalId { get; set; }
     public string? IntentId { get; set; }
     public string WalletId { get; set; }
+    public string SignerDescriptor { get; set; }
     public ArkIntentState State { get; set; }
     
     public DateTimeOffset ValidFrom { get; set; }

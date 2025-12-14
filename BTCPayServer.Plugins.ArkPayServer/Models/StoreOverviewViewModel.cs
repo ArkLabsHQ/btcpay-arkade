@@ -1,3 +1,5 @@
+using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
+
 namespace BTCPayServer.Plugins.ArkPayServer.Models;
 
 public class StoreOverviewViewModel
@@ -11,6 +13,7 @@ public class StoreOverviewViewModel
     public string? Wallet { get; set; }
     public string? DefaultAddress { get; set; }
     public bool AllowSubDustAmounts { get; set; }
+    public WalletType WalletType { get; set; }
     
     // Service connection status
     public string? ArkOperatorUrl { get; set; }

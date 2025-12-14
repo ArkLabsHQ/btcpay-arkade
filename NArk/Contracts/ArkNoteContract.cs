@@ -32,7 +32,7 @@ public class ArkNoteContract(byte[] preimage) : HashLockedArkPaymentContract(nul
         return data;
     }
 
-    public new static ArkContract Parse(Dictionary<string, string> arg)
+    public new static ArkContract Parse(Dictionary<string, string> arg, Network network)
     {
         var preimage = Encoders.Hex.DecodeData(arg["preimage"]);
         return new ArkNoteContract(preimage);

@@ -3,6 +3,7 @@ using NArk.Scripts;
 using NBitcoin;
 using NBitcoin.Crypto;
 using NBitcoin.DataEncoders;
+using NBitcoin.Scripting;
 using NBitcoin.Secp256k1;
 
 namespace NArk.Contracts;
@@ -10,28 +11,40 @@ namespace NArk.Contracts;
 public class VHTLCContract : ArkContract
 {
     public byte[]? Preimage { get; }
-    public ECXOnlyPubKey Sender { get; }
-    public ECXOnlyPubKey Receiver { get; }
     public uint160 Hash { get; }
     public LockTime RefundLocktime { get; }
     public Sequence UnilateralClaimDelay { get; }
     public Sequence UnilateralRefundDelay { get; }
     public Sequence UnilateralRefundWithoutReceiverDelay { get; }
 
-    public VHTLCContract(ECXOnlyPubKey server, ECXOnlyPubKey sender, ECXOnlyPubKey receiver, byte[] preimage,
+    /// <summary>
+    /// Output descriptor for the sender key.
+    /// </summary>
+    public OutputDescriptor Sender { get; }
+
+    /// <summary>
+    /// Output descriptor for the receiver key.
+    /// </summary>
+    public OutputDescriptor Receiver { get; }
+
+    public VHTLCContract(OutputDescriptor server, OutputDescriptor sender, OutputDescriptor receiver,
+        byte[] preimage,
         LockTime refundLocktime,
         Sequence unilateralClaimDelay,
         Sequence unilateralRefundDelay,
         Sequence unilateralRefundWithoutReceiverDelay)
-        : this(server, sender, receiver, new uint160(Hashes.Hash160(preimage).ToBytes(false)), refundLocktime, unilateralClaimDelay, unilateralRefundDelay, unilateralRefundWithoutReceiverDelay)
+        : this(server, sender, receiver,
+            new uint160(Hashes.Hash160(preimage).ToBytes(false)), refundLocktime,
+            unilateralClaimDelay, unilateralRefundDelay, unilateralRefundWithoutReceiverDelay)
     {
         Preimage = preimage;
     }
-    
-    public VHTLCContract(ECXOnlyPubKey server, ECXOnlyPubKey sender, ECXOnlyPubKey receiver, uint160 hash, LockTime refundLocktime,  
+
+    public VHTLCContract(OutputDescriptor? server, OutputDescriptor sender, OutputDescriptor receiver,
+        uint160 hash, LockTime refundLocktime,
         Sequence unilateralClaimDelay,
         Sequence unilateralRefundDelay,
-        Sequence  unilateralRefundWithoutReceiverDelay)
+        Sequence unilateralRefundWithoutReceiverDelay)
         : base(server)
     {
         if(refundLocktime.Value == 0)
@@ -40,6 +53,7 @@ public class VHTLCContract : ArkContract
         ValidTimeLock(unilateralClaimDelay, nameof(unilateralClaimDelay));
         ValidTimeLock(unilateralRefundDelay, nameof(unilateralRefundDelay));
         ValidTimeLock(unilateralRefundWithoutReceiverDelay, nameof(unilateralRefundWithoutReceiverDelay));
+
         Sender = sender;
         Receiver = receiver;
         Hash = hash;
@@ -59,7 +73,7 @@ public class VHTLCContract : ArkContract
 
     public override string Type => ContractType;
     public const string ContractType = "HTLC";
-    
+
 
     public override IEnumerable<ScriptBuilder> GetScriptBuilders()
     {
@@ -76,9 +90,9 @@ public class VHTLCContract : ArkContract
     {
         var data = new Dictionary<string, string>
         {
-            { "server", Server!.ToHex() },
-            { "sender", Sender.ToHex() },
-            { "receiver", Receiver.ToHex() },
+            { "server", Server!.ToString() },
+            { "sender", Sender.ToString() },
+            { "receiver", Receiver.ToString() },
             { "hash", Hash.ToString() },
             { "refundLocktime", RefundLocktime.Value.ToString() },
             { "unilateralClaimDelay", UnilateralClaimDelay.Value.ToString() },
@@ -89,17 +103,18 @@ public class VHTLCContract : ArkContract
             data.Add("preimage", Encoders.Hex.EncodeData(Preimage));
         return data;
     }
-    
-    public static ArkContract? Parse(Dictionary<string, string> contractData)
+
+    public static ArkContract? Parse(Dictionary<string, string> contractData, Network network)
     {
-        var server = ECXOnlyPubKey.Create(Convert.FromHexString(contractData["server"]));
-        var sender = ECXOnlyPubKey.Create(Convert.FromHexString(contractData["sender"]));
-        var receiver = ECXOnlyPubKey.Create(Convert.FromHexString(contractData["receiver"]));
-        var hash = new uint160(contractData["hash"]); 
+        var server = KeyExtensions.ParseOutputDescriptor(contractData["server"], network);
+        var senderDescriptor = KeyExtensions.ParseOutputDescriptor(contractData["sender"],network);
+        var receiverDescriptor = KeyExtensions.ParseOutputDescriptor(contractData["receiver"],network);
+        var hash = new uint160(contractData["hash"]);
         var refundLocktime = new LockTime(uint.Parse(contractData["refundLocktime"]));
         var unilateralClaimDelay = new Sequence(uint.Parse(contractData["unilateralClaimDelay"]));
         var unilateralRefundDelay = new Sequence(uint.Parse(contractData["unilateralRefundDelay"]));
         var unilateralRefundWithoutReceiverDelay = new Sequence(uint.Parse(contractData["unilateralRefundWithoutReceiverDelay"]));
+
         if (contractData.TryGetValue("preimage", out var preimage))
         {
             var preimageBytes = Convert.FromHexString(preimage);
@@ -107,34 +122,34 @@ public class VHTLCContract : ArkContract
             {
                 throw new FormatException("preimage does not match hash");
             }
-            return new VHTLCContract(server, sender, receiver, preimageBytes, refundLocktime, unilateralClaimDelay, unilateralRefundDelay, unilateralRefundWithoutReceiverDelay);
+            return new VHTLCContract(server, senderDescriptor, receiverDescriptor, preimageBytes, refundLocktime, unilateralClaimDelay, unilateralRefundDelay, unilateralRefundWithoutReceiverDelay);
         }
-        
-        return new VHTLCContract(server, sender, receiver, hash, refundLocktime, unilateralClaimDelay, unilateralRefundDelay, unilateralRefundWithoutReceiverDelay);
+
+        return new VHTLCContract(server, senderDescriptor, receiverDescriptor, hash, refundLocktime, unilateralClaimDelay, unilateralRefundDelay, unilateralRefundWithoutReceiverDelay);
     }
-    
+
 
     public ScriptBuilder CreateClaimScript()
     {
         // claim (preimage + receiver)
         var hashLock = new HashLockTapScript(Hash);
-        var receiverMultisig = new NofNMultisigTapScript([Receiver]);
-        return new CollaborativePathArkTapScript(Server!,
+        var receiverMultisig = new NofNMultisigTapScript([Receiver.ToXOnlyPubKey()]);
+        return new CollaborativePathArkTapScript(Server.ToXOnlyPubKey(),
             new CompositeTapScript(hashLock, new VerifyTapScript() ,receiverMultisig));
     }
 
     public ScriptBuilder CreateCooperativeScript()
     {
         // refund (sender + receiver + server)
-        var senderReceiverMultisig = new NofNMultisigTapScript([Sender, Receiver]);
-        return new CollaborativePathArkTapScript(Server!, senderReceiverMultisig);
+        var senderReceiverMultisig = new NofNMultisigTapScript([Sender.ToXOnlyPubKey(), Receiver.ToXOnlyPubKey()]);
+        return new CollaborativePathArkTapScript(Server.ToXOnlyPubKey(), senderReceiverMultisig);
     }
     public ScriptBuilder CreateRefundWithoutReceiverScript()
     {
         // refundWithoutReceiver (at refundLocktime, sender  + server)
-        var senderReceiverMultisig = new NofNMultisigTapScript([Sender]);
+        var senderReceiverMultisig = new NofNMultisigTapScript([Sender.ToXOnlyPubKey()]);
         var lockTime = new LockTimeTapScript(RefundLocktime);
-        return new CollaborativePathArkTapScript(Server!,
+        return new CollaborativePathArkTapScript(Server.ToXOnlyPubKey(),
             new CompositeTapScript(lockTime, senderReceiverMultisig));
     }
 
@@ -143,20 +158,20 @@ public class VHTLCContract : ArkContract
     {
         // unilateralClaim (preimage + receiver after unilateralClaimDelay)
         var hashLock = new HashLockTapScript(Hash);
-        var receiverMultisig = new NofNMultisigTapScript([Receiver]);
+        var receiverMultisig = new NofNMultisigTapScript([Receiver.ToXOnlyPubKey()]);
         return new UnilateralPathArkTapScript(UnilateralClaimDelay,
             receiverMultisig, hashLock);
     }
     public ScriptBuilder CreateUnilateralRefundScript()
     {
         // unilateralRefund (sender + receiver after unilateralRefundDelay)
-        var senderReceiverMultisig = new NofNMultisigTapScript([Sender, Receiver]);
+        var senderReceiverMultisig = new NofNMultisigTapScript([Sender.ToXOnlyPubKey(), Receiver.ToXOnlyPubKey()]);
         return new UnilateralPathArkTapScript(UnilateralRefundDelay, senderReceiverMultisig);
     }
     public ScriptBuilder CreateUnilateralRefundWithoutReceiverScript()
     {
         // unilateralRefundWithoutReceiver (sender after unilateralRefundWithoutReceiverDelay)
         return new UnilateralPathArkTapScript(UnilateralRefundWithoutReceiverDelay,
-            new NofNMultisigTapScript([Sender]));
+            new NofNMultisigTapScript([Sender.ToXOnlyPubKey()]));
     }
 }

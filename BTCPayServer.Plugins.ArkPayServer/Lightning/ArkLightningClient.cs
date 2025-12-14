@@ -65,7 +65,7 @@ public class ArkLightningClient(
         };
 
         VHTLCContract? contract =
-            ArkContract.Parse(reverseSwap.Contract.Type, reverseSwap.Contract.ContractData) as VHTLCContract;
+            ArkContract.Parse(reverseSwap.Contract.Type, reverseSwap.Contract.ContractData, network) as VHTLCContract;
 
         return new LightningInvoice
         {
@@ -146,7 +146,7 @@ public class ArkLightningClient(
             ArkSwapStatus.Pending => LightningPaymentStatus.Pending,
             _ => LightningPaymentStatus.Unknown
         };
-        var htlcContract = ArkContract.Parse(swap.Contract.Type, swap.Contract.ContractData) as VHTLCContract;
+        var htlcContract = ArkContract.Parse(swap.Contract.Type, swap.Contract.ContractData, network) as VHTLCContract;
         
         return new LightningPayment
         {
