@@ -29,21 +29,21 @@ public class RegisterIntentMessage
     
     [JsonPropertyName("type")]
     [JsonPropertyOrder(0)]
-    public string Type { get; set; }
+    public required string Type { get; init; }
     
     [JsonPropertyName("onchain_output_indexes")]
     [JsonPropertyOrder(1)]
-    public int[] OnchainOutputsIndexes { get; set; }
+    public required int[] OnchainOutputsIndexes { get; init; }
     
     [JsonPropertyName("valid_at")]
     [JsonPropertyOrder(2)]
-    public long ValidAt { get; set; }
+    public long ValidAt { get; init; }
     
     [JsonPropertyName("expire_at")]
     [JsonPropertyOrder(3)]
-    public long ExpireAt { get; set; }
+    public long ExpireAt { get; init; }
     
     [JsonPropertyName("cosigners_public_keys")]
     [JsonPropertyOrder(4)]
-    public string[] CosignersPublicKeys { get; set; }
+    public required string[] CosignersPublicKeys { get; init; }
 }

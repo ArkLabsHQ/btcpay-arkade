@@ -88,17 +88,16 @@ public class ArkIntentService(
             {
                 var unreservedConnections = _isReservedConnections.Where(kvp => !kvp.Value).ToList();
                 foreach (var (connId, conn) in unreservedConnections)
-                {   
-                    if (_connections.TryGetValue(connId, out var connection))
-                    {
-                        logger.LogInformation("Disposing unreserved connection {ConnectionId}", connId);
-                        _ = connection.CancellationTokenSource.CancelAsync();
-                        _connections.Remove(connId);
-                        _isReservedConnections.Remove(connId);
-                    }
+                {
+                    if (!_connections.TryGetValue(connId, out var connection)) continue;
+                    
+                    logger.LogInformation("Disposing unreserved connection {ConnectionId}", connId);
+                    _ = connection.CancellationTokenSource.CancelAsync();
+                    _connections.Remove(connId);
+                    _isReservedConnections.Remove(connId);
                 }
 
-                int connectionId = RandomNumberGenerator.GetInt32(int.MinValue, int.MaxValue);
+                var connectionId = RandomNumberGenerator.GetInt32(int.MinValue, int.MaxValue);
                 var newCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 var newFreeConnection = RunSharedEventStreamAsync(connectionId, newCts.Token);
                 _connections[connectionId] = new Connection(
@@ -406,39 +405,53 @@ public class ArkIntentService(
                     }
                     catch (Exception ex) when (ex.Message.Contains("duplicated input"))
                     {
-                        var vtxoTransactionIds = intent.IntentVtxos.Select(i => i.Vtxo.TransactionId).ToList();
-                        var intentsToReview = await dbContext.Vtxos
-                            .Where(v => vtxoTransactionIds.Contains(v.TransactionId))
-                            .Include(v => v.IntentVtxos)
-                            .ThenInclude(i => i.Intent)
-                            .SelectMany(i => i.IntentVtxos)
-                            .Select(iv => iv.Intent)
-                            .ToListAsync(cancellationToken);
-
-                        var intentsToCancel = intentsToReview
-                            .Where(i => i.State == ArkIntentState.Cancelled || i.ValidUntil <= now)
-                            .ToList();
-
+                        // Filter to only the VTXOs locked by this intent
+                        var intentVtxoOutpoints = intent.IntentVtxos
+                            .Select(iv => new OutPoint(uint256.Parse(iv.VtxoTransactionId), (uint)iv.VtxoTransactionOutputIndex))
+                            .ToHashSet();
+                        
                         try
                         {
-                            foreach (var intentToCancel in intentsToCancel)
+                            var coins = await arkadeSpender.GetSpendableCoins([intent.WalletId], intentVtxoOutpoints,
+                                true, cancellationToken);
+
+                            if (!coins.TryGetValue(intent.WalletId, out var coinsForWallet)) continue;
+                            
+                            var expireAt = DateTimeOffset.UtcNow.Add(DefaultIntentExpiry);
+                            var deleteMsg = new DeleteIntentMessage()
                             {
-                                var deleteRequest = new DeleteIntentRequest
+                                Type = "delete",
+                                ExpireAt = expireAt.ToUnixTimeSeconds()
+                            };
+                            
+                            var deleteMessage = JsonSerializer.Serialize(deleteMsg);
+                            var deleteTx =
+                                await IntentUtils.CreateIntent(
+                                    deleteMessage,
+                                    (await operatorTermsService.GetOperatorTerms(cancellationToken)).Network,
+                                    coinsForWallet.ToArray(),
+                                    null,
+                                    cancellationToken
+                                );
+                        
+                        
+                            var deleteRequest = new DeleteIntentRequest
+                            {
+                                Intent = new Intent()
                                 {
-                                    Intent = new Intent()
-                                    {
-                                        Message = intent.DeleteProofMessage,
-                                        Proof = intent.DeleteProof
-                                    }
-                                };
+                                    Proof = deleteTx.ToBase64(),
+                                    Message = deleteMessage
+                                }
+                            };
                 
-                                await arkServiceClient.DeleteIntentAsync(deleteRequest, cancellationToken: cancellationToken);
-                                logger.LogInformation("Submitted delete proof for intent {IntentId}", intentToCancel.InternalId);
-                            }
+                            await arkServiceClient.DeleteIntentAsync(deleteRequest, cancellationToken: cancellationToken);
+                            logger.LogInformation("Submitted delete proof for vtxos in intent {IntentId}", intent.IntentId);
                         }
                         catch
                         { 
-                            // ignored
+                            logger.LogWarning(
+                                "Could not delete proof for vtxos {Vtxos}",
+                                string.Join(',', intentVtxoOutpoints.Select(iv => iv.ToString())));
                         }
 
                         try
@@ -706,9 +719,9 @@ public class ArkIntentService(
         ArkPluginDbContext dbContext,
         CancellationToken cancellationToken)
     {
-        // Build a map of intent ID hashes to intent IDs for efficient lookup
+        // Build a map of intent ID hashes to IDs for efficient lookup
         var intentHashMap = new Dictionary<string, string>();
-        foreach (var (intentId, intent) in _activeIntents)
+        foreach (var (intentId, _) in _activeIntents)
         {
             var intentIdBytes = Encoding.UTF8.GetBytes(intentId);
             var intentIdHash = Hashes.SHA256(intentIdBytes);

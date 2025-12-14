@@ -46,7 +46,7 @@ public class ArkAddress: TaprootPubKey
 
     public ECXOnlyPubKey ServerKey { get; }
     public int Version { get; }
-    public Network? Network { get; }
+    private Network? Network { get; }
 
     public override string ToString()
     {
@@ -66,7 +66,7 @@ public class ArkAddress: TaprootPubKey
         return new ArkAddress(pubKey, serverKey);
     }
 
-    public static ArkAddress Parse(string address)
+    public new static ArkAddress Parse(string address)
     {
         address = address.ToLowerInvariant();
      

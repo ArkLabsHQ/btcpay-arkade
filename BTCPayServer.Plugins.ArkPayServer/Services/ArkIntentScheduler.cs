@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using BTCPayServer.Plugins.ArkPayServer.Services.Policies;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NArk.Services;
@@ -21,62 +22,43 @@ namespace BTCPayServer.Plugins.ArkPayServer.Services;
 /// Background service that monitors VTXOs and schedules intents based on configured policies.
 /// Used for refreshing expiring VTXOs, moving funds from recoverable state, and other automated VTXO management.
 /// </summary>
-public class ArkIntentScheduler : IHostedService, IDisposable
+public class ArkIntentScheduler(
+    IServiceProvider serviceProvider,
+    ArkIntentService intentService,
+    ArkadeSpender arkadeSpender,
+    ArkWalletService arkWalletService,
+    ILogger<ArkIntentScheduler> logger,
+    IOperatorTermsService operatorTermsService)
+    : IHostedService, IDisposable
 {
     private static readonly TimeSpan PollingInterval = TimeSpan.FromMinutes(5);
-    
-    private readonly ArkIntentService _intentService;
-    private readonly ArkadeSpender _arkadeSpender;
-    private readonly ArkWalletService _arkWalletService;
-    private readonly ILogger<ArkIntentScheduler> _logger;
-    private readonly ILogger<FluentVtxoPolicy> _policyLogger;
-    private readonly IOperatorTermsService _operatorTermsService;
 
     private readonly ConcurrentDictionary<string, List<IVtxoIntentSchedulingPolicy>> _walletPolicies = new();
     private CancellationTokenSource? _serviceCts;
     private Task? _monitoringTask;
 
-    public ArkIntentScheduler(
-        ArkIntentService intentService,
-        ArkadeSpender arkadeSpender,
-        ArkWalletService arkWalletService,
-        ILogger<ArkIntentScheduler> logger,
-        ILogger<FluentVtxoPolicy> policyLogger,
-        IOperatorTermsService operatorTermsService)
-    {
-        _intentService = intentService;
-        _arkadeSpender = arkadeSpender;
-        _arkWalletService = arkWalletService;
-        _logger = logger;
-        _policyLogger = policyLogger;
-        _operatorTermsService = operatorTermsService;
-    }
-
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        _logger.LogInformation("Starting ArkIntentScheduler");
+        logger.LogInformation("Starting ArkIntentScheduler");
         
         // Subscribe to wallet policy changes
-        _arkWalletService.WalletPolicyChanged += OnWalletPolicyChanged;
+        arkWalletService.WalletPolicyChanged += OnWalletPolicyChanged;
         
         // Load policies from database
         await LoadPoliciesFromDatabaseAsync(cancellationToken);
         
-        // Register default policies for all wallets
-        await RegisterDefaultPoliciesAsync(cancellationToken);
-        
         _serviceCts = new CancellationTokenSource();
         _monitoringTask = MonitorAndScheduleIntentsAsync(_serviceCts.Token);
         
-        _logger.LogInformation("ArkIntentScheduler started");
+        logger.LogInformation("ArkIntentScheduler started");
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        _logger.LogInformation("Stopping ArkIntentScheduler");
+        logger.LogInformation("Stopping ArkIntentScheduler");
         
         // Unsubscribe from wallet policy changes
-        _arkWalletService.WalletPolicyChanged -= OnWalletPolicyChanged;
+        arkWalletService.WalletPolicyChanged -= OnWalletPolicyChanged;
         
         if (_serviceCts != null)
             await _serviceCts.CancelAsync();
@@ -84,7 +66,7 @@ public class ArkIntentScheduler : IHostedService, IDisposable
         if (_monitoringTask != null)
             await _monitoringTask;
         
-        _logger.LogInformation("ArkIntentScheduler stopped");
+        logger.LogInformation("ArkIntentScheduler stopped");
     }
 
     /// <summary>
@@ -92,7 +74,7 @@ public class ArkIntentScheduler : IHostedService, IDisposable
     /// </summary>
     public async Task RegisterPolicyAsync(string walletId, IVtxoIntentSchedulingPolicy policy, CancellationToken cancellationToken = default)
     {
-        var policies = _walletPolicies.GetOrAdd(walletId, _ => new List<IVtxoIntentSchedulingPolicy>());
+        var policies = _walletPolicies.GetOrAdd(walletId, _ => []);
         lock (policies)
         {
             policies.Add(policy);
@@ -100,7 +82,7 @@ public class ArkIntentScheduler : IHostedService, IDisposable
         
         await SavePoliciesToDatabaseAsync(walletId, cancellationToken);
         
-        _logger.LogInformation("Registered policy for wallet {WalletId}", walletId);
+        logger.LogInformation("Registered policy for wallet {WalletId}", walletId);
     }
 
     /// <summary>
@@ -108,13 +90,13 @@ public class ArkIntentScheduler : IHostedService, IDisposable
     /// </summary>
     public void RegisterPolicy(string walletId, IVtxoIntentSchedulingPolicy policy)
     {
-        var policies = _walletPolicies.GetOrAdd(walletId, _ => new List<IVtxoIntentSchedulingPolicy>());
+        var policies = _walletPolicies.GetOrAdd(walletId, _ => []);
         lock (policies)
         {
             policies.Add(policy);
         }
         
-        _logger.LogInformation("Registered policy for wallet {WalletId} (in-memory only)", walletId);
+        logger.LogInformation("Registered policy for wallet {WalletId} (in-memory only)", walletId);
     }
 
     /// <summary>
@@ -122,15 +104,14 @@ public class ArkIntentScheduler : IHostedService, IDisposable
     /// </summary>
     public void UnregisterPolicy(string walletId, IVtxoIntentSchedulingPolicy policy)
     {
-        if (_walletPolicies.TryGetValue(walletId, out var policies))
+        if (!_walletPolicies.TryGetValue(walletId, out var policies)) return;
+        
+        lock (policies)
         {
-            lock (policies)
-            {
-                policies.Remove(policy);
-            }
-            
-            _logger.LogInformation("Unregistered policy for wallet {WalletId}", walletId);
+            policies.Remove(policy);
         }
+            
+        logger.LogInformation("Unregistered policy for wallet {WalletId}", walletId);
     }
 
     /// <summary>
@@ -139,7 +120,7 @@ public class ArkIntentScheduler : IHostedService, IDisposable
     public void ClearPolicies(string walletId)
     {
         _walletPolicies.TryRemove(walletId, out _);
-        _logger.LogInformation("Cleared all policies for wallet {WalletId}", walletId);
+        logger.LogInformation("Cleared all policies for wallet {WalletId}", walletId);
     }
 
     /// <summary>
@@ -155,12 +136,12 @@ public class ArkIntentScheduler : IHostedService, IDisposable
             }
         }
         
-        return Array.Empty<IVtxoIntentSchedulingPolicy>();
+        return [];
     }
 
     private async Task MonitorAndScheduleIntentsAsync(CancellationToken cancellationToken)
     {
-        _logger.LogInformation("Starting VTXO monitoring and intent scheduling loop");
+        logger.LogInformation("Starting VTXO monitoring and intent scheduling loop");
         
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -173,11 +154,11 @@ public class ArkIntentScheduler : IHostedService, IDisposable
                 
                 if (walletsWithPolicies.Count == 0)
                 {
-                    _logger.LogDebug("No wallets with policies configured, skipping evaluation");
+                    logger.LogDebug("No wallets with policies configured, skipping evaluation");
                     continue;
                 }
                 
-                _logger.LogDebug("Evaluating policies for {Count} wallets", walletsWithPolicies.Count);
+                logger.LogDebug("Evaluating policies for {Count} wallets", walletsWithPolicies.Count);
                 
                 foreach (var walletId in walletsWithPolicies)
                 {
@@ -187,7 +168,7 @@ public class ArkIntentScheduler : IHostedService, IDisposable
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "Error evaluating policies for wallet {WalletId}", walletId);
+                        logger.LogError(ex, "Error evaluating policies for wallet {WalletId}", walletId);
                     }
                 }
             }
@@ -197,11 +178,11 @@ public class ArkIntentScheduler : IHostedService, IDisposable
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error in monitoring and intent scheduling loop");
+                logger.LogError(ex, "Error in monitoring and intent scheduling loop");
             }
         }
         
-        _logger.LogInformation("VTXO monitoring and intent scheduling loop stopped");
+        logger.LogInformation("VTXO monitoring and intent scheduling loop stopped");
     }
 
     private async Task EvaluateWalletPoliciesAsync(string walletId, CancellationToken cancellationToken)
@@ -216,27 +197,27 @@ public class ArkIntentScheduler : IHostedService, IDisposable
         else
         {
             // Use default policy for wallets without custom policies
-            policies = new List<IVtxoIntentSchedulingPolicy> { GetDefaultPolicy() };
-            _logger.LogDebug("Using default policy for wallet {WalletId}", walletId);
+            policies = [GetDefaultPolicy()];
+            logger.LogDebug("Using default policy for wallet {WalletId}", walletId);
         }
 
         // Get spendable coins for this wallet
-        var spendableCoinsDict = await _arkadeSpender.GetSpendableCoins(
+        var spendableCoinsDict = await arkadeSpender.GetSpendableCoins(
             [walletId], 
             true,
             cancellationToken);
         
         if (!spendableCoinsDict.TryGetValue(walletId, out var spendableCoins) || spendableCoins.Count == 0)
         {
-            _logger.LogDebug("No spendable coins found for wallet {WalletId}", walletId);
+            logger.LogDebug("No spendable coins found for wallet {WalletId}", walletId);
             return;
         }
         
         // Get wallet
-        var wallet = await _arkWalletService.GetWallet(walletId, cancellationToken);
+        var wallet = await arkWalletService.GetWallet(walletId, cancellationToken);
         if (wallet == null)
         {
-            _logger.LogWarning("Wallet {WalletId} not found", walletId);
+            logger.LogWarning("Wallet {WalletId} not found", walletId);
             return;
         }
         
@@ -263,7 +244,7 @@ public class ArkIntentScheduler : IHostedService, IDisposable
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error evaluating policy for wallet {WalletId}", walletId);
+                logger.LogError(ex, "Error evaluating policy for wallet {WalletId}", walletId);
             }
         }
     }
@@ -275,9 +256,9 @@ public class ArkIntentScheduler : IHostedService, IDisposable
     {
         try
         {
-            var terms = await _operatorTermsService.GetOperatorTerms(cancellationToken);
+            var terms = await operatorTermsService.GetOperatorTerms(cancellationToken);
             
-            _logger.LogInformation(
+            logger.LogInformation(
                 "Creating scheduled intent for wallet {WalletId}: {Reason} with {Count} coins",
                 wallet.Id, intentSpec.Reason, intentSpec.InputCoins.Length);
             
@@ -292,7 +273,7 @@ public class ArkIntentScheduler : IHostedService, IDisposable
             else
             {
                 // Default: send all funds back to wallet (refreshes VTXOs, moves from recoverable state, etc.)
-                var destination = await _arkadeSpender.GetDestination(wallet, terms);
+                var destination = await arkadeSpender.GetDestination(wallet, terms);
 
                 var fees =
                     (terms.FeeTerms.OffchainInput * intentSpec.InputCoins.Length) +
@@ -304,12 +285,12 @@ public class ArkIntentScheduler : IHostedService, IDisposable
                     {
                         ScriptPubKey = destination.ScriptPubKey,
                         Type = IntentTxOut.IntentOutputType.VTXO,
-                        Value = (ulong)totalAmount
+                        Value = (ulong)totalAmount - (ulong)fees
                     }
                 ];
             }            
             // Create the intent
-            var intentId = await _intentService.CreateIntentAsync(
+            var intentId = await intentService.CreateIntentAsync(
                 wallet.Id,
                 coins,
                 outputs,
@@ -317,13 +298,13 @@ public class ArkIntentScheduler : IHostedService, IDisposable
                 validUntil: intentSpec.ValidUntil,
                 cancellationToken: cancellationToken);
             
-            _logger.LogInformation(
+            logger.LogInformation(
                 "Created scheduled intent {IntentId} for wallet {WalletId} ({Reason}, {Count} coins, {Amount} sats)",
                 intentId, wallet.Id, intentSpec.Reason, intentSpec.InputCoins.Length, totalAmount);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, 
+            logger.LogError(ex, 
                 "Failed to create scheduled intent for wallet {WalletId} ({Reason})",
                 wallet.Id, intentSpec.Reason);
         }
@@ -331,7 +312,7 @@ public class ArkIntentScheduler : IHostedService, IDisposable
 
     private void OnWalletPolicyChanged(object? sender, string walletId)
     {
-        _logger.LogInformation("Wallet policy changed for {WalletId}, reloading policies", walletId);
+        logger.LogInformation("Wallet policy changed for {WalletId}, reloading policies", walletId);
         
         // Reload policies for this wallet asynchronously
         _ = Task.Run(async () =>
@@ -345,7 +326,7 @@ public class ArkIntentScheduler : IHostedService, IDisposable
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to reload and evaluate policies for wallet {WalletId}", walletId);
+                logger.LogError(ex, "Failed to reload and evaluate policies for wallet {WalletId}", walletId);
             }
         });
     }
@@ -355,18 +336,18 @@ public class ArkIntentScheduler : IHostedService, IDisposable
         try
         {
             // Wait for wallet service to be ready and get all wallets with policies
-            var wallets = await _arkWalletService.GetWalletsWithPolicies(cancellationToken);
+            var wallets = await arkWalletService.GetWalletsWithPolicies(cancellationToken);
             
-            _logger.LogInformation("Loading policies for {Count} wallets from wallet service", wallets.Length);
+            logger.LogInformation("Loading policies for {Count} wallets from wallet service", wallets.Length);
             
             foreach (var wallet in wallets)
             {
-                await LoadWalletPolicyFromWallet(wallet, cancellationToken);
+                LoadWalletPolicyFromWallet(wallet);
             }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to load policies from wallet service");
+            logger.LogError(ex, "Failed to load policies from wallet service");
         }
     }
 
@@ -375,58 +356,52 @@ public class ArkIntentScheduler : IHostedService, IDisposable
         try
         {
             // Load wallet from service (uses cache)
-            var wallet = await _arkWalletService.GetWallet(walletId, cancellationToken);
+            var wallet = await arkWalletService.GetWallet(walletId, cancellationToken);
             if (wallet == null)
             {
-                _logger.LogWarning("Wallet {WalletId} not found", walletId);
+                logger.LogWarning("Wallet {WalletId} not found", walletId);
                 _walletPolicies.TryRemove(walletId, out _);
                 return;
             }
             
-            await LoadWalletPolicyFromWallet(wallet, cancellationToken);
+            LoadWalletPolicyFromWallet(wallet);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to load policies for wallet {WalletId}", walletId);
+            logger.LogError(ex, "Failed to load policies for wallet {WalletId}", walletId);
         }
     }
 
-    private Task LoadWalletPolicyFromWallet(ArkWallet wallet, CancellationToken cancellationToken)
+    private void LoadWalletPolicyFromWallet(ArkWallet wallet)
     {
         try
         {
             if (string.IsNullOrEmpty(wallet.IntentSchedulingPolicy))
             {
                 _walletPolicies.TryRemove(wallet.Id, out _);
-                _logger.LogDebug("No policies configured for wallet {WalletId}", wallet.Id);
-                return Task.CompletedTask;
+                logger.LogDebug("No policies configured for wallet {WalletId}", wallet.Id);
+                return;
             }
             
             var configs = System.Text.Json.JsonSerializer.Deserialize<List<PolicyConfiguration>>(wallet.IntentSchedulingPolicy);
             if (configs == null || configs.Count == 0)
             {
                 _walletPolicies.TryRemove(wallet.Id, out _);
-                return Task.CompletedTask;
+                return;
             }
             
-            var policies = new List<IVtxoIntentSchedulingPolicy>();
-            foreach (var config in configs)
-            {
-                var logger = Microsoft.Extensions.Logging.LoggerFactoryExtensions.CreateLogger<FluentVtxoPolicy>(
-                    Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
-                var policy = FluentVtxoPolicy.FromConfiguration(config, logger);
-                policies.Add(policy);
-            }
-            
+            var policies =
+                configs
+                    .Select(config => FluentVtxoPolicy.FromConfiguration(serviceProvider, config))
+                    .Cast<IVtxoIntentSchedulingPolicy>()
+                    .ToList();
+
             _walletPolicies[wallet.Id] = policies;
-            _logger.LogInformation("Loaded {Count} policies for wallet {WalletId}", policies.Count, wallet.Id);
-            
-            return Task.CompletedTask;
+            logger.LogInformation("Loaded {Count} policies for wallet {WalletId}", policies.Count, wallet.Id);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to load policies for wallet {WalletId}", wallet.Id);
-            return Task.CompletedTask;
+            logger.LogError(ex, "Failed to load policies for wallet {WalletId}", wallet.Id);
         }
     }
 
@@ -453,34 +428,12 @@ public class ArkIntentScheduler : IHostedService, IDisposable
                 }
             }
             
-            await _arkWalletService.UpdateWalletIntentSchedulingPolicy(walletId, policyJson, cancellationToken);
-            _logger.LogDebug("Saved policies for wallet {WalletId}", walletId);
+            await arkWalletService.UpdateWalletIntentSchedulingPolicy(walletId, policyJson, cancellationToken);
+            logger.LogDebug("Saved policies for wallet {WalletId}", walletId);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to save policies for wallet {WalletId}", walletId);
-        }
-    }
-
-    /// <summary>
-    /// Register default policies for all wallets that don't have custom policies
-    /// </summary>
-    private async Task RegisterDefaultPoliciesAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            var walletsWithPolicies = await _arkWalletService.GetWalletsWithPolicies(cancellationToken);
-            var walletsWithPoliciesSet = walletsWithPolicies.Select(w => w.Id).ToHashSet();
-            
-            // For wallets without custom policies, register default policy
-            // The default policy will be applied during evaluation to any wallet that doesn't have custom policies
-            // We'll check this dynamically in EvaluateWalletPoliciesAsync
-            
-            _logger.LogInformation("Default policy will be applied to wallets without custom policies");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to register default policies");
+            logger.LogError(ex, "Failed to save policies for wallet {WalletId}", walletId);
         }
     }
     
@@ -489,8 +442,7 @@ public class ArkIntentScheduler : IHostedService, IDisposable
     /// </summary>
     private IVtxoIntentSchedulingPolicy GetDefaultPolicy()
     {
-        return new FluentVtxoPolicy(
-            _policyLogger)
+        return ActivatorUtilities.CreateInstance<FluentVtxoPolicy>(serviceProvider)
             .WhenExpiringWithin(TimeSpan.FromDays(1))
             .WhenRecoverable()
             .WithReason("Auto-refresh expiring or recoverable coins")

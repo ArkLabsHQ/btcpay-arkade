@@ -59,24 +59,25 @@ public class ArkadeContractSweeper : IHostedService
             {
                 var spendableCoinsByWallet = await _arkadeSpender.GetSpendableCoins(null, false, _cts.Token);
                 var wallets = await _arkWalletService.GetWallets(spendableCoinsByWallet.Keys.ToArray(), _cts.Token);
+                var walletsById = wallets.ToDictionary(w => w.Id);
                 var terms = await _operatorTermsService.GetOperatorTerms(_cts.Token);
                 foreach (var group in spendableCoinsByWallet)
                 {
                     try
                     {
-                        var wallet = wallets.First(x => x.Id == group.Key);
+                        var wallet = walletsById[group.Key];
                         var destination = await _arkadeSpender.GetDestination(wallet, terms);
         
                         // Only sweep if we have coins not at the destination to avoid infinite sweeping loops
                         if (group.Value.All(x => x.TxOut.IsTo(destination)))
                         {
-                            _logger.LogInformation($"Skipping sweep for wallet {wallet.Id}: all {group.Value.Count} coins worth {group.Value.Sum(x => x.TxOut.Value)} are already at destination");
+                            _logger.LogInformation("Skipping sweep for wallet {WalletId}: all {ValueCount} coins worth {Sum} are already at destination", wallet.Id, group.Value.Count, group.Value.Sum(x => x.TxOut.Value));
                             continue;
                         }
                         
                         if(group.Value.Count == 0)
                         {
-                            _logger.LogInformation($"Skipping sweep for wallet {wallet.Id}: no coins to sweep");
+                            _logger.LogInformation("Skipping sweep for wallet {WalletId}: no coins to sweep", wallet.Id);
                             continue;
                         }
                         
@@ -88,17 +89,17 @@ public class ArkadeContractSweeper : IHostedService
                                 // Skip coins already at destination to avoid infinite loops
                                 if (coin.TxOut.IsTo(destination))
                                 {
-                                    _logger.LogTrace($"Skipping coin {coin.Outpoint} for wallet {wallet.Id}: already at destination");
+                                    _logger.LogTrace("Skipping coin {CoinOutpoint} for wallet {WalletId}: already at destination", coin.Outpoint, wallet.Id);
                                     continue;
                                 }
                                 try
                                 {
-                                    _logger.LogInformation($"Sweeping individual coin for wallet {wallet.Id}: {coin}");
+                                    _logger.LogInformation("Sweeping individual coin for wallet {WalletId}: {SpendableArkCoinWithSigner}", wallet.Id, coin);
                                     await _arkadeSpender.Spend(wallet, [coin], [], _cts.Token);
                                 }
                                 catch (Exception coinEx)
                                 {
-                                    _logger.LogError(coinEx, $"Error while sweeping individual coin {coin.Outpoint} for wallet {wallet.Id}");
+                                    _logger.LogError(coinEx, "Error while sweeping individual coin {CoinOutpoint} for wallet {WalletId}", coin.Outpoint, wallet.Id);
                                 }
                             }
                         }
@@ -110,7 +111,7 @@ public class ArkadeContractSweeper : IHostedService
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, $"Error while sweeping vtxos for wallet {group.Key}");
+                        _logger.LogError(ex, "Error while sweeping vtxos for wallet {WalletId}", group.Key);
                     }
                 }
                 

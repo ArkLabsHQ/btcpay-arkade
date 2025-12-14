@@ -4,6 +4,7 @@ using NBitcoin;
 using NArk.Services;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.DependencyInjection;
 using NArk;
 using NArk.Contracts;
 using NArk.Services.Abstractions;
@@ -54,27 +55,23 @@ public static class PolicyConditionTypes
 /// <summary>
 /// Fluent policy builder that allows chaining multiple conditions for scheduling intents
 /// </summary>
-public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
+public class FluentVtxoPolicy(ILogger<FluentVtxoPolicy> logger) : IVtxoIntentSchedulingPolicy
 {
-    private readonly List<Func<SpendableArkCoinWithSigner[], CancellationToken, Task<SpendableArkCoinWithSigner[]>>> _filters = new();
-    private readonly List<PolicyCondition> _serializableConditions = new();
-    private readonly ILogger<FluentVtxoPolicy> _logger;
+    // Readonly but mutable
+    private readonly List<Func<SpendableArkCoinWithSigner[], CancellationToken, Task<SpendableArkCoinWithSigner[]>>> _filters = [];
+    private readonly List<PolicyCondition> _serializableConditions = [];
+    
     private bool _requireAll = false;
-    private Func<SpendableArkCoinWithSigner[], CancellationToken, Task<IntentTxOut[]>> _outputBuilder;
+    private Func<SpendableArkCoinWithSigner[], CancellationToken, Task<IntentTxOut[]>>? _outputBuilder;
     private TimeSpan _validityWindow = TimeSpan.FromHours(1);
     private string? _reason;
-
-    public FluentVtxoPolicy(ILogger<FluentVtxoPolicy> logger)
-    {
-        _logger = logger;
-    }
 
     /// <summary>
     /// Create a policy from a serialized configuration
     /// </summary>
-    public static FluentVtxoPolicy FromConfiguration(PolicyConfiguration config, ILogger<FluentVtxoPolicy> logger)
+    public static FluentVtxoPolicy FromConfiguration(IServiceProvider serviceProvider, PolicyConfiguration config)
     {
-        var policy = new FluentVtxoPolicy(logger);
+        var policy = ActivatorUtilities.CreateInstance<FluentVtxoPolicy>(serviceProvider);
 
         if (config.RequireAll)
         {
@@ -112,14 +109,14 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
     /// <summary>
     /// Deserialize a policy from JSON
     /// </summary>
-    public static FluentVtxoPolicy FromJson(string json, ILogger<FluentVtxoPolicy> logger)
+    public static FluentVtxoPolicy FromJson(IServiceProvider serviceProvider, string json)
     {
         var config = JsonSerializer.Deserialize<PolicyConfiguration>(json);
         if (config == null)
         {
             throw new InvalidOperationException("Failed to deserialize policy configuration");
         }
-        return FromConfiguration(config, logger);
+        return FromConfiguration(serviceProvider, config);
     }
 
     private void AddConditionFromConfig(PolicyCondition condition)
@@ -167,7 +164,7 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
                 break;
 
             default:
-                _logger.LogWarning("Unknown policy condition type: {Type}", condition.Type);
+                logger.LogWarning("Unknown policy condition type: {Type}", condition.Type);
                 break;
         }
     }
@@ -205,7 +202,7 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
 
             if (filtered.Any())
             {
-                _logger.LogDebug("Filter WhenExpiringWithin({Hours}h): {Count} coins",
+                logger.LogDebug("Filter WhenExpiringWithin({Hours}h): {Count} coins",
                     threshold.TotalHours, filtered.Length);
             }
 
@@ -233,7 +230,7 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
 
             if (filtered.Any())
             {
-                _logger.LogDebug("Filter WhenRecoverable: {Count} coins",
+                logger.LogDebug("Filter WhenRecoverable: {Count} coins",
                     filtered.Length);
             }
 
@@ -259,7 +256,7 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
 
             if (total >= threshold)
             {
-                _logger.LogDebug("Filter WhenTotalValueExceeds({Threshold}): {Total} sats",
+                logger.LogDebug("Filter WhenTotalValueExceeds({Threshold}): {Total} sats",
                     threshold.Satoshi, total);
                 return Task.FromResult(coins);
             }
@@ -290,7 +287,7 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
 
             if (total >= threshold)
             {
-                _logger.LogDebug("Filter WhenRecoverableFundsExceed({Threshold}): {Total} sats",
+                logger.LogDebug("Filter WhenRecoverableFundsExceed({Threshold}): {Total} sats",
                     threshold.Satoshi, total);
                 return Task.FromResult(recoverable);
             }
@@ -315,7 +312,7 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
         {
             if (coins.Length >= maxCount)
             {
-                _logger.LogDebug("Filter WhenCountExceeds({MaxCount}): {Count} coins",
+                logger.LogDebug("Filter WhenCountExceeds({MaxCount}): {Count} coins",
                     maxCount, coins.Length);
                 return Task.FromResult(coins);
             }
@@ -344,7 +341,7 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
 
             if (filtered.Any())
             {
-                _logger.LogDebug("Filter WhenScriptMatches: {Count} coins",
+                logger.LogDebug("Filter WhenScriptMatches: {Count} coins",
                     filtered.Length);
             }
 
@@ -366,7 +363,7 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
 
             if (filtered.Any())
             {
-                _logger.LogDebug("Filter When({Description}): {Count} coins",
+                logger.LogDebug("Filter When({Description}): {Count} coins",
                     description ?? "custom", filtered.Length);
             }
 
@@ -465,14 +462,14 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
             return null;
         }
 
-        _logger.LogInformation(
+        logger.LogInformation(
             "Policy triggered: {Count} coins",
             matchedCoins.Length);
 
         // Build outputs - use custom builder if provided, otherwise empty (scheduler will default to wallet)
-        var outputs = _outputBuilder != null
+        var outputs = _outputBuilder is not null
             ? await _outputBuilder(matchedCoins, cancellationToken)
-            : Array.Empty<IntentTxOut>();
+            : [];
 
         var now = DateTimeOffset.UtcNow;
         return new ScheduledIntentSpec

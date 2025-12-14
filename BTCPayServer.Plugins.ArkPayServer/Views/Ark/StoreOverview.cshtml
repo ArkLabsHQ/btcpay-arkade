@@ -2,6 +2,7 @@
 @using BTCPayServer.Abstractions.Contracts
 @using BTCPayServer.Abstractions.Extensions
 @using BTCPayServer.Plugins.ArkPayServer
+@using BTCPayServer.Plugins.ArkPayServer.Enums
 @using BTCPayServer.Plugins.ArkPayServer.Services
 @using NArk.Services.Abstractions
 @using NArk.Contracts
@@ -251,15 +252,37 @@ else
                 <h5 class="modal-title" id="transferModalLabel">Transfer Funds</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
-            <form asp-action="SpendOverview" method="get" asp-route-storeId="@storeId">
+            <form asp-action="SpendOverview" method="post" asp-route-storeId="@storeId">
                 <div class="modal-body">
+                    <div class="form-group">
+                        <label name="transfer-method" class="form-label" data-required>Choose Transfer Method</label>
+                        <div class="btcpay-list-select">
+                            @foreach (var method in Enum.GetValues<TransferMethod>())
+                            {
+                                <input type="radio" name="transfer-method" value="@method" id="TransferMethod_@method">
+                                <label for="TransferMethod_@method" class="btcpay-list-select-item">
+                                    @typeof(TransferMethod).DisplayName(method.ToString())
+                                </label>
+                            }
+                        </div>
+                    </div>
                     <div class="form-group mb-3">
-                        <label class="form-label">Destination</label>
-                        <input type="text" name="destinations" class="form-control" 
-                               placeholder="BIP21 URI, Lightning invoice, or Ark address..." 
-                               required />
+                        <label class="form-label" data-required>Destination</label>
+                        <input type="text" name="destinations" class="form-control"
+                               placeholder="BIP21 URI, Lightning invoice, or Ark address..."
+                               required/>
                         <div class="form-text">
                             Enter a BIP21 URI, Lightning invoice (BOLT11), or Ark address to send funds to
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label name="amount" class="form-label">Amount</label>
+                        <div class="input-group mb-3">
+                            <input inputmode="decimal" name="amount" type="number" step="1" placeholder="Amount to transfer" max="@(Model.Balances?.AvailableBalance ?? ulong.MaxValue)" class="form-control"/>
+                            <span class="input-group-text">sats</span>
+                        </div>
+                        <div class="form-text">
+                            In case the invoice or URI does not contain specific amount, enter amount
                         </div>
                     </div>
                     @if (Model.Balances != null)

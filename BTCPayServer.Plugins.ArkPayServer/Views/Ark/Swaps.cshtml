@@ -12,6 +12,7 @@
 @inject ArkConfiguration ArkConfiguration
 
 @{
+    Layout = "_Layout";
     ViewData.SetActivePage(category: "Ark", activePage: "Swaps", title: "Ark - Swaps");
     var storeId = ScopeProvider.GetCurrentStoreId();
     var mainnet = true;
@@ -20,8 +21,9 @@
         var terms = await Terms.GetOperatorTerms();
         mainnet = terms.Network.ChainName == ChainName.Mainnet;
     }
-    catch (Exception ex)
+    catch
     {
+        // ignored
     }
     
     var statusFilterCount = Model.Search?.ContainsFilter("status") == true ? Model.Search.GetFilterArray("status").Length : 0;
@@ -30,7 +32,7 @@
 
 @functions
 {
-    private bool HasArrayFilter(string type, string key = null) =>
+    private bool HasArrayFilter(string type, string? key = null) =>
         Model.Search?.ContainsFilter(type) == true && (key is null || Model.Search.GetFilterArray(type).Contains(key));
 }
 

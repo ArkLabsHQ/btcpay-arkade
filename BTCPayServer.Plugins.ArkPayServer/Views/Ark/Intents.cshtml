@@ -12,6 +12,7 @@
 @inject ArkConfiguration ArkConfiguration
 
 @{
+    Layout = "_Layout";
     ViewData.SetActivePage(category: "Ark", activePage: "Intents", title: "Ark - Intents");
     var storeId = ScopeProvider.GetCurrentStoreId();
     
@@ -20,7 +21,7 @@
 
 @functions
 {
-    private bool HasArrayFilter(string type, string key = null) =>
+    private bool HasArrayFilter(string type, string? key = null) =>
         Model.Search?.ContainsFilter(type) == true && (key is null || Model.Search.GetFilterArray(type).Contains(key));
 }
 

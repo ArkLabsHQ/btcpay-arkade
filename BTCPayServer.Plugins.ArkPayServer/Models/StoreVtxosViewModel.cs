@@ -12,8 +12,7 @@ public class StoreVtxosViewModel : BasePagingViewModel
     public HashSet<OutPoint> SpendableOutpoints { get; set; } = [];
     public SearchString Search { get; set; } = new(null);
     public string? SearchText { get; set; }
-    public string? SearchTerm { get; set; }
-    public string StoreId { get; set; }
+    public required string StoreId { get; set; }
 
     public override int CurrentPageCount => Vtxos.Count;
 }

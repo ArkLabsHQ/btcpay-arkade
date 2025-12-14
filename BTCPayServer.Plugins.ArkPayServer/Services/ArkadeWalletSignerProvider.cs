@@ -2,15 +2,8 @@
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
 
-public class ArkadeWalletSignerProvider
+public class ArkadeWalletSignerProvider(IEnumerable<IArkadeMultiWalletSigner> walletSigners)
 {
-    private readonly IEnumerable<IArkadeMultiWalletSigner> _walletSigners;
-
-    public ArkadeWalletSignerProvider(IEnumerable<IArkadeMultiWalletSigner> walletSigners)
-    {
-        _walletSigners = walletSigners;
-    }
-
     public async Task<IArkadeWalletSigner?> GetSigner(string walletId, CancellationToken cancellationToken = default)
     {
         var signers = await GetSigners([walletId],cancellationToken);
@@ -20,7 +13,7 @@ public class ArkadeWalletSignerProvider
     public async Task<Dictionary<string, IArkadeWalletSigner>> GetSigners(string[] walletId, CancellationToken cancellationToken = default)
     {
         var result = new Dictionary<string, IArkadeWalletSigner>();
-        foreach (var signer in _walletSigners)
+        foreach (var signer in walletSigners)
         {
             foreach (var id in walletId)
             {
