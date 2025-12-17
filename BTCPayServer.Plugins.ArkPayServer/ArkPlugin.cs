@@ -94,7 +94,7 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         serviceCollection.AddHostedService<ArkContractInvoiceListener>(provider => provider.GetRequiredService<ArkContractInvoiceListener>());
         serviceCollection.AddHostedService<ArkadeContractSweeper>(provider => provider.GetRequiredService<ArkadeContractSweeper>());
         serviceCollection.AddHostedService<ArkIntentService>(provider => provider.GetRequiredService<ArkIntentService>());
-        // serviceCollection.AddHostedService<ArkIntentScheduler>(provider => provider.GetRequiredService<ArkIntentScheduler>());
+        serviceCollection.AddHostedService<ArkIntentScheduler>(provider => provider.GetRequiredService<ArkIntentScheduler>());
         serviceCollection.AddHostedService<BitcoinTimeChainProvider>(provider => provider.GetRequiredService<BitcoinTimeChainProvider>());
         
         serviceCollection.AddSingleton<ArkadeSpendingService>();

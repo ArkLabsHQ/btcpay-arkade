@@ -336,7 +336,7 @@ public class ArkIntentScheduler(
         try
         {
             // Wait for wallet service to be ready and get all wallets with policies
-            var wallets = await arkWalletService.GetWalletsWithPolicies(cancellationToken);
+            var wallets = await arkWalletService.GetWallets(cancellationToken);
             
             logger.LogInformation("Loading policies for {Count} wallets from wallet service", wallets.Length);
             
@@ -378,15 +378,16 @@ public class ArkIntentScheduler(
         {
             if (string.IsNullOrEmpty(wallet.IntentSchedulingPolicy))
             {
-                _walletPolicies.TryRemove(wallet.Id, out _);
-                logger.LogDebug("No policies configured for wallet {WalletId}", wallet.Id);
+                _walletPolicies[wallet.Id] = [GetDefaultPolicy()];
+                logger.LogDebug("No policies configured for wallet {WalletId}, using default...", wallet.Id);
                 return;
             }
             
             var configs = System.Text.Json.JsonSerializer.Deserialize<List<PolicyConfiguration>>(wallet.IntentSchedulingPolicy);
             if (configs == null || configs.Count == 0)
             {
-                _walletPolicies.TryRemove(wallet.Id, out _);
+                _walletPolicies[wallet.Id] = [GetDefaultPolicy()];
+                logger.LogDebug("Corrupt policies configured for wallet {WalletId}, using default...", wallet.Id);
                 return;
             }
             
@@ -443,7 +444,7 @@ public class ArkIntentScheduler(
     private IVtxoIntentSchedulingPolicy GetDefaultPolicy()
     {
         return ActivatorUtilities.CreateInstance<FluentVtxoPolicy>(serviceProvider)
-            .WhenExpiringWithin(TimeSpan.FromDays(1))
+            .WhenExpiringWithin(TimeSpan.FromMinutes(5))
             .WhenRecoverable()
             .WithReason("Auto-refresh expiring or recoverable coins")
             .WithValidityWindow(TimeSpan.FromHours(2));

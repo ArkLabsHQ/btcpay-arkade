@@ -595,14 +595,12 @@ public class ArkWalletService(
 
     public event EventHandler<string>? WalletPolicyChanged;
 
-    public async Task<ArkWallet[]> GetWalletsWithPolicies(CancellationToken cancellationToken = default)
+    public async Task<ArkWallet[]> GetWallets(CancellationToken cancellationToken = default)
     {
         await started.Task;
         
         await using var dbContext = dbContextFactory.CreateContext();
-        var wallets = await dbContext.Wallets
-            .Where(w => w.IntentSchedulingPolicy != null && w.IntentSchedulingPolicy != "")
-            .ToArrayAsync(cancellationToken);
+        var wallets = await dbContext.Wallets.ToArrayAsync(cancellationToken);
         
         // Cache them
         foreach (var wallet in wallets)

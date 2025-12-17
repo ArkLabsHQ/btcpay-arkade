@@ -191,16 +191,14 @@ public class FluentVtxoPolicy(ILogger<FluentVtxoPolicy> logger) : IVtxoIntentSch
 
         _filters.Add(( coins, ct) =>
         {
-            var now = DateTimeOffset.UtcNow;
-            var thresholdDate = now.Add(threshold);
+            var thresholdDate = DateTimeOffset.UtcNow.Add(threshold);
 
-            var filtered = coins
-                .Where(c => c.SpendingLockTime == null || c.SpendingLockTime.Value <= DateTimeOffset.UtcNow.ToUnixTimeSeconds())
-                .Where(c => c.Contract is ArkPaymentContract payment && 
-                            c.ExpiresAt <= thresholdDate && c.ExpiresAt > now)
-                .ToArray();
+            var filtered =
+                coins
+                    .Where(c => c.ExpiresAt is not null && c.ExpiresAt <= thresholdDate)
+                    .ToArray();
 
-            if (filtered.Any())
+            if (filtered.Length != 0)
             {
                 logger.LogDebug("Filter WhenExpiringWithin({Hours}h): {Count} coins",
                     threshold.TotalHours, filtered.Length);
@@ -225,10 +223,10 @@ public class FluentVtxoPolicy(ILogger<FluentVtxoPolicy> logger) : IVtxoIntentSch
         _filters.Add((coins, ct) =>
         {
             var filtered = coins
-                .Where(c => c.Contract is ArkNoteContract)
+                .Where(c => c.Recoverable)
                 .ToArray();
 
-            if (filtered.Any())
+            if (filtered.Length != 0)
             {
                 logger.LogDebug("Filter WhenRecoverable: {Count} coins",
                     filtered.Length);
