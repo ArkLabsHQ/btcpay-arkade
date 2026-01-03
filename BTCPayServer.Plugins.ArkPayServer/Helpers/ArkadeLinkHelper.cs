@@ -1,4 +1,4 @@
-using NArk.Contracts;
+using NArk.Abstractions.Contracts;
 using NBitcoin;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Helpers;

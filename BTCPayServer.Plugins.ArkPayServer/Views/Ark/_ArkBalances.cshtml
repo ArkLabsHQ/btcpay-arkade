@@ -2,14 +2,14 @@
 
 @if (Model != null)
 {
-<div class="row g-3 mb-4">
+<div class="row g-3 mb-4" data-testid="wallet-balances">
     @if (Model.AvailableBalance > 0)
     {
         <div class="col-xl-3 col-md-6">
-            <div class="card stats-card card-hover-primary shadow-sm">
+            <div class="card stats-card card-hover-primary shadow-sm" data-testid="available-balance-card">
                 <div class="card-body">
                     <div class="text-muted text-uppercase fw-bold small">Available Balance</div>
-                    <div class="stat-value text-primary">@Model.AvailableBalance sats</div>
+                    <div class="stat-value text-primary" data-testid="wallet-balance">@Model.AvailableBalance sats</div>
                     <div class="text-muted small">Ready to spend</div>
                 </div>
             </div>
@@ -19,12 +19,12 @@
     @if (Model.RecoverableBalance > 0)
     {
         <div class="col-xl-3 col-md-6">
-            <div class="card stats-card card-hover-warning shadow-sm">
+            <div class="card stats-card card-hover-warning shadow-sm" data-testid="recoverable-balance-card">
                 <div class="card-body">
                     <div class="d-flex justify-content-between align-items-start">
                         <div>
                             <div class="text-muted text-uppercase fw-bold small">Recoverable Balance</div>
-                            <div class="stat-value text-warning">@Model.RecoverableBalance sats</div>
+                            <div class="stat-value text-warning" data-testid="recoverable-balance">@Model.RecoverableBalance sats</div>
                             <div class="text-muted small">Can be recovered</div>
                         </div>
                         <div class="icon-circle text-warning">
@@ -39,12 +39,12 @@
     @if (Model.UnspendableBalance > 0)
     {
         <div class="col-xl-3 col-md-6">
-            <div class="card stats-card card-hover-secondary shadow-sm">
+            <div class="card stats-card card-hover-secondary shadow-sm" data-testid="unspendable-balance-card">
                 <div class="card-body">
                     <div class="d-flex justify-content-between align-items-start">
                         <div>
                             <div class="text-muted text-uppercase fw-bold small">Unspendable Balance</div>
-                            <div class="stat-value text-secondary">@Model.UnspendableBalance sats</div>
+                            <div class="stat-value text-secondary" data-testid="unspendable-balance">@Model.UnspendableBalance sats</div>
                             <div class="text-muted small">Waiting for conditions</div>
                         </div>
                         <div class="icon-circle text-secondary">
@@ -59,12 +59,12 @@
     @if (Model.LockedBalance > 0)
     {
         <div class="col-xl-3 col-md-6">
-            <div class="card stats-card card-hover-info shadow-sm">
+            <div class="card stats-card card-hover-info shadow-sm" data-testid="locked-balance-card">
                 <div class="card-body">
                     <div class="d-flex justify-content-between align-items-start">
                         <div>
                             <div class="text-muted text-uppercase fw-bold small">Locked Balance</div>
-                            <div class="stat-value text-info">@Model.LockedBalance sats</div>
+                            <div class="stat-value text-info" data-testid="locked-balance">@Model.LockedBalance sats</div>
                             <div class="text-muted small">In pending intents</div>
                         </div>
                         <div class="icon-circle text-info">

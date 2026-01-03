@@ -1,10 +1,9 @@
 @using BTCPayServer.Abstractions.Extensions
-@using BTCPayServer.Plugins.ArkPayServer.Data.Entities
-@using BTCPayServer.Plugins.ArkPayServer
 @using BTCPayServer.Plugins.ArkPayServer.Helpers
+@using NArk.Swaps.Models
 @using NBitcoin
-@inject ArkConfiguration ArkConfiguration
-@model IEnumerable<ArkSwap>
+@inject ArkNetworkConfig ArkNetworkConfig
+@model IEnumerable<BTCPayServer.Plugins.ArkPayServer.Data.Entities.ArkSwap>
 
 @if (Model.Any())
 {
@@ -22,7 +21,7 @@
             <tbody>
                 @foreach (var swap in Model)
                 {
-                    var boltzSwapLink = ArkadeLinkHelper.GetBoltzSwapLink(ArkConfiguration.BoltzUri, swap.SwapId);
+                    var boltzSwapLink = ArkadeLinkHelper.GetBoltzSwapLink(ArkNetworkConfig.BoltzUri, swap.SwapId);
                     
                     <tr>
                         <td>

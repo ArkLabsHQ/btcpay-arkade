@@ -1,9 +1,10 @@
 using BTCPayServer.Data;
 using BTCPayServer.Payments;
-using BTCPayServer.Plugins.ArkPayServer.Services;
 using BTCPayServer.Services;
-using NArk.Services.Abstractions;
-using NArk.Models;
+using NArk.Core;
+using NArk.Abstractions.Wallets;
+using NArk.Core.Services;
+using NArk.Core.Transport;
 using NBitcoin;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -12,18 +13,18 @@ namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 
 public class ArkadePaymentMethodHandler(
     BTCPayServerEnvironment btcPayServerEnvironment,
-    ArkWalletService arkWalletService,
-    IOperatorTermsService operatorTermsService
+    IContractService contractService,
+    IClientTransport clientTransport
 ) : IPaymentMethodHandler
 {
     public PaymentMethodId PaymentMethodId => ArkadePlugin.ArkadePaymentMethodId;
 
     public async Task ConfigurePrompt(PaymentMethodContext context)
     {
-        ArkOperatorTerms terms;
+        ArkServerInfo serverInfo;
         try
         {
-            terms = await operatorTermsService.GetOperatorTerms(new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token);
+            serverInfo = await clientTransport.GetServerInfoAsync(new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token);
         }
         catch
         {
@@ -38,15 +39,15 @@ public class ArkadePaymentMethodHandler(
             throw new PaymentMethodUnavailableException("Arkade payment method not configured");
         }
 
-        if (!arkadePaymentMethodConfig.AllowSubDustAmounts && Money.Coins(context.Prompt.Calculate().Due) < terms.Dust)
+        if (!arkadePaymentMethodConfig.AllowSubDustAmounts && Money.Coins(context.Prompt.Calculate().Due) < serverInfo.Dust)
         {
             throw new PaymentMethodUnavailableException("Amount too small");
         }
 
-        var contract = await arkWalletService.DerivePaymentContract(arkadePaymentMethodConfig.WalletId, CancellationToken.None);
+        var contract = await contractService.DeriveContract(arkadePaymentMethodConfig.WalletId, NextContractPurpose.Receive, cancellationToken: CancellationToken.None);
         var details = new ArkadePromptDetails(arkadePaymentMethodConfig.WalletId, contract);
         var address = contract.GetArkAddress();
-       
+
         context.Prompt.Destination = address.ToString(btcPayServerEnvironment.NetworkType == ChainName.Mainnet);
         context.Prompt.PaymentMethodFee = 0m;
 

@@ -1,14 +1,9 @@
-@using BTCPayServer
 @using BTCPayServer.Abstractions.Contracts
 @using BTCPayServer.Abstractions.Extensions
-@using BTCPayServer.Plugins.ArkPayServer
-@using BTCPayServer.Plugins.ArkPayServer.Services
-@using NArk.Services.Abstractions
-@using NArk.Contracts
-@using NArk.Services
+@using BTCPayServer.Plugins.ArkPayServer.Wallet
 @model BTCPayServer.Plugins.ArkPayServer.Models.StoreOverviewViewModel
 @inject IScopeProvider ScopeProvider
-@inject ArkConfiguration ArkConfiguration
+@inject ArkNetworkConfig ArkNetworkConfig
 
 @{
     ViewData.SetActivePage(category: "Ark", activePage: "StoreOverview", title: "Ark - Overview");
@@ -21,12 +16,12 @@
 {
     <partial name="_ArkBalances" model="Model.Balances" />
 }
-else
-{
-    <div class="alert alert-warning mb-4" role="alert">
-        <vc:icon symbol="warning" /> Unable to load balance information. The indexer service may be unavailable.
-    </div>
-}
+@* else *@
+@* { *@
+@*     <div class="alert alert-warning mb-4" role="alert"> *@
+@*         <vc:icon symbol="warning" /> Unable to load balance information. The indexer service may be unavailable. *@
+@*     </div> *@
+@* } *@
 
 <div class="row g-3 mb-4">
     <!-- Quick Actions Card -->
@@ -37,51 +32,49 @@ else
             </div>
             <div class="card-body">
                 <div class="row g-2">
-                    <div class="col-6">
-                        <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#transferModal">
-                            Transfer Funds
-                        </button>
-                    </div>
+                    @if (Model.CanManagePrivateKeys)
+                    {
+                        <div class="col-6">
+                            <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#transferModal" data-testid="send-btn">
+                                Transfer Funds
+                            </button>
+                        </div>
+                    }
                     <div class="col-6">
                         <form asp-action="SyncWallet" method="post" asp-route-storeId="@storeId" class="h-100">
-                            <button type="submit" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center">
+                            <button type="submit" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-testid="sync-wallet-btn">
                                 Sync Wallet
                             </button>
                         </form>
                     </div>
                     <div class="col-6">
-                        <a asp-action="Vtxos" asp-route-storeId="@storeId" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center">
+                        <a asp-action="Vtxos" asp-route-storeId="@storeId" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-testid="view-vtxos-btn">
                             View VTXOs
                         </a>
                     </div>
-                    @if(ArkConfiguration.ArkadeWalletUri is not null)
+                    <div class="col-6">
+                        <a asp-action="Intents" asp-route-storeId="@storeId" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center">
+                            View Intents
+                        </a>
+                    </div>
+                    @if (Model.CanManagePrivateKeys)
                     {
                         <div class="col-6">
-                            <a  href="@ArkConfiguration.ArkadeWalletUri" target="_blank" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center">
-                                Arkade Wallet
-                            </a>
+                            <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#forceRefreshModal">
+                                Force Batch
+                            </button>
                         </div>
                     }
-                    @* <div class="col-6"> *@
-                    @*     <a asp-action="Intents" asp-route-storeId="@storeId" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center"> *@
-                    @*         View Intents *@
-                    @*     </a> *@
-                    @* </div> *@
-                    @* <div class="col-6"> *@
-                    @*     <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#forceRefreshModal"> *@
-                    @*         Force Batch *@
-                    @*     </button> *@
-                    @* </div> *@
-                    @if (Model.SignerAvailable && !string.IsNullOrEmpty(Model.Wallet))
+                    @if (Model.SignerAvailable && !string.IsNullOrEmpty(Model.Wallet) && Model.CanManagePrivateKeys)
                     {
                         <div class="col-6">
-                            <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#showPrivateKeyModal">
-                                Show Private Key
+                            <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#showPrivateKeyModal" data-testid="show-private-key-btn">
+                                @(Model.WalletType == WalletType.HD ? "Show Seed Phrase" : "Show Private Key")
                             </button>
                         </div>
                     }
                     <div class="col-6">
-                        <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#clearWalletModal">
+                        <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#clearWalletModal" data-testid="clear-wallet-btn">
                             Clear Wallet
                         </button>
                     </div>
@@ -97,18 +90,24 @@ else
                 <h5 class="mb-0">Wallet Status</h5>
             </div>
             <div class="card-body">
-                @if (!string.IsNullOrEmpty(Model.DefaultAddress))
+                @if (!string.IsNullOrEmpty(Model.DefaultAddress) && Model.WalletType == WalletType.SingleKey)
                 {
                     <div class="mb-3">
                         <label class="text-muted small">Default Ark Address</label>
                         <div class="input-group input-group-sm">
-                            <input type="text" class="form-control form-control-sm font-monospace" value="@Model.DefaultAddress" readonly />
-                            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="copyAddress()">
+                            <input type="text" class="form-control form-control-sm font-monospace" value="@Model.DefaultAddress" readonly data-testid="receive-address" />
+                            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="copyAddress()" data-testid="copy-address-btn">
                                 📋
                             </button>
                         </div>
                     </div>
                 }
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <span class="text-muted">Wallet Type</span>
+                    <span class="badge @(Model.WalletType == WalletType.HD ? "text-bg-primary" : "text-bg-secondary")">
+                        @(Model.WalletType == WalletType.HD ? "HD (BIP-39)" : "Legacy (nsec)")
+                    </span>
+                </div>
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <span class="text-muted">Wallet ID</span>
                     @if (!string.IsNullOrEmpty(Model.WalletId))
@@ -116,7 +115,7 @@ else
                         <vc:truncate-center text="@Model.WalletId" classes="truncate-center-id"/>
                     }
                 </div>
-                <div class="d-flex justify-content-between align-items-center mb-2">
+                <div class="d-flex justify-content-between align-items-center mb-2" >
                     <span class="text-muted">Private Keys</span>
                     @if (Model.SignerAvailable)
                     {
@@ -156,16 +155,7 @@ else
         </div>
     </div>
 </div>
-<!-- Beta Warning Alert -->
-<div class="alert alert-warning mb-4" role="alert">
-    <h5 class="alert-heading">
-        <vc:icon symbol="warning" /> Beta Notice: Arkade Wallet Companion required
-    </h5>
-    <p>
-        During the beta phase, you must use the <strong>same private key</strong> in <a href="@ArkConfiguration.ArkadeWalletUri" target="_blank" class="alert-link">Arkade Wallet</a> to properly handle batch operations for finality and expiry management. 
-        Ensure your Arkade wallet is configured with the private key shown in this BTCPay store and routinely open to join Batches. This will (soon) become built into the plugin and require no action from you. 
-    </p>
-</div>
+
 
 <!-- Wallet Configuration Card -->
 <div class="card shadow-sm mb-4">
@@ -174,43 +164,41 @@ else
     </div>
     <div class="card-body">
         <form asp-action="UpdateWalletConfig" method="post" asp-route-storeId="@storeId">
-            @if (!string.IsNullOrEmpty(Model.Destination))
-            {
-                <div class="form-group mb-3">
-                    <label class="form-label">Auto-Sweep Destination</label>
-                    <div class="input-group">
-                        <input type="text" class="form-control" value="@Model.Destination" readonly />
-                        <button type="submit" name="command" value="clear-destination" class="btn btn-outline-danger">
-                            Clear
-                        </button>
-                    </div>
-                    <div class="form-text">VTXOs will automatically sweep to this Ark address</div>
-                </div>
-            }
-            else
-            {
-                <div class="form-group mb-3">
-                    <label asp-for="Destination" class="form-label">Auto-Sweep Destination (Optional)</label>
-                    <input asp-for="Destination" class="form-control" placeholder="ark1..."  disabled="@Model.AllowSubDustAmounts"/>
-                    <div class="form-text">
-                        Enter an Ark address to automatically sweep detected VTXOs
-                        @if (Model.AllowSubDustAmounts)
-                        {
-                            <br /><span class="text-warning small">⚠️ Cannot configure auto-sweep while sub-dust amounts are enabled</span>
-                        }
-                    </div>
-                </div>
-            }
-            
-            @if (string.IsNullOrEmpty(Model.Destination))
-            {
-                <button type="submit" name="command" value="save" class="btn btn-primary" 
-                        @(Model.AllowSubDustAmounts ? "disabled" : "")>Save Configuration</button>
-            }
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <span class="text-muted">Auto-Sweep Destination</span>
+                @if (Model.CanManagePrivateKeys)
+                {
+                    @if (!string.IsNullOrEmpty(Model.Destination))
+                    {
+                        <div class="d-flex align-items-center gap-2">
+                            <vc:truncate-center text="@Model.Destination" classes="truncate-center-id"/>
+                            <button type="submit" name="command" value="clear-destination" class="btn btn-sm btn-outline-danger">Clear</button>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="input-group input-group-sm" style="max-width: 320px;">
+                            <input asp-for="Destination" class="form-control form-control-sm" placeholder="ark1..." />
+                            <button type="submit" name="command" value="save" class="btn btn-sm btn-primary">Save</button>
+                        </div>
+                    }
+                }
+                else
+                {
+                    @if (!string.IsNullOrEmpty(Model.Destination))
+                    {
+                        <vc:truncate-center text="@Model.Destination" classes="truncate-center-id"/>
+                    }
+                    else
+                    {
+                        <span class="badge text-bg-secondary">Not configured</span>
+                    }
+                }
+            </div>
         </form>
-        
-        <hr class="my-4" />
-        
+
+        <hr class="my-3" />
+
         <form asp-action="UpdateWalletConfig" method="post" asp-route-storeId="@storeId">
             <div class="form-group">
                 <div class="d-flex justify-content-between align-items-center">
@@ -232,7 +220,7 @@ else
                             }
                         </div>
                     </div>
-                    <button type="submit" name="command" value="toggle-subdust" 
+                    <button type="submit" name="command" value="toggle-subdust"
                             class="btn btn-sm @(Model.AllowSubDustAmounts ? "btn-outline-secondary" : "btn-primary")"
                             @(Model.IsDestinationSweepEnabled && !Model.AllowSubDustAmounts ? "disabled" : "")>
                         @(Model.AllowSubDustAmounts ? "Disable" : "Enable")
@@ -244,20 +232,20 @@ else
 </div>
 <partial name="_ServiceConnections" model="Model" />
 <!-- Transfer Modal -->
-<div class="modal fade" id="transferModal" tabindex="-1" aria-labelledby="transferModalLabel" aria-hidden="true">
+<div class="modal fade" id="transferModal" tabindex="-1" aria-labelledby="transferModalLabel" aria-hidden="true" data-testid="transfer-modal">
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title" id="transferModalLabel">Transfer Funds</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close" data-testid="close-modal-btn"></button>
             </div>
             <form asp-action="SpendOverview" method="get" asp-route-storeId="@storeId">
                 <div class="modal-body">
                     <div class="form-group mb-3">
                         <label class="form-label">Destination</label>
-                        <input type="text" name="destinations" class="form-control" 
-                               placeholder="BIP21 URI, Lightning invoice, or Ark address..." 
-                               required />
+                        <input type="text" name="destinations" class="form-control"
+                               placeholder="BIP21 URI, Lightning invoice, or Ark address..."
+                               required data-testid="destination-input" />
                         <div class="form-text">
                             Enter a BIP21 URI, Lightning invoice (BOLT11), or Ark address to send funds to
                         </div>
@@ -277,40 +265,44 @@ else
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Continue</button>
+                    <button type="submit" class="btn btn-primary" data-testid="confirm-send-btn">Continue</button>
                 </div>
             </form>
         </div>
     </div>
 </div>
 
-<!-- Show Private Key Modal -->
-@if (Model.SignerAvailable && !string.IsNullOrEmpty(Model.Wallet))
+<!-- Show Private Key / Seed Phrase Modal -->
+@if (Model.SignerAvailable && !string.IsNullOrEmpty(Model.Wallet) && Model.CanManagePrivateKeys)
 {
     <div class="modal fade" id="showPrivateKeyModal" tabindex="-1" aria-labelledby="showPrivateKeyModalLabel" aria-hidden="true">
         <div class="modal-dialog">
             <div class="modal-content">
-                <div class="modal-header bg-warning">
+                <div class="modal-header">
                     <h5 class="modal-title" id="showPrivateKeyModalLabel">
-                        <vc:icon symbol="warning" /> Show Private Key
+                        @(Model.WalletType == WalletType.HD ? "Seed Phrase" : "Private Key")
                     </h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
-                    <div class="alert alert-danger">
-                        <strong>Warning:</strong> Never share your private key with anyone. Anyone with access to this key can spend your funds.
-                    </div>
-                    <div class="form-group mb-3">
-                        <label class="form-label fw-bold">Private Key (nsec)</label>
-                        <div class="input-group">
-                            <input type="password" id="privateKeyInput" class="form-control font-monospace" value="@Model.Wallet" readonly />
-                            <button type="button" class="btn btn-outline-secondary" onclick="togglePrivateKeyVisibility()">
-                                <span id="eyeIcon">👁️</span>
-                            </button>
-                            <button type="button" class="btn btn-outline-secondary" onclick="copyPrivateKey()">
-                                📋
-                            </button>
-                        </div>
+                    <p class="text-muted small mb-3">
+                        @if (Model.WalletType == WalletType.HD)
+                        {
+                            <text>Never share your seed phrase. Anyone with these words can spend your funds.</text>
+                        }
+                        else
+                        {
+                            <text>Never share your private key. Anyone with this key can spend your funds.</text>
+                        }
+                    </p>
+                    <div class="input-group">
+                        <input type="password" id="privateKeyInput" class="form-control font-monospace" value="@Model.Wallet" readonly />
+                        <button type="button" class="btn btn-outline-secondary" onclick="togglePrivateKeyVisibility()">
+                            <span id="eyeIcon">👁️</span>
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary" onclick="copyPrivateKey()">
+                            📋
+                        </button>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -417,7 +409,7 @@ else
     function copyPrivateKey() {
         const input = document.getElementById('privateKeyInput');
         navigator.clipboard.writeText(input.value).then(() => {
-            alert('Private key copied to clipboard!');
+            alert('Copied to clipboard!');
         });
     }
 </script>

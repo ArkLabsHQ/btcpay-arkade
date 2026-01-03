@@ -29,30 +29,27 @@
     </ItemDefinitionGroup>
     
     <ItemGroup>
-        <ProjectReference Include="..\NArk\NArk.csproj" >
-            <Properties>StaticWebAssetsEnabled=false</Properties>
-            <ExcludeAssets>runtime;contentFiles</ExcludeAssets>
-            <Private>true</Private>
-        </ProjectReference>
+        <!-- BTCPayServer -->
         <ProjectReference Include="..\submodules\btcpayserver\BTCPayServer\BTCPayServer.csproj" >
             <Private>false</Private>
             <Private Condition="'$(Configuration)' == 'Debug'">true</Private>
         </ProjectReference>
-        <PackageReference Include="AsyncKeyedLock" Version="7.1.6" />
+        <!-- NNark transitive dependencies (must be explicit for plugin publish) -->
+        <PackageReference Include="AsyncKeyedLock" Version="8.0.1" />
         <PackageReference Include="BTCPayServer.Lightning.Common" Version="1.5.2" />
-        <PackageReference Include="FlexLabs.EntityFrameworkCore.Upsert" Version="8.1.2" />
-        <PackageReference Include="Google.Protobuf" Version="3.31.1" />
-        <PackageReference Include="Grpc.Net.ClientFactory" Version="2.71.0" />
+        <PackageReference Include="Cel" Version="0.3.2" />
+        <PackageReference Include="NArk" Version="1.0.7-beta" />
+
+        <PackageReference Include="NBitcoin" Version="9.0.4" />
+        <PackageReference Include="NBitcoin.Secp256k1" Version="3.2.0" />
+        <!-- Additional packages -->
+        <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+        <PackageReference Include="Grpc.Net.ClientFactory" Version="2.76.0" />
         <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.14.0" />
         <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.16"/>
-        <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.11" />     
+        <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.11" />
         <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.2" />
-        <PackageReference Include="NBitcoin" Version="9.0.0" />
-        <PackageReference Include="NBitcoin.Secp256k1" Version="3.1.6" />
-        <PackageReference Include="Google.Api.CommonProtos" Version="2.16.0" GeneratePathProperty="true" />
-        <PackageReference Include="Grpc.Net.Client" Version="2.71.0" />
         <EmbeddedResource Include="Resources\**" />
-
         <EmbeddedResource Include="arkade.svg" />
     </ItemGroup>
 

@@ -1,50 +1,21 @@
 @using BTCPayServer.Abstractions.Contracts
 @using BTCPayServer.Abstractions.Extensions
-@using BTCPayServer.Plugins.ArkPayServer
-@using BTCPayServer.Plugins.ArkPayServer.Data.Entities
 @using BTCPayServer.Plugins.ArkPayServer.Helpers
-@using NArk.Services.Abstractions
 @using NBitcoin
+@using static BTCPayServer.Plugins.ArkPayServer.Helpers.ArkViewHelpers
 @model BTCPayServer.Plugins.ArkPayServer.Models.StoreVtxosViewModel
 @inject IScopeProvider ScopeProvider
-@inject IOperatorTermsService Terms
-@inject ArkConfiguration ArkConfiguration
+@inject ArkNetworkConfig ArkNetworkConfig
 
 @{
     ViewData.SetActivePage(category: "Ark", activePage: "VTXOs", title: "Ark - VTXOs");
     var storeId = ScopeProvider.GetCurrentStoreId();
-    
-    var statusFilterCount = Model.Search?.ContainsFilter("status") == true ? Model.Search.GetFilterArray("status").Length : 0;
-}
-
-@functions
-{
-    private bool HasArrayFilter(string type, string key = null) =>
-        Model.Search?.ContainsFilter(type) == true && (key is null || Model.Search.GetFilterArray(type).Contains(key));
+    var statusFilterCount = GetFilterCount(Model.Search, "status");
 }
 
 @section PageHeadContent
 {
-    <style>
-        .vtxo-details-row > td {
-            padding: 1.5rem 1rem 0 2.65rem;
-        }
-        .dropdown > .btn {
-            min-width: 7rem;
-            padding-left: 1rem;
-            text-align: left;
-        }
-        #SearchText {
-            flex-shrink: 0;
-            min-width: 200px;
-            max-width: 300px;
-        }
-        @@media (max-width: 568px) {
-            #SearchText {
-                width: 100%;
-            }
-        }
-    </style>
+    <link rel="stylesheet" href="~/plugins/ArkPayServer/css/ark-plugin.css" asp-append-version="true" />
 }
 
 <div class="sticky-header">
@@ -87,12 +58,12 @@
             }
         </button>
         <div class="dropdown-menu" aria-labelledby="StatusOptionsToggle">
-            <a asp-action="Vtxos" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "unspent") ?? "")" class="dropdown-item @(HasArrayFilter("status", "unspent") ? "custom-active" : "")" text-translate="true">Unspent</a>
-            <a asp-action="Vtxos" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "spent") ?? "")" class="dropdown-item @(HasArrayFilter("status", "spent") ? "custom-active" : "")" text-translate="true">Spent</a>
-            <a asp-action="Vtxos" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "recoverable") ?? "")" class="dropdown-item @(HasArrayFilter("status", "recoverable") ? "custom-active" : "")" text-translate="true">Recoverable</a>
+            <a asp-action="Vtxos" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "unspent") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "status", "unspent") ? "custom-active" : "")" text-translate="true">Unspent</a>
+            <a asp-action="Vtxos" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "spent") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "status", "spent") ? "custom-active" : "")" text-translate="true">Spent</a>
+            <a asp-action="Vtxos" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "recoverable") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "status", "recoverable") ? "custom-active" : "")" text-translate="true">Recoverable</a>
             <div class="dropdown-divider"></div>
-            <a asp-action="Vtxos" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "spendable") ?? "")" class="dropdown-item @(HasArrayFilter("status", "spendable") ? "custom-active" : "")" text-translate="true">Spendable</a>
-            <a asp-action="Vtxos" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "non-spendable") ?? "")" class="dropdown-item @(HasArrayFilter("status", "non-spendable") ? "custom-active" : "")" text-translate="true">Non-Spendable</a>
+            <a asp-action="Vtxos" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "spendable") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "status", "spendable") ? "custom-active" : "")" text-translate="true">Spendable</a>
+            <a asp-action="Vtxos" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "non-spendable") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "status", "non-spendable") ? "custom-active" : "")" text-translate="true">Non-Spendable</a>
         </div>
     </div>
     
@@ -131,7 +102,7 @@
                 @foreach (var vtxo in Model.Vtxos)
                 {
                     var outpoint = ArkadeLinkHelper.FormatOutpoint(vtxo.TransactionId, (uint)vtxo.TransactionOutputIndex);
-                    var link = ArkadeLinkHelper.GetIndexerLinkForVtxo(ArkConfiguration.ArkUri, vtxo.TransactionId, (uint)vtxo.TransactionOutputIndex);
+                    var link = ArkadeLinkHelper.GetIndexerLinkForVtxo(ArkNetworkConfig.ArkUri, vtxo.TransactionId, (uint)vtxo.TransactionOutputIndex);
                     var vtxoOutpoint = new OutPoint(uint256.Parse(vtxo.TransactionId), (uint)vtxo.TransactionOutputIndex);
                     var isSpendable = Model.SpendableOutpoints.Contains(vtxoOutpoint);
 
@@ -143,7 +114,7 @@
                         <td class="align-middle">@vtxo.TransactionOutputIndex</td>
                         <td class="align-middle">@Money.Satoshis(vtxo.Amount).ToDecimal(MoneyUnit.BTC) BTC</td>
                         <td class="align-middle">
-                            @if (vtxo.SpentByTransactionId != null || vtxo.SettledByTransactionId != null)
+                            @if (!string.IsNullOrWhiteSpace(vtxo.SpentByTransactionId) || !string.IsNullOrWhiteSpace(vtxo.SettledByTransactionId))
                             {
                                 <span class="badge text-bg-secondary">Spent</span>
                             }
@@ -157,7 +128,7 @@
                             }
                         </td>
                         <td class="align-middle">
-                            @if (vtxo.SpentByTransactionId != null || vtxo.SettledByTransactionId != null)
+                            @if (!string.IsNullOrWhiteSpace(vtxo.SpentByTransactionId) || !string.IsNullOrWhiteSpace(vtxo.SettledByTransactionId))
                             {
                                 <span class="text-muted">-</span>
                             }

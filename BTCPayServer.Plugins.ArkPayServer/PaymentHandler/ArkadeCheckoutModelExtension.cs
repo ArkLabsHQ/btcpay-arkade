@@ -1,6 +1,5 @@
 using BTCPayServer.Data;
 using BTCPayServer.Payments;
-using BTCPayServer.Payments.Bitcoin;
 
 namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 

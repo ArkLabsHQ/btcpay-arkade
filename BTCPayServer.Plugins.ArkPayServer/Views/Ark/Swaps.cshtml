@@ -1,69 +1,38 @@
 @using BTCPayServer.Abstractions.Contracts
 @using BTCPayServer.Abstractions.Extensions
-@using BTCPayServer.Plugins.ArkPayServer
-@using BTCPayServer.Plugins.ArkPayServer.Data.Entities
 @using BTCPayServer.Plugins.ArkPayServer.Helpers
-@using NArk.Services.Abstractions
+@using NArk.Core.Transport
 @using NBitcoin
-@using NArk.Contracts
+@using NArk.Core.Contracts
+@using NArk.Swaps.Models
+@using static BTCPayServer.Plugins.ArkPayServer.Helpers.ArkViewHelpers
 @model BTCPayServer.Plugins.ArkPayServer.Models.StoreSwapsViewModel
 @inject IScopeProvider ScopeProvider
-@inject IOperatorTermsService Terms
-@inject ArkConfiguration ArkConfiguration
+@inject IClientTransport Terms
+@inject ArkNetworkConfig ArkNetworkConfig
 
 @{
     ViewData.SetActivePage(category: "Ark", activePage: "Swaps", title: "Ark - Swaps");
     var storeId = ScopeProvider.GetCurrentStoreId();
     var mainnet = true;
+    Network network = Network.Main;
     try
     {
-        var terms = await Terms.GetOperatorTerms();
+        var terms = await Terms.GetServerInfoAsync();
         mainnet = terms.Network.ChainName == ChainName.Mainnet;
+        network = terms.Network;
     }
     catch (Exception ex)
     {
     }
-    
-    var statusFilterCount = Model.Search?.ContainsFilter("status") == true ? Model.Search.GetFilterArray("status").Length : 0;
-    var typeFilterCount = Model.Search?.ContainsFilter("type") == true ? Model.Search.GetFilterArray("type").Length : 0;
-}
 
-@functions
-{
-    private bool HasArrayFilter(string type, string key = null) =>
-        Model.Search?.ContainsFilter(type) == true && (key is null || Model.Search.GetFilterArray(type).Contains(key));
+    var statusFilterCount = GetFilterCount(Model.Search, "status");
+    var typeFilterCount = GetFilterCount(Model.Search, "type");
 }
 
 @section PageHeadContent
 {
-    <style>
-        .dropdown > .btn {
-            min-width: 7rem;
-            padding-left: 1rem;
-            text-align: left;
-        }
-        #SearchText {
-            flex-shrink: 0;
-            min-width: 200px;
-            max-width: 300px;
-        }
-        @@media (max-width: 568px) {
-            #SearchText {
-                width: 100%;
-            }
-        }
-        .htlc-countdown {
-            font-size: 0.875rem;
-            color: #6c757d;
-        }
-        .htlc-countdown.expired {
-            color: #dc3545;
-            font-weight: 500;
-        }
-        .htlc-countdown.active {
-            color: #0d6efd;
-        }
-    </style>
+    <link rel="stylesheet" href="~/plugins/ArkPayServer/css/ark-plugin.css" asp-append-version="true" />
 }
 
 <div class="sticky-header">
@@ -117,9 +86,9 @@
             }
         </button>
         <div class="dropdown-menu" aria-labelledby="StatusOptionsToggle">
-            <a asp-action="Swaps" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "pending") ?? "")" class="dropdown-item @(HasArrayFilter("status", "pending") ? "custom-active" : "")" text-translate="true">Pending</a>
-            <a asp-action="Swaps" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "settled") ?? "")" class="dropdown-item @(HasArrayFilter("status", "settled") ? "custom-active" : "")" text-translate="true">Settled</a>
-            <a asp-action="Swaps" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "failed") ?? "")" class="dropdown-item @(HasArrayFilter("status", "failed") ? "custom-active" : "")" text-translate="true">Failed</a>
+            <a asp-action="Swaps" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "pending") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "status", "pending") ? "custom-active" : "")" text-translate="true">Pending</a>
+            <a asp-action="Swaps" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "settled") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "status", "settled") ? "custom-active" : "")" text-translate="true">Settled</a>
+            <a asp-action="Swaps" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "failed") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "status", "failed") ? "custom-active" : "")" text-translate="true">Failed</a>
         </div>
     </div>
     
@@ -135,8 +104,8 @@
             }
         </button>
         <div class="dropdown-menu" aria-labelledby="TypeOptionsToggle">
-            <a asp-action="Swaps" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("type", "reverse") ?? "")" class="dropdown-item @(HasArrayFilter("type", "reverse") ? "custom-active" : "")" text-translate="true">Reverse Submarine</a>
-            <a asp-action="Swaps" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("type", "submarine") ?? "")" class="dropdown-item @(HasArrayFilter("type", "submarine") ? "custom-active" : "")" text-translate="true">Submarine</a>
+            <a asp-action="Swaps" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("type", "reverse") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "type", "reverse") ? "custom-active" : "")" text-translate="true">Reverse Submarine</a>
+            <a asp-action="Swaps" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("type", "submarine") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "type", "submarine") ? "custom-active" : "")" text-translate="true">Submarine</a>
         </div>
     </div>
     
@@ -180,9 +149,9 @@
             <tbody>
                 @foreach (var swap in Model.Swaps)
                 {
-                    var arkContract = swap.Contract != null ? ArkContract.Parse(swap.Contract.Type, swap.Contract.ContractData) : null;
-                    var link = arkContract != null ? ArkadeLinkHelper.GetIndexerLinkForContract(ArkConfiguration.ArkUri, arkContract) : "#";
-                    var boltzSwapLink = ArkadeLinkHelper.GetBoltzSwapLink(ArkConfiguration.BoltzUri, swap.SwapId);
+                    var arkContract = swap.Contract != null ? ArkContractParser.Parse(swap.Contract.Type, swap.Contract.ContractData, network) : null;
+                    var link = arkContract != null ? ArkadeLinkHelper.GetIndexerLinkForContract(ArkNetworkConfig.ArkUri, arkContract) : "#";
+                    var boltzSwapLink = ArkadeLinkHelper.GetBoltzSwapLink(ArkNetworkConfig.BoltzUri, swap.SwapId);
 
                     <tr id="swap_@swap.SwapId.GetHashCode()">
                         <td class="align-middle date-col">@swap.CreatedAt.ToBrowserDate()</td>

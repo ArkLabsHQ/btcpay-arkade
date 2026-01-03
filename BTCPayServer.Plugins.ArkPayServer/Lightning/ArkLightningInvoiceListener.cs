@@ -1,45 +1,72 @@
 using System.Threading.Channels;
 using BTCPayServer.Lightning;
-using BTCPayServer.Plugins.ArkPayServer.Lightning.Events;
+using BTCPayServer.Plugins.ArkPayServer.Storage;
 using Microsoft.Extensions.Logging;
+using NArk.Swaps.Abstractions;
+using NArk.Swaps.Models;
 using NBitcoin;
-using NBXplorer;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Lightning;
 
-public class ArkLightningInvoiceListener : ILightningInvoiceListener 
+public class ArkLightningInvoiceListener : ILightningInvoiceListener
 {
     private readonly string _walletId;
     private readonly ILogger<ArkLightningInvoiceListener> _logger;
     private readonly Network _network;
     private readonly CancellationToken _cancellationToken;
-    
+    private readonly ISwapStorage _swapStorage;
+    private readonly EfCoreSwapStorage _efCoreSwapStorage;
+
     private readonly Channel<LightningInvoice> _paidInvoicesChannel = Channel.CreateUnbounded<LightningInvoice>();
-    private readonly CompositeDisposable _leases = new();
-    
+
     public ArkLightningInvoiceListener(
         string walletId,
         ILogger<ArkLightningInvoiceListener> logger,
-        EventAggregator eventAggregator,
+        EfCoreSwapStorage efCoreSwapStorage,
         Network network,
-        CancellationToken cancellationToken) 
+        CancellationToken cancellationToken)
     {
         _walletId = walletId;
         _logger = logger;
         _network = network;
         _cancellationToken = cancellationToken;
-        
-        _leases.Add(eventAggregator.SubscribeAsync<ArkSwapUpdated>(OnInvoicePaid));
+        _efCoreSwapStorage = efCoreSwapStorage;
+        _swapStorage = efCoreSwapStorage; // EfCoreSwapStorage implements ISwapStorage
+
+        // Subscribe to NNark's swap storage events directly
+        _swapStorage.SwapsChanged += OnSwapChanged;
     }
 
-    private async Task OnInvoicePaid(ArkSwapUpdated e)
+    private async void OnSwapChanged(object? sender, ArkSwap swap)
     {
-        if(e.Swap.WalletId != _walletId)
-            return;
-        var invoice = ArkLightningClient.Map(e.Swap, _network);
-        if(invoice.Status != LightningInvoiceStatus.Paid)
-            return;
-        await _paidInvoicesChannel.Writer.WriteAsync(invoice, _cancellationToken);
+        try
+        {
+            // Only process swaps for this wallet that are settled (reverse swaps = receiving)
+            if (swap.WalletId != _walletId)
+                return;
+
+            if (swap.Status != ArkSwapStatus.Settled)
+                return;
+
+            if (swap.SwapType != ArkSwapType.ReverseSubmarine)
+                return;
+
+            // Fetch the full entity from DB to get contract data for mapping
+            var entity = await _efCoreSwapStorage.GetSwapWithContractAsync(_walletId, swap.SwapId, _cancellationToken);
+
+            if (entity == null)
+                return;
+
+            var invoice = ArkLightningClient.Map(entity, _network);
+            if (invoice.Status != LightningInvoiceStatus.Paid)
+                return;
+
+            await _paidInvoicesChannel.Writer.WriteAsync(invoice, _cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error processing swap change for {SwapId}", swap.SwapId);
+        }
     }
 
     public async Task<LightningInvoice?> WaitInvoice(CancellationToken cancellation)
@@ -70,7 +97,7 @@ public class ArkLightningInvoiceListener : ILightningInvoiceListener
     }
     public void Dispose()
     {
-        _leases.Dispose();
+        _swapStorage.SwapsChanged -= OnSwapChanged;
         _paidInvoicesChannel.Writer.Complete();
     }
 }
