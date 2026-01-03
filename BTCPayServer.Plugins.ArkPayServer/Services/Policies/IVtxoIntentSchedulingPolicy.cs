@@ -1,6 +1,6 @@
 using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using NArk;
-using NArk.Services.Abstractions;
+using NArk.Transactions;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services.Policies;
 
@@ -16,5 +16,5 @@ public interface IVtxoIntentSchedulingPolicy
     /// <param name="coins">Available spendable coins</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Intent specification if policy triggered, null otherwise</returns>
-    Task<ScheduledIntentSpec?> EvaluateAsync(SpendableArkCoinWithSigner[] coins, CancellationToken cancellationToken = default);
+    Task<ScheduledIntentSpec?> EvaluateAsync(ArkPsbtSigner[] coins, CancellationToken cancellationToken = default);
 }

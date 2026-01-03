@@ -1,12 +1,12 @@
 using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using Microsoft.Extensions.Logging;
 using NBitcoin;
-using NArk.Services;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using NArk;
+using NArk.Abstractions;
 using NArk.Contracts;
-using NArk.Services.Abstractions;
+using NArk.Transactions;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services.Policies;
 
@@ -56,11 +56,11 @@ public static class PolicyConditionTypes
 /// </summary>
 public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
 {
-    private readonly List<Func<SpendableArkCoinWithSigner[], CancellationToken, Task<SpendableArkCoinWithSigner[]>>> _filters = new();
+    private readonly List<Func<ArkPsbtSigner[], CancellationToken, Task<ArkPsbtSigner[]>>> _filters = new();
     private readonly List<PolicyCondition> _serializableConditions = new();
     private readonly ILogger<FluentVtxoPolicy> _logger;
     private bool _requireAll = false;
-    private Func<SpendableArkCoinWithSigner[], CancellationToken, Task<IntentTxOut[]>> _outputBuilder;
+    private Func<ArkPsbtSigner[], CancellationToken, Task<ArkTxOut[]>>? _outputBuilder;
     private TimeSpan _validityWindow = TimeSpan.FromHours(1);
     private string? _reason;
 
@@ -192,15 +192,15 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
             Parameters = new Dictionary<string, object> { ["hours"] = threshold.TotalHours }
         });
 
-        _filters.Add(( coins, ct) =>
+        _filters.Add((coins, ct) =>
         {
             var now = DateTimeOffset.UtcNow;
             var thresholdDate = now.Add(threshold);
 
             var filtered = coins
-                .Where(c => c.SpendingLockTime == null || c.SpendingLockTime.Value <= DateTimeOffset.UtcNow.ToUnixTimeSeconds())
-                .Where(c => c.Contract is ArkPaymentContract payment && 
-                            c.ExpiresAt <= thresholdDate && c.ExpiresAt > now)
+                .Where(c => c.Coin.LockTime == null || c.Coin.LockTime.Value.Value <= DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+                .Where(c => c.Coin.Contract is ArkPaymentContract &&
+                            c.Coin.ExpiresAt <= thresholdDate && c.Coin.ExpiresAt > now)
                 .ToArray();
 
             if (filtered.Any())
@@ -228,7 +228,7 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
         _filters.Add((coins, ct) =>
         {
             var filtered = coins
-                .Where(c => c.Contract is ArkNoteContract)
+                .Where(c => c.Coin.Contract is ArkNoteContract)
                 .ToArray();
 
             if (filtered.Any())
@@ -255,7 +255,7 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
 
         _filters.Add((coins, ct) =>
         {
-            var total = coins.Sum(c => c.Amount);
+            var total = coins.Sum(c => c.Coin.Amount);
 
             if (total >= threshold)
             {
@@ -264,7 +264,7 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
                 return Task.FromResult(coins);
             }
 
-            return Task.FromResult(Array.Empty<SpendableArkCoinWithSigner>());
+            return Task.FromResult(Array.Empty<ArkPsbtSigner>());
         });
         return this;
     }
@@ -283,10 +283,10 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
         _filters.Add((coins, ct) =>
         {
             var recoverable = coins
-                .Where(c => c.Contract is ArkNoteContract)
+                .Where(c => c.Coin.Contract is ArkNoteContract)
                 .ToArray();
 
-            var total = recoverable.Sum(c => c.Amount);
+            var total = recoverable.Sum(c => c.Coin.Amount);
 
             if (total >= threshold)
             {
@@ -295,7 +295,7 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
                 return Task.FromResult(recoverable);
             }
 
-            return Task.FromResult(Array.Empty<SpendableArkCoinWithSigner>());
+            return Task.FromResult(Array.Empty<ArkPsbtSigner>());
         });
         return this;
     }
@@ -320,7 +320,7 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
                 return Task.FromResult(coins);
             }
 
-            return Task.FromResult(Array.Empty<SpendableArkCoinWithSigner>());
+            return Task.FromResult(Array.Empty<ArkPsbtSigner>());
         });
         return this;
     }
@@ -339,7 +339,7 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
         _filters.Add((coins, ct) =>
         {
             var filtered = coins
-                .Where(c => patterns.Any(p => c.TxOut.ScriptPubKey.ToHex().Contains(p, StringComparison.OrdinalIgnoreCase)))
+                .Where(c => patterns.Any(p => c.Coin.TxOut.ScriptPubKey.ToHex().Contains(p, StringComparison.OrdinalIgnoreCase)))
                 .ToArray();
 
             if (filtered.Any())
@@ -356,7 +356,7 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
     /// <summary>
     /// Filter coins with a custom predicate
     /// </summary>
-    public FluentVtxoPolicy When(Func<SpendableArkCoinWithSigner, bool> predicate, string? description = null)
+    public FluentVtxoPolicy When(Func<ArkPsbtSigner, bool> predicate, string? description = null)
     {
         _filters.Add((coins, ct) =>
         {
@@ -378,7 +378,7 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
     /// <summary>
     /// Filter coins with a custom async filter
     /// </summary>
-    public FluentVtxoPolicy WhenAsync(Func<SpendableArkCoinWithSigner[], CancellationToken, Task<SpendableArkCoinWithSigner[]>> filter)
+    public FluentVtxoPolicy WhenAsync(Func<ArkPsbtSigner[], CancellationToken, Task<ArkPsbtSigner[]>> filter)
     {
         _filters.Add(filter);
         return this;
@@ -387,7 +387,7 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
     /// <summary>
     /// Set custom output builder for the intent (e.g., for onchain withdrawals)
     /// </summary>
-    public FluentVtxoPolicy WithOutputs(Func<SpendableArkCoinWithSigner[], CancellationToken, Task<IntentTxOut[]>> outputBuilder)
+    public FluentVtxoPolicy WithOutputs(Func<ArkPsbtSigner[], CancellationToken, Task<ArkTxOut[]>> outputBuilder)
     {
         _outputBuilder = outputBuilder;
         return this;
@@ -396,9 +396,9 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
     /// <summary>
     /// Set custom outputs for the intent
     /// </summary>
-    public FluentVtxoPolicy WithOutputs(params IntentTxOut[] outputs)
+    public FluentVtxoPolicy WithOutputs(params ArkTxOut[] outputs)
     {
-        _outputBuilder = ( _, _) => Task.FromResult(outputs);
+        _outputBuilder = (_, _) => Task.FromResult(outputs);
         return this;
     }
 
@@ -420,14 +420,14 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
         return this;
     }
 
-    public async Task<ScheduledIntentSpec?> EvaluateAsync(SpendableArkCoinWithSigner[] coins, CancellationToken cancellationToken = default)
+    public async Task<ScheduledIntentSpec?> EvaluateAsync(ArkPsbtSigner[] coins, CancellationToken cancellationToken = default)
     {
         if (_filters.Count == 0)
         {
             return null;
         }
 
-        SpendableArkCoinWithSigner[] matchedCoins;
+        ArkPsbtSigner[] matchedCoins;
 
         if (_requireAll)
         {
@@ -447,7 +447,7 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
         else
         {
             // OR logic: collect results from all filters and union them
-            var allResults = new HashSet<SpendableArkCoinWithSigner>();
+            var allResults = new HashSet<ArkPsbtSigner>();
             foreach (var filter in _filters)
             {
                 var result = await filter(coins, cancellationToken);
@@ -472,7 +472,7 @@ public class FluentVtxoPolicy : IVtxoIntentSchedulingPolicy
         // Build outputs - use custom builder if provided, otherwise empty (scheduler will default to wallet)
         var outputs = _outputBuilder != null
             ? await _outputBuilder(matchedCoins, cancellationToken)
-            : Array.Empty<IntentTxOut>();
+            : Array.Empty<ArkTxOut>();
 
         var now = DateTimeOffset.UtcNow;
         return new ScheduledIntentSpec

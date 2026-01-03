@@ -1,4 +1,4 @@
-﻿using NArk.Services.Abstractions;
+using NArk.Abstractions.Wallets;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
 
@@ -11,15 +11,15 @@ public class ArkadeWalletSignerProvider
         _walletSigners = walletSigners;
     }
 
-    public async Task<IArkadeWalletSigner?> GetSigner(string walletId, CancellationToken cancellationToken = default)
+    public async Task<ISigningEntity?> GetSigner(string walletId, CancellationToken cancellationToken = default)
     {
-        var signers = await GetSigners([walletId],cancellationToken);
+        var signers = await GetSigners([walletId], cancellationToken);
         return signers.TryGetValue(walletId, out var signer) ? signer : null;
     }
 
-    public async Task<Dictionary<string, IArkadeWalletSigner>> GetSigners(string[] walletId, CancellationToken cancellationToken = default)
+    public async Task<Dictionary<string, ISigningEntity>> GetSigners(string[] walletId, CancellationToken cancellationToken = default)
     {
-        var result = new Dictionary<string, IArkadeWalletSigner>();
+        var result = new Dictionary<string, ISigningEntity>();
         foreach (var signer in _walletSigners)
         {
             foreach (var id in walletId)
@@ -31,6 +31,5 @@ public class ArkadeWalletSignerProvider
             }
         }
         return result;
-        
     }
 }

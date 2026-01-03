@@ -1,6 +1,6 @@
 using NArk;
-using NArk.Services;
-using NArk.Services.Abstractions;
+using NArk.Abstractions;
+using NArk.Transactions;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services.Policies;
 
@@ -12,23 +12,23 @@ public class ScheduledIntentSpec
     /// <summary>
     /// Spendable coins to use in the intent
     /// </summary>
-    public required SpendableArkCoinWithSigner[] InputCoins { get; init; }
-    
+    public required ArkPsbtSigner[] InputCoins { get; init; }
+
     /// <summary>
     /// Outputs for the intent (can be Ark addresses or onchain addresses)
     /// </summary>
-    public required IntentTxOut[] Outputs { get; init; }
-    
+    public required ArkTxOut[] Outputs { get; init; }
+
     /// <summary>
     /// When the intent becomes valid
     /// </summary>
     public DateTimeOffset ValidFrom { get; init; } = DateTimeOffset.UtcNow;
-    
+
     /// <summary>
     /// When the intent expires
     /// </summary>
     public DateTimeOffset ValidUntil { get; init; } = DateTimeOffset.UtcNow.AddHours(1);
-    
+
     /// <summary>
     /// Optional reason/description for this intent
     /// </summary>

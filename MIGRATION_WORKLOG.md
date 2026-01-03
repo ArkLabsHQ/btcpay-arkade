@@ -156,14 +156,21 @@ Files modified for HexExtensions:
 | Old NArk | New NNark | Notes |
 |----------|-----------|-------|
 | `NArk.Services.Abstractions` | `NArk.Abstractions` | Namespace change |
+| `NArk.Services.Batches` | `NArk.Batches` | Namespace change |
 | `NArk.Boltz` | `NArk.Swaps.Boltz` | Moved to Swaps project |
-| `IArkadeWalletSigner` | `ISigningEntity` | Interface rename |
-| `IOperatorTermsService` | `IClientTransport.GetServerInfoAsync()` | Different pattern |
-| `ArkOperatorTerms` | `ArkServerInfo` | Type rename |
-| `SpendableArkCoinWithSigner` | TBD | Need to map |
-| `ArkTransactionBuilder` | `SpendingService` | Service replacement |
-| `BoltzClient` | NNark SwapsModule | Service replacement |
-| `BoltzSwapService` | NNark SwapsModule | Service replacement |
+| `IArkadeWalletSigner` | `ISigningEntity` | In `NArk.Abstractions.Wallets` |
+| `IOperatorTermsService` | `IClientTransport` | In `NArk.Transport` |
+| `OperatorTermsService` | Removed | Use `IClientTransport.GetServerInfoAsync()` |
+| `ArkOperatorTerms` | `ArkServerInfo` | In `NArk` namespace |
+| `SpendableArkCoinWithSigner` | `ArkPsbtSigner` | In `NArk.Transactions` |
+| `IntentTxOut` | `ArkTxOut` | In `NArk.Abstractions` |
+| `ArkTransactionBuilder` | `SpendingService` | In `NArk.Services` |
+| `RegisterIntentMessage` | `Messages.RegisterIntentMessage` | In `NArk.Models` |
+| `TxTreeNode` | `TxTreeNode` | In `NArk.Batches` |
+| `TreeSignerSession` | `TreeSignerSession` | In `NArk.Batches` |
+| `BoltzClient` | `BoltzClient` | In `NArk.Swaps.Boltz.Client` |
+| `BoltzSwapService` | `BoltzSwapsService` | In `NArk.Swaps.Boltz` |
+| `GrpcClientTransport` | `GrpcClientTransport` | In `NArk.Transport.GrpcClient` |
 
 ---
 
