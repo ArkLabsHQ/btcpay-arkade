@@ -4,11 +4,14 @@ using BTCPayServer.Plugins.ArkPayServer.Data;
 using Google.Protobuf.Collections;
 using Microsoft.Extensions.Logging;
 using NArk;
+using NArk.Abstractions.Wallets;
+using NArk.Batches;
 using NArk.Extensions;
+using NArk.Models;
 using NArk.Scripts;
 using NArk.Services;
-using NArk.Services.Abstractions;
-using NArk.Services.Batches;
+using NArk.Transactions;
+using NArk.Transport;
 using NBitcoin;
 using NBitcoin.DataEncoders;
 using NBitcoin.Secp256k1;
@@ -21,32 +24,32 @@ namespace BTCPayServer.Plugins.ArkPayServer.Services;
 /// </summary>
 public class BatchSession
 {
-    private readonly IOperatorTermsService _operatorTermsService;
+    private readonly IClientTransport _clientTransport;
     private readonly ArkService.ArkServiceClient _arkServiceClient;
-    private readonly ArkTransactionBuilder _arkTransactionBuilder;
+    private readonly ISpendingService _spendingService;
     private readonly Network _network;
-    private readonly IArkadeWalletSigner _signer;
+    private readonly ISigningEntity _signer;
     private readonly ArkIntent _arkIntent;
-    private readonly SpendableArkCoinWithSigner[] _ins;
+    private readonly ArkPsbtSigner[] _ins;
     private readonly BatchStartedEvent _batchStartedEvent;
     private readonly string _intentId;
     private readonly string _batchId;
     private readonly ILogger _logger;
 
     public BatchSession(
-        IOperatorTermsService operatorTermsService,
+        IClientTransport clientTransport,
         ArkService.ArkServiceClient arkServiceClient,
-        ArkTransactionBuilder arkTransactionBuilder,
+        ISpendingService spendingService,
         Network network,
-        IArkadeWalletSigner signer,
+        ISigningEntity signer,
         ArkIntent arkIntent,
-        SpendableArkCoinWithSigner[] ins,
+        ArkPsbtSigner[] ins,
         BatchStartedEvent batchStartedEvent,
         ILogger logger)
     {
-        _operatorTermsService = operatorTermsService;
+        _clientTransport = clientTransport;
         _arkServiceClient = arkServiceClient;
-        _arkTransactionBuilder = arkTransactionBuilder;
+        _spendingService = spendingService;
         _network = network;
         _signer = signer;
         _arkIntent = arkIntent;
@@ -56,10 +59,10 @@ public class BatchSession
         _intentId = arkIntent.IntentId!;
         _batchId = batchStartedEvent.Id;
 
-        IntentParameters =  JsonSerializer.Deserialize<RegisterIntentMessage>(arkIntent.RegisterProofMessage);
+        IntentParameters = JsonSerializer.Deserialize<Messages.RegisterIntentMessage>(arkIntent.RegisterProofMessage);
     }
 
-    public RegisterIntentMessage? IntentParameters { get; }
+    public Messages.RegisterIntentMessage? IntentParameters { get; }
 
     private TreeSignerSession? _signingSession;
     private readonly List<TxTreeNode> _vtxoChunks = new();
@@ -73,14 +76,14 @@ public class BatchSession
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         _logger.LogInformation("Initializing batch session for intent {IntentId} in batch {BatchId}", _intentId, _batchId);
-        
-        // Get operator terms to build sweep tap tree
-        var terms = await _operatorTermsService.GetOperatorTerms(cancellationToken);
-        var batchExpiry = new Sequence((uint) _batchStartedEvent.BatchExpiry);
-        var sweepTapScript = new UnilateralPathArkTapScript(batchExpiry, new NofNMultisigTapScript([terms.ForfeitPubKey]));
+
+        // Get server info to build sweep tap tree
+        var serverInfo = await _clientTransport.GetServerInfoAsync(cancellationToken);
+        var batchExpiry = new Sequence((uint)_batchStartedEvent.BatchExpiry);
+        var sweepTapScript = new UnilateralPathArkTapScript(batchExpiry, new NofNMultisigTapScript([serverInfo.ForfeitPubKey]));
         _sweepTapTreeRoot = sweepTapScript.Build().LeafHash;
     }
-    
+
 
     /// <summary>
     /// Process a single event from the event stream
@@ -237,7 +240,7 @@ public class BatchSession
             BatchId = signingEvent.Id,
             Pubkey = pubKey.ToHex()
         };
-        
+
         request.TreeNonces.Add(nonces.ToDictionary(pair => pair.Key.ToString(), pair => pair.Value.ToBytes().ToHex()));
         await _arkServiceClient.SubmitTreeNoncesAsync(
             request,
@@ -253,8 +256,8 @@ public class BatchSession
         CancellationToken cancellationToken)
     {
         _logger.LogInformation("Tree nonces aggregated for batch {BatchId}", _batchId);
-        
-        
+
+
         // Process nonces in the session
         await session.VerifyAggregatedNonces(
             aggregatedEvent.TreeNonces.ToDictionary(pair => uint256.Parse(pair.Key), pair => new MusigPubNonce(Encoders.Hex.DecodeData(pair.Value))), cancellationToken);
@@ -269,7 +272,7 @@ public class BatchSession
             BatchId = _batchId,
             Pubkey = pubKey.ToHex()
         };
-        
+
         request.TreeSignatures.Add(signatures.ToDictionary(pair => pair.Key.ToString(), pair => pair.Value.ToBytes().ToHex()));
         await _arkServiceClient.SubmitTreeSignaturesAsync(
             request,
@@ -295,21 +298,21 @@ public class BatchSession
             _logger.LogDebug("Connector tree validated");
         }
 
-        var operatorTerms = await _operatorTermsService.GetOperatorTerms(cancellationToken);
+        var serverInfo = await _clientTransport.GetServerInfoAsync(cancellationToken);
         var signedForfeits = new List<string>();
-        
+
         // Get connector leaves for forfeit transactions
         var connectorsLeaves = connectorsGraph?.Leaves().ToList() ?? new List<PSBT>();
         int connectorIndex = 0;
-        
+
         var partialForfeits = _arkIntent.PartialForfeits.Select(p => PSBT.Parse(p, _network)).ToDictionary(psbt => psbt.Inputs[0].PrevOut);
 
         foreach (var vtxoCoin in _ins)
         {
             // Skip recoverable coins (notes) - they don't need forfeit transactions
-            if (vtxoCoin.Recoverable)
+            if (vtxoCoin.Coin.Recoverable)
             {
-                _logger.LogDebug("Skipping recoverable coin {Outpoint}", vtxoCoin.Outpoint);
+                _logger.LogDebug("Skipping recoverable coin {Outpoint}", vtxoCoin.Coin.Outpoint);
                 continue;
             }
 
@@ -343,28 +346,28 @@ public class BatchSession
             connectorIndex++;
 
             _logger.LogDebug("Constructing forfeit tx for VTXO {Outpoint} with connector {ConnectorOutpoint}",
-                vtxoCoin.Outpoint, connectorCoin.Outpoint);
+                vtxoCoin.Coin.Outpoint, connectorCoin.Outpoint);
 
-            if (partialForfeits.TryGetValue(vtxoCoin.Outpoint, out var forfeit))
+            if (partialForfeits.TryGetValue(vtxoCoin.Coin.Outpoint, out var forfeit))
             {
-                var forfeitTx =
-                    await _arkTransactionBuilder.CompleteForfeitTx(forfeit, connectorCoin, _signer, cancellationToken);
+                // TODO: Migrate to ISpendingService.CompleteForfeitTx when available
+                var forfeitTx = await _spendingService.CompleteForfeitTxAsync(forfeit, connectorCoin, vtxoCoin, cancellationToken);
 
                 signedForfeits.Add(forfeitTx.ToBase64());
-                _logger.LogDebug("Forfeit tx constructed for VTXO {Outpoint}", vtxoCoin.Outpoint);
+                _logger.LogDebug("Forfeit tx constructed for VTXO {Outpoint}", vtxoCoin.Coin.Outpoint);
             }
             else
             {
                 // Construct and sign forfeit transaction
-
-                var forfeitTx = await _arkTransactionBuilder.ConstructForfeitTx(
+                // TODO: Migrate to ISpendingService.ConstructForfeitTx when available
+                var forfeitTx = await _spendingService.ConstructForfeitTxAsync(
                     vtxoCoin,
                     connectorCoin,
-                    operatorTerms.ForfeitAddress,
+                    serverInfo.ForfeitAddress,
                     cancellationToken);
 
                 signedForfeits.Add(forfeitTx.ToBase64());
-                _logger.LogDebug("Forfeit tx constructed for VTXO {Outpoint}", vtxoCoin.Outpoint);
+                _logger.LogDebug("Forfeit tx constructed for VTXO {Outpoint}", vtxoCoin.Coin.Outpoint);
             }
         }
 
@@ -376,7 +379,7 @@ public class BatchSession
             {
                 SignedForfeitTxs = { signedForfeits }
             }, cancellationToken: cancellationToken);
-            
+
             _logger.LogInformation("Successfully submitted forfeit transactions for batch {BatchId}", _batchId);
         }
         else
@@ -384,7 +387,7 @@ public class BatchSession
             _logger.LogDebug("No forfeit transactions to submit (all coins are recoverable)");
         }
     }
-    
+
     /// <summary>
     /// Validates that all outputs specified in the intent exist in the correct locations:
     /// - Onchain outputs must exist in the commitment transaction
@@ -407,7 +410,7 @@ public class BatchSession
         }
 
         var onchainIndexes = new HashSet<int>(IntentParameters.OnchainOutputsIndexes ?? []);
-        
+
         // Get all VTXO leaf outputs for validation
         var vtxoLeaves = vtxoGraph.Leaves().ToList();
         var vtxoLeafOutputs = vtxoLeaves
@@ -423,8 +426,8 @@ public class BatchSession
             if (isOnchain)
             {
                 // Validate onchain output exists in commitment transaction
-                var found = commitmentTx.Outputs.Any(txOut => 
-                    txOut.ScriptPubKey == output.ScriptPubKey && 
+                var found = commitmentTx.Outputs.Any(txOut =>
+                    txOut.ScriptPubKey == output.ScriptPubKey &&
                     txOut.Value == output.Value);
 
                 if (!found)
@@ -439,8 +442,8 @@ public class BatchSession
             else
             {
                 // Validate offchain output exists as a leaf in the VTXO tree
-                var found = vtxoLeafOutputs.Any(leafOutput => 
-                    leafOutput.Output.ScriptPubKey == output.ScriptPubKey && 
+                var found = vtxoLeafOutputs.Any(leafOutput =>
+                    leafOutput.Output.ScriptPubKey == output.ScriptPubKey &&
                     leafOutput.Output.Value == output.Value);
 
                 if (!found)
@@ -467,12 +470,12 @@ public class BatchSession
         try
         {
             var registerProof = PSBT.Parse(_arkIntent.RegisterProof, _network);
-            
+
             // The register proof transaction contains the outputs directly
             // (see IntentUtils.CreateIntent - outputs are added to the BIP322 tx)
             // Skip the first input which is the BIP322 "to_spend" input
             var outputs = registerProof.Outputs.ToList();
-            
+
             _logger.LogDebug("Parsed {Count} outputs from register proof transaction", outputs.Count);
             return registerProof.GetGlobalTransaction().Outputs;
         }

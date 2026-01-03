@@ -1,28 +1,51 @@
-﻿using Ark.V1;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
-using NArk.Services;
-using NArk.Models;
+using NArk;
+using NArk.Transport;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
 
-public class CachedOperatorTermsService(ArkService.ArkServiceClient arkClient, ILogger<OperatorTermsService> logger, IMemoryCache memoryCache) : OperatorTermsService(arkClient, logger)
+/// <summary>
+/// Cached wrapper for IClientTransport.GetServerInfoAsync()
+/// </summary>
+public class CachedServerInfoService
 {
-    public override async Task<ArkOperatorTerms> GetOperatorTerms(CancellationToken cancellationToken = default)
+    private readonly IClientTransport _clientTransport;
+    private readonly ILogger<CachedServerInfoService> _logger;
+    private readonly IMemoryCache _memoryCache;
+    private const string CacheKey = "ArkServerInfo";
+
+    public CachedServerInfoService(
+        IClientTransport clientTransport,
+        ILogger<CachedServerInfoService> logger,
+        IMemoryCache memoryCache)
     {
-        var terms = await memoryCache.GetOrCreateAsync<ArkOperatorTerms>("OperatorTerms", async entry =>
+        _clientTransport = clientTransport;
+        _logger = logger;
+        _memoryCache = memoryCache;
+    }
+
+    public async Task<ArkServerInfo> GetServerInfoAsync(CancellationToken cancellationToken = default)
+    {
+        var serverInfo = await _memoryCache.GetOrCreateAsync(CacheKey, async entry =>
         {
-            var terms = await base.GetOperatorTerms(cancellationToken);
+            _logger.LogDebug("Fetching server info from Ark operator");
+            var info = await _clientTransport.GetServerInfoAsync(cancellationToken);
             entry.AbsoluteExpiration = DateTimeOffset.UtcNow.AddMinutes(1);
-            return terms;
+            return info;
         });
 
-        if (terms is null)
+        if (serverInfo is null)
         {
-            memoryCache.Remove("OperatorTerms");
-            throw new InvalidOperationException("Failed to fetch operator terms");
+            _memoryCache.Remove(CacheKey);
+            throw new InvalidOperationException("Failed to fetch server info");
         }
 
-        return terms;
+        return serverInfo;
+    }
+
+    public void InvalidateCache()
+    {
+        _memoryCache.Remove(CacheKey);
     }
 }
