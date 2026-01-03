@@ -104,9 +104,9 @@ public class EfCoreSwapStorage : ISwapStorage
             Invoice: entity.Invoice,
             ExpectedAmount: entity.ExpectedAmount,
             ContractScript: entity.ContractScript,
-            Address: "", // Plugin doesn't store address separately - derived from ContractScript
+            Address: entity.Address ?? "",
             Status: MapStatus(entity.Status),
-            FailReason: null, // Plugin doesn't have FailReason field yet
+            FailReason: entity.FailReason,
             CreatedAt: entity.CreatedAt,
             UpdatedAt: entity.UpdatedAt,
             Hash: entity.Hash
@@ -118,6 +118,7 @@ public class EfCoreSwapStorage : ISwapStorage
         PluginArkSwapStatus.Pending => NNarkArkSwapStatus.Pending,
         PluginArkSwapStatus.Settled => NNarkArkSwapStatus.Settled,
         PluginArkSwapStatus.Failed => NNarkArkSwapStatus.Failed,
+        PluginArkSwapStatus.Refunded => NNarkArkSwapStatus.Refunded,
         PluginArkSwapStatus.Unknown => NNarkArkSwapStatus.Unknown,
         _ => NNarkArkSwapStatus.Unknown
     };
@@ -127,7 +128,7 @@ public class EfCoreSwapStorage : ISwapStorage
         NNarkArkSwapStatus.Pending => PluginArkSwapStatus.Pending,
         NNarkArkSwapStatus.Settled => PluginArkSwapStatus.Settled,
         NNarkArkSwapStatus.Failed => PluginArkSwapStatus.Failed,
-        NNarkArkSwapStatus.Refunded => PluginArkSwapStatus.Failed, // Map Refunded to Failed for now
+        NNarkArkSwapStatus.Refunded => PluginArkSwapStatus.Refunded,
         NNarkArkSwapStatus.Unknown => PluginArkSwapStatus.Unknown,
         _ => PluginArkSwapStatus.Unknown
     };

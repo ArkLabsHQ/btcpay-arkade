@@ -1,29 +1,47 @@
-using System.ComponentModel.DataAnnotations.Schema;
-using BTCPayServer.Client.Models;
+using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using Microsoft.EntityFrameworkCore;
-using NArk;
-using NArk.Extensions;
-using NArk.Services;
-using NArk.Models;
-using NBitcoin.Secp256k1;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 
 public class ArkWallet
 {
     public string Id { get; set; }
-    public string Wallet { get; set; }
-    public string? WalletDestination { get; set; }
-    public List<ArkWalletContract> Contracts { get; set; } = [];
-    
+
     /// <summary>
-    /// JSON-serialized intent scheduling policies for this wallet
+    /// For legacy wallets: the nsec private key (encrypted).
+    /// For HD wallets: the BIP-39 mnemonic (encrypted).
+    /// </summary>
+    public string Wallet { get; set; }
+
+    /// <summary>
+    /// Destination address for swept funds.
+    /// </summary>
+    public string? WalletDestination { get; set; }
+
+    public List<ArkWalletContract> Contracts { get; set; } = [];
+
+    /// <summary>
+    /// JSON-serialized intent scheduling policies for this wallet.
     /// </summary>
     public string? IntentSchedulingPolicy { get; set; }
 
-    public ECXOnlyPubKey PublicKey => KeyExtensions.GetXOnlyPubKeyFromWallet(Wallet);
-    
-    public ArkAddress? Destination => string.IsNullOrEmpty(WalletDestination)? null: ArkAddress.Parse(WalletDestination);
+    /// <summary>
+    /// The type of wallet (Legacy nsec or HD mnemonic).
+    /// Defaults to Legacy for backwards compatibility.
+    /// </summary>
+    public WalletType WalletType { get; set; } = WalletType.Legacy;
+
+    /// <summary>
+    /// For HD wallets: the account descriptor (e.g., tr([fingerprint/86'/0'/0']xpub...)).
+    /// For legacy wallets: null or the simple tr(pubkey) descriptor.
+    /// </summary>
+    public string? AccountDescriptor { get; set; }
+
+    /// <summary>
+    /// For HD wallets: the last used derivation index.
+    /// Incremented each time a new signing entity is created.
+    /// </summary>
+    public int LastUsedIndex { get; set; } = 0;
 
     public List<ArkSwap> Swaps { get; set; }
 
@@ -32,6 +50,8 @@ public class ArkWallet
         var entity = builder.Entity<ArkWallet>();
         entity.HasKey(w => w.Id);
         entity.HasIndex(w => w.Wallet).IsUnique();
+        entity.Property(w => w.WalletType).HasDefaultValue(WalletType.Legacy);
+        entity.Property(w => w.LastUsedIndex).HasDefaultValue(0);
         entity.HasMany(w => w.Contracts)
             .WithOne(contract => contract.Wallet)
             .HasForeignKey(contract => contract.WalletId);

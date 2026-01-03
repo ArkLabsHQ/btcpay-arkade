@@ -50,7 +50,7 @@ public class EfCoreIntentStorage : IIntentStorage
             existing.BatchId = intent.BatchId;
             existing.CommitmentTransactionId = intent.CommitmentTransactionId;
             existing.CancellationReason = intent.CancellationReason;
-            // Note: SignerDescriptor needs to be added to entity
+            existing.SignerDescriptor = intent.SignerDescriptor;
         }
         else
         {
@@ -70,6 +70,7 @@ public class EfCoreIntentStorage : IIntentStorage
                 BatchId = intent.BatchId,
                 CommitmentTransactionId = intent.CommitmentTransactionId,
                 CancellationReason = intent.CancellationReason,
+                SignerDescriptor = intent.SignerDescriptor,
                 IntentVtxos = intent.IntentVtxos.Select(op => new ArkIntentVtxo
                 {
                     VtxoTransactionId = op.Hash.ToString(),
@@ -218,7 +219,7 @@ public class EfCoreIntentStorage : IIntentStorage
             IntentVtxos: entity.IntentVtxos?.Select(iv =>
                 new OutPoint(new uint256(iv.VtxoTransactionId), (uint)iv.VtxoTransactionOutputIndex)
             ).ToArray() ?? [],
-            SignerDescriptor: "" // TODO: Add to entity after DB migration
+            SignerDescriptor: entity.SignerDescriptor ?? ""
         );
     }
 

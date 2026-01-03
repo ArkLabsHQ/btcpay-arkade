@@ -41,7 +41,7 @@ public class ArkIntent
     public string? IntentId { get; set; }
     public string WalletId { get; set; }
     public ArkIntentState State { get; set; }
-    
+
     public DateTimeOffset ValidFrom { get; set; }
     public DateTimeOffset ValidUntil { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
@@ -60,6 +60,12 @@ public class ArkIntent
 
     public string[] PartialForfeits { get; set; } = [];
 
+    /// <summary>
+    /// The output descriptor of the signing entity used for this intent.
+    /// Required for HD wallets to look up the correct key for signing.
+    /// </summary>
+    public string? SignerDescriptor { get; set; }
+
     internal static void OnModelCreating(ModelBuilder builder)
     {
         var entity = builder.Entity<ArkIntent>();
@@ -69,6 +75,7 @@ public class ArkIntent
         entity.Property(e => e.BatchId).HasDefaultValue(null);
         entity.Property(e => e.CommitmentTransactionId).HasDefaultValue(null);
         entity.Property(e => e.CancellationReason).HasDefaultValue(null);
+        entity.Property(e => e.SignerDescriptor).HasDefaultValue(null);
         entity.HasMany(e => e.IntentVtxos)
             .WithOne(e => e.Intent)
             .HasForeignKey(e => e.InternalId)
