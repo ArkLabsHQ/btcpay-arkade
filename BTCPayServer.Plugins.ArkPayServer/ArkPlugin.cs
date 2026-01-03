@@ -11,12 +11,19 @@ using BTCPayServer.Plugins.ArkPayServer.Data;
 using BTCPayServer.Plugins.ArkPayServer.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Services;
+using BTCPayServer.Plugins.ArkPayServer.Storage;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using NArk;
-using NArk.Boltz.Client;
-using NArk.Services;
+using NArk.Abstractions.Contracts;
+using NArk.Abstractions.Intents;
+using NArk.Abstractions.VTXOs;
+using NArk.Helpers;
+using NArk.Swaps.Abstractions;
+using NArk.Swaps.Boltz.Client;
+using NArk.Transport;
+using NArk.Transport.GrpcClient;
 using NBitcoin;
 using System.Reflection;
 using System.Text.Json;
@@ -24,7 +31,6 @@ using BTCPayServer.PayoutProcessors;
 using Grpc.Net.ClientFactory;
 using BTCPayServer.Plugins.ArkPayServer.Cache;
 using BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
-using NArk.Services.Abstractions;
 
 namespace BTCPayServer.Plugins.ArkPayServer;
 
@@ -76,9 +82,16 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         });
         serviceCollection.AddStartupTask<ArkPluginMigrationRunner>();
 
+        // Register NNark storage adapters
+        serviceCollection.AddSingleton<IVtxoStorage, EfCoreVtxoStorage>();
+        serviceCollection.AddSingleton<IContractStorage, EfCoreContractStorage>();
+        serviceCollection.AddSingleton<IIntentStorage, EfCoreIntentStorage>();
+        serviceCollection.AddSingleton<ISwapStorage, EfCoreSwapStorage>();
+
         serviceCollection.AddSingleton<ArkWalletService>();
         serviceCollection.AddSingleton<ArkadeSpender>();
-        serviceCollection.AddSingleton<ArkTransactionBuilder>();
+        // Note: ArkTransactionBuilder is now TransactionHelpers.ArkTransactionBuilder in NNark
+        // serviceCollection.AddSingleton<TransactionHelpers.ArkTransactionBuilder>();
         serviceCollection.AddSingleton<ArkadeCheckoutModelExtension>();
         serviceCollection.AddSingleton<ArkadeCheckoutCheatModeExtension>();
         serviceCollection.AddSingleton<ICheckoutModelExtension>(provider => provider.GetRequiredService<ArkadeCheckoutModelExtension>());
@@ -96,9 +109,9 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         serviceCollection.AddHostedService<ArkIntentService>(provider => provider.GetRequiredService<ArkIntentService>());
         // serviceCollection.AddHostedService<ArkIntentScheduler>(provider => provider.GetRequiredService<ArkIntentScheduler>());
         serviceCollection.AddHostedService<BitcoinTimeChainProvider>(provider => provider.GetRequiredService<BitcoinTimeChainProvider>());
-        
+
         serviceCollection.AddSingleton<ArkadeSpendingService>();
-        
+
         serviceCollection.AddSingleton<TrackedContractsCache>();
         serviceCollection.AddHostedService<TrackedContractsCache>(provider => provider.GetRequiredService<TrackedContractsCache>());
 
@@ -129,9 +142,10 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
         });
 
-        // Register Ark services
-        serviceCollection.AddSingleton<CachedOperatorTermsService>();
-        serviceCollection.AddSingleton<IOperatorTermsService, CachedOperatorTermsService>(provider => provider.GetRequiredService<CachedOperatorTermsService>());
+        // Register Ark transport service (replaces old IOperatorTermsService)
+        // IClientTransport is used to get server info via GetServerInfoAsync()
+        serviceCollection.AddSingleton<IClientTransport>(provider =>
+            new GrpcClientTransport(config.ArkUri));
 
         // Register Boltz services only if BoltzUri is configured
         if (!string.IsNullOrWhiteSpace(config.BoltzUri))
