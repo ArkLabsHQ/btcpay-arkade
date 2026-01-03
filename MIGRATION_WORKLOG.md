@@ -85,14 +85,33 @@ Files modified for HexExtensions:
 - **Swap**: Refunded status maps to Failed (plugin lacks Refunded enum value)
   - FailReason and Address fields need to be added to entity
 
-#### Entity Changes Needed (Future DB Migration)
-- `ArkIntent`: Add `SignerDescriptor` column (string)
-- `ArkSwap`: Add `FailReason` column (string?), `Address` column (string)
-- `ArkSwapStatus`: Add `Refunded` enum value
-- `ArkWallet`: Add `WalletType`, `AccountDescriptor`, `LastUsedIndex` columns
-
 #### Commits
 4. Add EF Core storage adapters for NNark interfaces
+
+---
+
+### Session 4 - Database Schema Updates
+
+#### Completed
+- [x] Updated `ArkWallet` entity:
+  - Added `WalletType` column (defaults to Legacy)
+  - Added `AccountDescriptor` column (for HD wallet xpub)
+  - Added `LastUsedIndex` column (for HD key derivation)
+  - Removed old NArk namespace imports
+- [x] Updated `ArkWalletContract` entity:
+  - Added `SigningEntityDescriptor` column
+- [x] Updated `ArkIntent` entity:
+  - Added `SignerDescriptor` column
+- [x] Updated `ArkSwap` entity:
+  - Added `Address` column
+  - Added `FailReason` column
+- [x] Updated `ArkSwapStatus` enum:
+  - Added `Refunded` status
+  - Added `IsCompleted()` extension method
+- [x] Updated storage adapters to use new fields
+
+#### Commits
+5. Add database columns for wallet types and descriptors
 
 ---
 
