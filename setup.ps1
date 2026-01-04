@@ -32,11 +32,10 @@ if (-not (Test-Path $appsettings -PathType Leaf)) {
     Set-Content -Path $appsettings -Value $content -Encoding UTF8
 }
 
-# Publish each project so dependencies are shared
+# Publish plugin (NNark dependencies are included via ProjectReferences)
 $root = Get-Location
 $pluginDir = "BTCPayServer.Plugins.ArkPayServer"
 $publishDir = Join-Path $root "$pluginDir/bin/Debug/net8.0"
-$projects = @($pluginDir, "NArk", "NArk.Grpc")
 
 # Remove old build artifacts
 if (Test-Path $publishDir) {
@@ -44,25 +43,11 @@ if (Test-Path $publishDir) {
     Remove-Item -Recurse -Force $publishDir
 }
 
-function Publish-Project($path) {
-    if (-not (Test-Path $path)) {
-        Write-Error "Project directory '$path' not found."
-        exit 1
-    }
-
-    Write-Host "Publishing $path..."
-    Push-Location $path
-    dotnet publish -c Debug -o $publishDir
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "dotnet publish failed for $path."
-        Pop-Location
-        exit 1
-    }
-    Pop-Location
-}
-
-foreach ($project in $projects) {
-    Publish-Project $project
+Write-Host "Publishing plugin (includes NNark dependencies)..."
+dotnet publish $pluginDir -c Debug -o $publishDir
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "dotnet publish failed."
+    exit 1
 }
 
 Write-Host "Setup complete."
