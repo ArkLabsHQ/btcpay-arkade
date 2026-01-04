@@ -1,17 +1,19 @@
 using System.Text.Json;
 using Ark.V1;
 using BTCPayServer.Plugins.ArkPayServer.Data;
+using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using Google.Protobuf.Collections;
 using Microsoft.Extensions.Logging;
 using NArk;
 using NArk.Abstractions.Wallets;
 using NArk.Batches;
 using NArk.Extensions;
+using NArk.Helpers;
 using NArk.Models;
 using NArk.Scripts;
-using NArk.Services;
 using NArk.Transactions;
 using NArk.Transport;
+using NArk.Swaps.Helpers;
 using NBitcoin;
 using NBitcoin.DataEncoders;
 using NBitcoin.Secp256k1;
@@ -26,7 +28,7 @@ public class BatchSession
 {
     private readonly IClientTransport _clientTransport;
     private readonly ArkService.ArkServiceClient _arkServiceClient;
-    private readonly ISpendingService _spendingService;
+    private readonly TransactionHelpers.ArkTransactionBuilder _arkTransactionBuilder;
     private readonly Network _network;
     private readonly ISigningEntity _signer;
     private readonly ArkIntent _arkIntent;
@@ -39,7 +41,7 @@ public class BatchSession
     public BatchSession(
         IClientTransport clientTransport,
         ArkService.ArkServiceClient arkServiceClient,
-        ISpendingService spendingService,
+        TransactionHelpers.ArkTransactionBuilder arkTransactionBuilder,
         Network network,
         ISigningEntity signer,
         ArkIntent arkIntent,
@@ -49,7 +51,7 @@ public class BatchSession
     {
         _clientTransport = clientTransport;
         _arkServiceClient = arkServiceClient;
-        _spendingService = spendingService;
+        _arkTransactionBuilder = arkTransactionBuilder;
         _network = network;
         _signer = signer;
         _arkIntent = arkIntent;
@@ -181,13 +183,11 @@ public class BatchSession
 
     private void HandleTreeTxEvent(TreeTxEvent treeTxEvent, List<TxTreeNode> vtxoChunks, List<TxTreeNode> connectorsChunks)
     {
-        var txNode = new TxTreeNode
-        {
-            Tx = PSBT.Parse(treeTxEvent.Tx, _network),
-            Children = treeTxEvent.Children.ToDictionary(
+        var txNode = new TxTreeNode(
+            PSBT.Parse(treeTxEvent.Tx, _network),
+            treeTxEvent.Children.ToDictionary(
                 kvp => (int)kvp.Key,
-                kvp => uint256.Parse(kvp.Value))
-        };
+                kvp => uint256.Parse(kvp.Value)));
 
         if (treeTxEvent.BatchIndex == 0)
         {
@@ -233,15 +233,15 @@ public class BatchSession
 
         // Generate and submit nonces
         var nonces = await session.GetNoncesAsync(cancellationToken);
-        var pubKey = await session.GetPublicKeyAsync(cancellationToken);
+        var pubKey = OutputDescriptorHelpers.Extract(await _signer.GetOutputDescriptor(cancellationToken)).XOnlyPubKey;
 
         var request = new SubmitTreeNoncesRequest
         {
             BatchId = signingEvent.Id,
-            Pubkey = pubKey.ToHex()
+            Pubkey = Convert.ToHexString(pubKey.ToBytes()).ToLowerInvariant()
         };
 
-        request.TreeNonces.Add(nonces.ToDictionary(pair => pair.Key.ToString(), pair => pair.Value.ToBytes().ToHex()));
+        request.TreeNonces.Add(nonces.ToDictionary(pair => pair.Key.ToString(), pair => Convert.ToHexString(pair.Value.ToBytes()).ToLowerInvariant()));
         await _arkServiceClient.SubmitTreeNoncesAsync(
             request,
             cancellationToken: cancellationToken);
@@ -259,21 +259,21 @@ public class BatchSession
 
 
         // Process nonces in the session
-        await session.VerifyAggregatedNonces(
+        session.VerifyAggregatedNonces(
             aggregatedEvent.TreeNonces.ToDictionary(pair => uint256.Parse(pair.Key), pair => new MusigPubNonce(Encoders.Hex.DecodeData(pair.Value))), cancellationToken);
 
         // Sign and submit signatures
         var signatures = await session.SignAsync(cancellationToken);
 
-        var pubKey = await session.GetPublicKeyAsync(cancellationToken);
+        var sigPubKey = OutputDescriptorHelpers.Extract(await _signer.GetOutputDescriptor(cancellationToken)).XOnlyPubKey;
 
         var request = new SubmitTreeSignaturesRequest
         {
             BatchId = _batchId,
-            Pubkey = pubKey.ToHex()
+            Pubkey = Convert.ToHexString(sigPubKey.ToBytes()).ToLowerInvariant()
         };
 
-        request.TreeSignatures.Add(signatures.ToDictionary(pair => pair.Key.ToString(), pair => pair.Value.ToBytes().ToHex()));
+        request.TreeSignatures.Add(signatures.ToDictionary(pair => pair.Key.ToString(), pair => Convert.ToHexString(pair.Value.ToBytes()).ToLowerInvariant()));
         await _arkServiceClient.SubmitTreeSignaturesAsync(
             request,
             cancellationToken: cancellationToken);
@@ -304,8 +304,6 @@ public class BatchSession
         // Get connector leaves for forfeit transactions
         var connectorsLeaves = connectorsGraph?.Leaves().ToList() ?? new List<PSBT>();
         int connectorIndex = 0;
-
-        var partialForfeits = _arkIntent.PartialForfeits.Select(p => PSBT.Parse(p, _network)).ToDictionary(psbt => psbt.Inputs[0].PrevOut);
 
         foreach (var vtxoCoin in _ins)
         {
@@ -348,27 +346,16 @@ public class BatchSession
             _logger.LogDebug("Constructing forfeit tx for VTXO {Outpoint} with connector {ConnectorOutpoint}",
                 vtxoCoin.Coin.Outpoint, connectorCoin.Outpoint);
 
-            if (partialForfeits.TryGetValue(vtxoCoin.Coin.Outpoint, out var forfeit))
-            {
-                // TODO: Migrate to ISpendingService.CompleteForfeitTx when available
-                var forfeitTx = await _spendingService.CompleteForfeitTxAsync(forfeit, connectorCoin, vtxoCoin, cancellationToken);
+            // Construct and sign forfeit transaction using ArkTransactionBuilder
+            var forfeitTx = await _arkTransactionBuilder.ConstructForfeitTx(
+                serverInfo,
+                vtxoCoin,
+                connectorCoin,
+                serverInfo.ForfeitAddress,
+                cancellationToken);
 
-                signedForfeits.Add(forfeitTx.ToBase64());
-                _logger.LogDebug("Forfeit tx constructed for VTXO {Outpoint}", vtxoCoin.Coin.Outpoint);
-            }
-            else
-            {
-                // Construct and sign forfeit transaction
-                // TODO: Migrate to ISpendingService.ConstructForfeitTx when available
-                var forfeitTx = await _spendingService.ConstructForfeitTxAsync(
-                    vtxoCoin,
-                    connectorCoin,
-                    serverInfo.ForfeitAddress,
-                    cancellationToken);
-
-                signedForfeits.Add(forfeitTx.ToBase64());
-                _logger.LogDebug("Forfeit tx constructed for VTXO {Outpoint}", vtxoCoin.Coin.Outpoint);
-            }
+            signedForfeits.Add(forfeitTx.ToBase64());
+            _logger.LogDebug("Forfeit tx constructed for VTXO {Outpoint}", vtxoCoin.Coin.Outpoint);
         }
 
         // Submit all signed forfeit transactions

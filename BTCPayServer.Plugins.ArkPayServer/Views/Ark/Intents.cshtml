@@ -3,12 +3,12 @@
 @using BTCPayServer.Plugins.ArkPayServer
 @using BTCPayServer.Plugins.ArkPayServer.Data
 @using BTCPayServer.Plugins.ArkPayServer.Data.Entities
-@using NArk.Services.Abstractions
+@using NArk.Transport
 @using NBitcoin
 @using Microsoft.AspNetCore.Mvc.ViewFeatures
 @model BTCPayServer.Plugins.ArkPayServer.Models.StoreIntentsViewModel
 @inject IScopeProvider ScopeProvider
-@inject IOperatorTermsService Terms
+@inject IClientTransport Terms
 @inject ArkConfiguration ArkConfiguration
 
 @{

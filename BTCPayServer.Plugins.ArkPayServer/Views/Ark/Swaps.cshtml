@@ -3,22 +3,24 @@
 @using BTCPayServer.Plugins.ArkPayServer
 @using BTCPayServer.Plugins.ArkPayServer.Data.Entities
 @using BTCPayServer.Plugins.ArkPayServer.Helpers
-@using NArk.Services.Abstractions
+@using NArk.Transport
 @using NBitcoin
 @using NArk.Contracts
 @model BTCPayServer.Plugins.ArkPayServer.Models.StoreSwapsViewModel
 @inject IScopeProvider ScopeProvider
-@inject IOperatorTermsService Terms
+@inject IClientTransport Terms
 @inject ArkConfiguration ArkConfiguration
 
 @{
     ViewData.SetActivePage(category: "Ark", activePage: "Swaps", title: "Ark - Swaps");
     var storeId = ScopeProvider.GetCurrentStoreId();
     var mainnet = true;
+    Network network = Network.Main;
     try
     {
-        var terms = await Terms.GetOperatorTerms();
+        var terms = await Terms.GetServerInfoAsync();
         mainnet = terms.Network.ChainName == ChainName.Mainnet;
+        network = terms.Network;
     }
     catch (Exception ex)
     {
@@ -180,7 +182,7 @@
             <tbody>
                 @foreach (var swap in Model.Swaps)
                 {
-                    var arkContract = swap.Contract != null ? ArkContract.Parse(swap.Contract.Type, swap.Contract.ContractData) : null;
+                    var arkContract = swap.Contract != null ? ArkContract.Parse(swap.Contract.Type, swap.Contract.ContractData, network) : null;
                     var link = arkContract != null ? ArkadeLinkHelper.GetIndexerLinkForContract(ArkConfiguration.ArkUri, arkContract) : "#";
                     var boltzSwapLink = ArkadeLinkHelper.GetBoltzSwapLink(ArkConfiguration.BoltzUri, swap.SwapId);
 

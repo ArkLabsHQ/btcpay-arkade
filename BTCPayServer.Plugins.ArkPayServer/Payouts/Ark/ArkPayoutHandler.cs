@@ -21,8 +21,10 @@ using BTCPayServer.Services.Notifications.Blobs;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using NArk;
-using NArk.Services.Abstractions;
+using NArk.Transport;
+using NArk.Swaps.Helpers;
 using NBitcoin;
 using NBitcoin.Payment;
 using Newtonsoft.Json;
@@ -34,7 +36,7 @@ namespace BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
 
 public class ArkPayoutHandler(
     ILogger<ArkPayoutHandler> logger,
-    IOperatorTermsService operatorTermsService,
+    IClientTransport clientTransport,
     EventAggregator eventAggregator,
     PaymentMethodHandlerDictionary paymentMethodHandlerDictionary,
     ApplicationDbContextFactory dbContextFactory,
@@ -76,7 +78,7 @@ public class ArkPayoutHandler(
         destination = destination.Trim();
         try
         {
-            var terms = await operatorTermsService.GetOperatorTerms(cancellationToken);
+            var terms = await clientTransport.GetServerInfoAsync(cancellationToken);
 
             if (destination.StartsWith("bitcoin:", StringComparison.InvariantCultureIgnoreCase))
             {
@@ -158,9 +160,10 @@ public class ArkPayoutHandler(
         if (o is VTXOsUpdated vtxoEvent)
         {
 
-            var terms = await operatorTermsService.GetOperatorTerms();
+            var terms = await clientTransport.GetServerInfoAsync();
+            var serverKey = OutputDescriptorHelpers.Extract(terms.SignerKey).XOnlyPubKey;
             var newVtxos = vtxoEvent.Vtxos.Where(vtxo => vtxo.SpentByTransactionId is null)
-                .GroupBy(vtxo => vtxo.Script).ToDictionary(g => ArkAddress.FromScriptPubKey(Script.FromHex(g.Key), terms.SignerKey).ToString(terms.Network.ChainName == ChainName.Mainnet), g => g.ToArray());           
+                .GroupBy(vtxo => vtxo.Script).ToDictionary(g => ArkAddress.FromScriptPubKey(Script.FromHex(g.Key), serverKey).ToString(terms.Network.ChainName == ChainName.Mainnet), g => g.ToArray());           
             
             var addresses = newVtxos.Keys.ToArray();
             
@@ -214,7 +217,7 @@ public class ArkPayoutHandler(
 
     public async Task<decimal> GetMinimumPayoutAmount(IClaimDestination claimDestination)
     {
-        var terms = await operatorTermsService.GetOperatorTerms();
+        var terms = await clientTransport.GetServerInfoAsync();
         return terms.Dust.ToDecimal(MoneyUnit.BTC);
     }
 
@@ -298,7 +301,7 @@ public class ArkPayoutHandler(
 
     public async Task<IActionResult> InitiatePayment(string[] payoutIds)
     {
-        var terms = await operatorTermsService.GetOperatorTerms();
+        var terms = await clientTransport.GetServerInfoAsync();
 
         await using var ctx = dbContextFactory.CreateContext();
         ctx.ChangeTracker.QueryTrackingBehavior = QueryTrackingBehavior.NoTracking;
@@ -329,7 +332,7 @@ public class ArkPayoutHandler(
 
     public async Task<string?> TryGenerateBip21(PayoutData payout, (IClaimDestination destination, string error) claim)
     {
-        var terms = await operatorTermsService.GetOperatorTerms();
+        var terms = await clientTransport.GetServerInfoAsync();
         switch (claim.destination)
         {
             case ArkUriClaimDestination uriClaimDestination:

@@ -16,6 +16,7 @@ public class VTXO
     // public DateTimeOffset? SpentAt { get; set; }
     public bool Recoverable { get; set; }
     public DateTimeOffset ExpiresAt { get; set; }
+    public uint? ExpiresAtHeight { get; set; }
 
     public virtual ICollection<ArkIntentVtxo> IntentVtxos { get; set; } = null!;
 

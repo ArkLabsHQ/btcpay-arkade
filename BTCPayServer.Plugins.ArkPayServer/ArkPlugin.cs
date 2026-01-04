@@ -117,8 +117,8 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
         // Register Arkade checkout view
         serviceCollection.AddUIExtension("checkout-end", "Arkade/ArkadeMethodCheckout");
-        serviceCollection.AddUIExtension("dashboard-setup-guide-payment", "/Views/OldArk/DashboardSetupGuidePayment.cshtml");
-        serviceCollection.AddUIExtension("store-invoices-payments", "/Views/OldArk/ArkPaymentData.cshtml");
+        serviceCollection.AddUIExtension("dashboard-setup-guide-payment", "/Views/Ark/DashboardSetupGuidePayment.cshtml");
+        serviceCollection.AddUIExtension("store-invoices-payments", "/Views/Ark/ArkPaymentData.cshtml");
         // Display Ark as a wallet type in navigation sidebar
         serviceCollection.AddUIExtension("store-wallets-nav", "/Views/Ark/ArkWalletNav.cshtml");
         
@@ -156,10 +156,10 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
             });
             
             // Register the Boltz swap services only when BoltzClient is available
-            serviceCollection.AddSingleton<BoltzSwapService>();
+            serviceCollection.AddSingleton<PluginBoltzSwapService>();
             serviceCollection.AddSingleton<BoltzService>();
             serviceCollection.AddHostedService<BoltzService>(provider => provider.GetRequiredService<BoltzService>());
-            serviceCollection.AddUIExtension("ln-payment-method-setup-tabhead", "/Views/OldArk/ArkLNSetupTabhead.cshtml");
+            serviceCollection.AddUIExtension("ln-payment-method-setup-tabhead", "/Views/Ark/ArkLNSetupTabhead.cshtml");
             
             // Register LNURL filter to apply Boltz limits
             serviceCollection.AddSingleton<ArkadeLNURLPayRequestFilter>();

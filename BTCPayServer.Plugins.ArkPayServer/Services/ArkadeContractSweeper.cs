@@ -1,7 +1,7 @@
 using BTCPayServer.Plugins.ArkPayServer.Models.Events;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using NArk.Services.Abstractions;
+using NArk.Transport;
 using NBitcoin;
 using NBXplorer;
 
@@ -19,7 +19,7 @@ public class ArkadeContractSweeper : IHostedService
     private readonly ArkWalletService _arkWalletService;
     private readonly EventAggregator _eventAggregator;
     private readonly ILogger<ArkadeContractSweeper> _logger;
-    private readonly IOperatorTermsService _operatorTermsService;
+    private readonly IClientTransport _clientTransport;
     private readonly ArkVtxoSynchronizationService _arkSubscriptionService;
     private CompositeDisposable _leases = new();
     private CancellationTokenSource _cts = new();
@@ -30,14 +30,14 @@ public class ArkadeContractSweeper : IHostedService
         ArkWalletService arkWalletService,
         EventAggregator eventAggregator,
         ILogger<ArkadeContractSweeper> logger,
-        IOperatorTermsService operatorTermsService,
+        IClientTransport clientTransport,
         ArkVtxoSynchronizationService arkSubscriptionService)
     {
         _arkadeSpender = arkadeSpender;
         _arkWalletService = arkWalletService;
         _eventAggregator = eventAggregator;
         _logger = logger;
-        _operatorTermsService = operatorTermsService;
+        _clientTransport = clientTransport;
         _arkSubscriptionService = arkSubscriptionService;
     }
 
@@ -59,7 +59,7 @@ public class ArkadeContractSweeper : IHostedService
             {
                 var spendableCoinsByWallet = await _arkadeSpender.GetSpendableCoins(null, false, _cts.Token);
                 var wallets = await _arkWalletService.GetWallets(spendableCoinsByWallet.Keys.ToArray(), _cts.Token);
-                var terms = await _operatorTermsService.GetOperatorTerms(_cts.Token);
+                var terms = await _clientTransport.GetServerInfoAsync(_cts.Token);
                 foreach (var group in spendableCoinsByWallet)
                 {
                     try
@@ -68,9 +68,9 @@ public class ArkadeContractSweeper : IHostedService
                         var destination = await _arkadeSpender.GetDestination(wallet, terms);
         
                         // Only sweep if we have coins not at the destination to avoid infinite sweeping loops
-                        if (group.Value.All(x => x.TxOut.IsTo(destination)))
+                        if (group.Value.All(x => x.Coin.TxOut.IsTo(destination)))
                         {
-                            _logger.LogInformation($"Skipping sweep for wallet {wallet.Id}: all {group.Value.Count} coins worth {group.Value.Sum(x => x.TxOut.Value)} are already at destination");
+                            _logger.LogInformation($"Skipping sweep for wallet {wallet.Id}: all {group.Value.Count} coins worth {group.Value.Sum(x => x.Coin.TxOut.Value)} are already at destination");
                             continue;
                         }
                         
@@ -86,9 +86,9 @@ public class ArkadeContractSweeper : IHostedService
                             foreach (var coin in group.Value)
                             {
                                 // Skip coins already at destination to avoid infinite loops
-                                if (coin.TxOut.IsTo(destination))
+                                if (coin.Coin.TxOut.IsTo(destination))
                                 {
-                                    _logger.LogTrace($"Skipping coin {coin.Outpoint} for wallet {wallet.Id}: already at destination");
+                                    _logger.LogTrace($"Skipping coin {coin.Coin.Outpoint} for wallet {wallet.Id}: already at destination");
                                     continue;
                                 }
                                 try
@@ -98,7 +98,7 @@ public class ArkadeContractSweeper : IHostedService
                                 }
                                 catch (Exception coinEx)
                                 {
-                                    _logger.LogError(coinEx, $"Error while sweeping individual coin {coin.Outpoint} for wallet {wallet.Id}");
+                                    _logger.LogError(coinEx, $"Error while sweeping individual coin {coin.Coin.Outpoint} for wallet {wallet.Id}");
                                 }
                             }
                         }

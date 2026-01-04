@@ -12,7 +12,7 @@ using BTCPayServer.Services;
 using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Stores;
 using Microsoft.Extensions.Logging;
-using NArk.Services.Abstractions;
+using NArk.Transport;
 using NBitcoin;
 using PayoutData = BTCPayServer.Data.PayoutData;
 using PayoutProcessorData = BTCPayServer.Data.PayoutProcessorData;
@@ -21,14 +21,14 @@ namespace BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
 
 public class ArkAutomatedPayoutProcessor: BaseAutomatedPayoutProcessor<ArkAutomatedPayoutBlob>
 {
-    private readonly IOperatorTermsService _operatorTermsService;
+    private readonly IClientTransport _clientTransport;
     private readonly ArkadeSpendingService _arkSpendingService;
     private readonly PayoutMethodHandlerDictionary _payoutMethodHandlers;
     private readonly BTCPayNetworkJsonSerializerSettings _jsonSerializerSettings;
     private readonly IArkadeMultiWalletSigner _arkadeMultiWalletSigner;
 
     public ArkAutomatedPayoutProcessor(
-        IOperatorTermsService operatorTermsService,
+        IClientTransport clientTransport,
         ILoggerFactory logger,
         StoreRepository storeRepository,
         PayoutProcessorData payoutProcessorSettings,
@@ -43,7 +43,7 @@ public class ArkAutomatedPayoutProcessor: BaseAutomatedPayoutProcessor<ArkAutoma
     ) 
         : base(ArkadePlugin.ArkadePaymentMethodId, logger, storeRepository, payoutProcessorSettings, applicationDbContextFactory, paymentHandlers, pluginHookService, eventAggregator)
     {
-        _operatorTermsService = operatorTermsService;
+        _clientTransport = clientTransport;
         _arkSpendingService = arkSpendingService;
         _payoutMethodHandlers = payoutMethodHandlers;
         _jsonSerializerSettings = jsonSerializerSettings;
@@ -56,7 +56,7 @@ public class ArkAutomatedPayoutProcessor: BaseAutomatedPayoutProcessor<ArkAutoma
         
         var arkPaymentMethodConfig = (ArkadePaymentMethodConfig)paymentMethodConfig;
         
-        var terms = await _operatorTermsService.GetOperatorTerms();
+        var terms = await _clientTransport.GetServerInfoAsync();
 
         var storeData = await _storeRepository.FindStore(PayoutProcessorSettings.StoreId) ??
             throw new InvalidOperationException("Could not find store by StoreId");

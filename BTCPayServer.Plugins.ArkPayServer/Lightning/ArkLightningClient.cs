@@ -7,15 +7,14 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using NArk;
 using NArk.Contracts;
-using NArk.Extensions;
-using NArk.Services.Abstractions;
+using NArk.Transport;
 using NBitcoin;
 using NodeInfo = BTCPayServer.Lightning.NodeInfo;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Lightning;
 
 public class ArkLightningClient(
-    IOperatorTermsService operatorTermsService,
+    IClientTransport clientTransport,
     Network network,
     string walletId,
     BoltzService boltzService,
@@ -65,7 +64,7 @@ public class ArkLightningClient(
         };
 
         VHTLCContract? contract =
-            ArkContract.Parse(reverseSwap.Contract.Type, reverseSwap.Contract.ContractData) as VHTLCContract;
+            ArkContract.Parse(reverseSwap.Contract.Type, reverseSwap.Contract.ContractData, network) as VHTLCContract;
 
         return new LightningInvoice
         {
@@ -80,7 +79,7 @@ public class ArkLightningClient(
             // AmountReceived = lightningStatus == LightningInvoiceStatus.Paid
             //     ? LightMoney.Satoshis(reverseSwap.ExpectedAmount)
             //     : null,
-            Preimage = contract?.Preimage?.ToHex(),
+            Preimage = contract?.Preimage != null ? Convert.ToHexString(contract.Preimage).ToLowerInvariant() : null,
         };
     }
 
@@ -146,8 +145,8 @@ public class ArkLightningClient(
             ArkSwapStatus.Pending => LightningPaymentStatus.Pending,
             _ => LightningPaymentStatus.Unknown
         };
-        var htlcContract = ArkContract.Parse(swap.Contract.Type, swap.Contract.ContractData) as VHTLCContract;
-        
+        var htlcContract = ArkContract.Parse(swap.Contract.Type, swap.Contract.ContractData, network) as VHTLCContract;
+
         return new LightningPayment
         {
             Id = swap.SwapId,
@@ -155,7 +154,7 @@ public class ArkLightningClient(
             Status = status,
             BOLT11 = swap.Invoice,
             PaymentHash = bolt11.PaymentHash?.ToString(),
-            Preimage = htlcContract?.Preimage?.ToHex(),
+            Preimage = htlcContract?.Preimage != null ? Convert.ToHexString(htlcContract.Preimage).ToLowerInvariant() : null,
             CreatedAt = swap.CreatedAt,
             AmountSent = LightMoney.Satoshis(swap.ExpectedAmount),
         };
@@ -193,7 +192,7 @@ public class ArkLightningClient(
     public async Task<LightningInvoice> CreateInvoice(CreateInvoiceParams createInvoiceRequest,
         CancellationToken cancellation = default)
     {
-        var terms = await operatorTermsService.GetOperatorTerms(cancellation);
+        var terms = await clientTransport.GetServerInfoAsync(cancellation);
         if (terms.Dust > createInvoiceRequest.Amount)
         {
             throw new InvalidOperationException("Sub-dust amounts are not supported");

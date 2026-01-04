@@ -3,22 +3,24 @@
 @using BTCPayServer.Plugins.ArkPayServer
 @using BTCPayServer.Plugins.ArkPayServer.Data.Entities
 @using BTCPayServer.Plugins.ArkPayServer.Helpers
-@using NArk.Services.Abstractions
+@using NArk.Transport
 @using NBitcoin
 @using NArk.Contracts
 @model BTCPayServer.Plugins.ArkPayServer.Models.StoreContractsViewModel
 @inject IScopeProvider ScopeProvider
-@inject IOperatorTermsService Terms
+@inject IClientTransport Terms
 @inject ArkConfiguration ArkConfiguration
 @{
     Layout = "_Layout";
     ViewData.SetActivePage(category: "Ark", activePage: "Contracts", title: "Ark - Contracts");
     var storeId = ScopeProvider.GetCurrentStoreId();
     var mainnet = true;
+    Network network = Network.Main;
     try
     {
-        var terms = await Terms.GetOperatorTerms();
+        var terms = await Terms.GetServerInfoAsync();
         mainnet = terms.Network.ChainName == ChainName.Mainnet;
+        network = terms.Network;
     }
     catch (Exception ex)
     {
@@ -171,7 +173,7 @@
             <tbody>
                 @foreach (var contract in Model.Contracts)
                 {
-                    var arkContract = ArkContract.Parse(contract.Type, contract.ContractData);
+                    var arkContract = ArkContract.Parse(contract.Type, contract.ContractData, network);
                     if (arkContract is null) continue;
                     var link = ArkadeLinkHelper.GetIndexerLinkForContract(ArkConfiguration.ArkUri, arkContract);
                     var detailsId = $"contract_details_{contract.Script.GetHashCode()}";

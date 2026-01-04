@@ -3,13 +3,20 @@ using AsyncKeyedLock;
 using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using NArk;
+using NArk.Abstractions;
+using NArk.Abstractions.Wallets;
+using ArkWallet = BTCPayServer.Plugins.ArkPayServer.Data.Entities.ArkWallet;
 using NArk.Contracts;
 using NArk.Models;
 using NArk.Scripts;
 using NArk.Services;
-using NArk.Services.Abstractions;
+using NArk.Transactions;
+using NArk.Transport;
+using NArk.Swaps.Helpers;
 using NBitcoin;
+using NBitcoin.Scripting;
 using NBitcoin.Secp256k1;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
@@ -17,11 +24,11 @@ namespace BTCPayServer.Plugins.ArkPayServer.Services;
 public class ArkadeSpender(
     AsyncKeyedLocker asyncKeyedLocker,
     ArkadeWalletSignerProvider arkadeWalletSignerProvider,
-    ArkTransactionBuilder arkTransactionBuilder,
+    ISpendingService spendingService,
     ArkService.ArkServiceClient arkServiceClient,
     ArkWalletService arkWalletService,
     ILogger<ArkadeSpender> logger,
-    IOperatorTermsService operatorTermsService,
+    IClientTransport clientTransport,
     ArkVtxoSynchronizationService arkVtxoSynchronizationService,
     BitcoinTimeChainProvider bitcoinTimeChainProvider)
 {
@@ -39,32 +46,32 @@ public class ArkadeSpender(
         return await Spend(wallet, coins, outputs, cancellationToken);
     }
 
-    public async Task<uint256> Spend(ArkWallet wallet, IEnumerable<SpendableArkCoinWithSigner> coins, TxOut[] outputs,
+    public async Task<uint256> Spend(ArkWallet wallet, IEnumerable<ArkPsbtSigner> coins, TxOut[] outputs,
         CancellationToken cancellationToken = default)
     {
         return await Spend(wallet, coins, outputs, true, cancellationToken);
     }
 
-    public async Task<uint256> Spend(ArkWallet wallet, IEnumerable<SpendableArkCoinWithSigner> coins, TxOut[] outputs,
+    public async Task<uint256> Spend(ArkWallet wallet, IEnumerable<ArkPsbtSigner> coins, TxOut[] outputs,
         bool useAllCoins, CancellationToken cancellationToken = default)
     {
         using var l = await asyncKeyedLocker.LockAsync($"ark-{wallet.Id}-txs-spending", cancellationToken);
-        var operatorTerms = await operatorTermsService.GetOperatorTerms(cancellationToken);
-        var destination = await GetDestination(wallet, operatorTerms);
-        return await SpendWalletCoins(coins, operatorTerms, outputs, destination, useAllCoins, cancellationToken);
+        var serverInfo = await clientTransport.GetServerInfoAsync(cancellationToken);
+        var destination = await GetDestination(wallet, serverInfo);
+        return await SpendWalletCoins(coins, serverInfo, outputs, destination, useAllCoins, cancellationToken);
     }
 
-    private async Task<uint256> SpendWalletCoins(IEnumerable<SpendableArkCoinWithSigner> coins,
-        ArkOperatorTerms operatorTerms, TxOut[] outputs, ArkAddress changeAddress, bool useAllCoins, CancellationToken cancellationToken)
+    private async Task<uint256> SpendWalletCoins(IEnumerable<ArkPsbtSigner> coins,
+        ArkServerInfo serverInfo, TxOut[] outputs, ArkAddress changeAddress, bool useAllCoins, CancellationToken cancellationToken)
     {
         var totalOutput = outputs.Sum(x => x.Value);
-        var availableCoins = coins.OrderByDescending(x => x.TxOut.Value).ToList();
-        
+        var availableCoins = coins.OrderByDescending(x => x.Coin.TxOut.Value).ToList();
+
         // Check if any output is explicitly subdust (user wants to send subdust amount)
-        var hasExplicitSubdustOutput = outputs.Count(o => o.Value < operatorTerms.Dust);
-        
+        var hasExplicitSubdustOutput = outputs.Count(o => o.Value < serverInfo.Dust);
+
         // Select coins based on useAllCoins parameter
-        List<SpendableArkCoinWithSigner> selectedCoins;
+        List<ArkPsbtSigner> selectedCoins;
         if (useAllCoins)
         {
             // Use all available coins
@@ -74,40 +81,41 @@ public class ArkadeSpender(
         else
         {
             // Perform coin selection to avoid subdust change unless necessary
-            selectedCoins = SelectCoins(availableCoins, totalOutput, operatorTerms.Dust, hasExplicitSubdustOutput);
+            selectedCoins = SelectCoins(availableCoins, totalOutput, serverInfo.Dust, hasExplicitSubdustOutput);
         }
-        
+
         if (selectedCoins == null || selectedCoins.Count == 0)
             throw new InvalidOperationException(
-                $"Insufficient funds. Available: {availableCoins.Sum(x => x.TxOut.Value)}, Required: {totalOutput}");
-        
-        var totalInput = selectedCoins.Sum(x => x.TxOut.Value);
+                $"Insufficient funds. Available: {availableCoins.Sum(x => x.Coin.TxOut.Value)}, Required: {totalOutput}");
+
+        var totalInput = selectedCoins.Sum(x => x.Coin.TxOut.Value);
         var change = totalInput - totalOutput;
-        
+
         // Add change output if it's at or above dust threshold
-        if (change >= operatorTerms.Dust)
+        if (change >= serverInfo.Dust)
         {
             outputs = outputs.Concat([new TxOut(Money.Satoshis(change), changeAddress)]).ToArray();
         }
-        else if (change > 0 && (hasExplicitSubdustOutput + 1) <= ArkTransactionBuilder.MaxOpReturnOutputs)
+        else if (change > 0 && (hasExplicitSubdustOutput + 1) <= 3) // Max 3 OP_RETURN outputs
         {
             // We have subdust change - log it as it will become an OP_RETURN
             logger.LogWarning("Transaction will create subdust change of {Change} sats (< {Dust} dust threshold). " +
-                            "This will be converted to an OP_RETURN output.", change, operatorTerms.Dust);
+                            "This will be converted to an OP_RETURN output.", change, serverInfo.Dust);
             outputs = outputs.Concat([new TxOut(Money.Satoshis(change), changeAddress)]).ToArray();
         }
 
         try
         {
-            return await arkTransactionBuilder.ConstructAndSubmitArkTransaction(
-                selectedCoins,
-                outputs,
-                arkServiceClient,
-                cancellationToken);
+            // Convert TxOut[] to ArkTxOut[] for the new NNark API
+            // ArkTxOut requires IDestination, so we convert ScriptPubKey to a KeyId if possible, or use directly
+            var arkOutputs = outputs.Select(o =>
+                new ArkTxOut(ArkTxOutType.Vtxo, o.Value, o.ScriptPubKey.GetDestination()!)).ToArray();
+            var walletId = selectedCoins.First().Coin.WalletIdentifier;
+            return await spendingService.Spend(walletId, selectedCoins.ToArray(), arkOutputs, cancellationToken);
         }
         catch (Exception ex)
         {
-            var scripts = selectedCoins.Select(x => x.Contract.GetArkAddress().ScriptPubKey.ToHex())
+            var scripts = selectedCoins.Select(x => x.Coin.Contract.GetArkAddress().ScriptPubKey.ToHex())
                 .Concat(
                     outputs.Select(y => y.ScriptPubKey.ToHex())).ToHashSet();
 
@@ -116,7 +124,7 @@ public class ArkadeSpender(
         }
     }
 
-    public async Task<Dictionary<string, List<SpendableArkCoinWithSigner>>> GetSpendableCoins(string[]? walletIds, bool includeRecoverable,
+    public async Task<Dictionary<string, List<ArkPsbtSigner>>> GetSpendableCoins(string[]? walletIds, bool includeRecoverable,
         CancellationToken cancellationToken)
     {
         return await GetSpendableCoins(walletIds, null, includeRecoverable, cancellationToken);
@@ -127,7 +135,7 @@ public class ArkadeSpender(
     /// </summary>
     /// <param name="vtxoOutpoints">Optional set of VTXO outpoints to filter by. If null, returns all spendable coins.</param>
     /// <param name="cancellationToken">Cancellation token</param>
-    public async Task<Dictionary<string, List<SpendableArkCoinWithSigner>>> GetSpendableCoins(
+    public async Task<Dictionary<string, List<ArkPsbtSigner>>> GetSpendableCoins(
         string[]? walletIds,
         HashSet<OutPoint>? vtxoOutpoints,
         bool includeRecoverable,
@@ -139,8 +147,8 @@ public class ArkadeSpender(
         walletIds = vtxosAndContracts.Select(grouping => grouping.Key).ToArray();
         var signers = await arkadeWalletSignerProvider.GetSigners(walletIds, cancellationToken);
 
-        var operatorTerms = await operatorTermsService.GetOperatorTerms(cancellationToken);
-        var res = new Dictionary<string, List<SpendableArkCoinWithSigner>>();
+        var serverInfo = await clientTransport.GetServerInfoAsync(cancellationToken);
+        var res = new Dictionary<string, List<ArkPsbtSigner>>();
         foreach (var walletSigner in signers)
         {
             var walletId = walletSigner.Key;
@@ -148,24 +156,27 @@ public class ArkadeSpender(
             if (!vtxosAndContracts.TryGetValue(walletId, out var group))
                 continue;
             // No need to filter again - already filtered at DB level
-            var coins = await GetSpendableCoins(group, signer, operatorTerms, false, null, cancellationToken);
+            var coins = await GetSpendableCoins(group, signer, serverInfo, false, null, cancellationToken);
             res.Add(walletId, coins);
         }
-        
+
         return res;
     }
 
-    private async Task<List<SpendableArkCoinWithSigner>> GetSpendableCoins(
-        Dictionary<ArkWalletContract, VTXO[]> group, IArkadeWalletSigner signer,
-        ArkOperatorTerms operatorTerms, bool includeRecoverable, HashSet<OutPoint>? vtxoOutpoints = null, CancellationToken cancellationToken = default)
+    private async Task<List<ArkPsbtSigner>> GetSpendableCoins(
+        Dictionary<ArkWalletContract, VTXO[]> group, ISigningEntity signer,
+        ArkServerInfo serverInfo, bool includeRecoverable, HashSet<OutPoint>? vtxoOutpoints = null, CancellationToken cancellationToken = default)
     {
-        var coins = new List<SpendableArkCoinWithSigner>();
+        var coins = new List<ArkPsbtSigner>();
+        var signerDescriptor = await signer.GetOutputDescriptor(cancellationToken);
 
         foreach (var contractData in group)
         {
-            var contract = ArkContract.Parse(contractData.Key.Type, contractData.Key.ContractData);
+            var contract = ArkContract.Parse(contractData.Key.Type, contractData.Key.ContractData, serverInfo.Network);
             if (contract is null)
                 continue;
+            var walletId = contractData.Key.WalletId;
+
             foreach (var vtxo in contractData.Value)
             {
                 if (vtxo.SpentByTransactionId is not null)
@@ -183,68 +194,84 @@ public class ArkadeSpender(
                     }
                 }
 
-                if (!operatorTerms.SignerKey.ToBytes().SequenceEqual(contract.Server.ToBytes()))
+                // Compare server descriptors by extracting XOnlyPubKey from both
+                var serverPubKey = OutputDescriptorHelpers.Extract(serverInfo.SignerKey).XOnlyPubKey;
+                var contractServerPubKey = OutputDescriptorHelpers.Extract(contract.Server).XOnlyPubKey;
+                if (!serverPubKey.ToBytes().SequenceEqual(contractServerPubKey.ToBytes()))
                 {
                     continue;
                 }
 
-                var res = await GetSpendableCoin(signer, contract, vtxo.ToCoin(), vtxo.Recoverable, vtxo.ExpiresAt, cancellationToken);
+                var res = await GetSpendableCoin(walletId, signer, signerDescriptor, contract, vtxo, cancellationToken);
                 if (res is not null)
                     coins.Add(res);
             }
         }
-        
+
         return coins;
     }
 
-    private async Task<SpendableArkCoinWithSigner?> GetSpendableCoin(IArkadeWalletSigner signer,
-        ArkContract contract, ICoinable vtxo, bool recoverable, DateTimeOffset expiresAt, CancellationToken cancellationToken)
+    private async Task<ArkPsbtSigner?> GetSpendableCoin(
+        string walletId,
+        ISigningEntity signer,
+        OutputDescriptor signerDescriptor,
+        ArkContract contract,
+        VTXO vtxo,
+        CancellationToken cancellationToken)
     {
-        var user = await signer.GetXOnlyPublicKey(cancellationToken);
+        var userKey = await signer.GetPublicKey(cancellationToken);
+        var user = userKey.ToXOnlyPubKey();
+        var coin = vtxo.ToCoin();
+
         switch (contract)
         {
             case ArkPaymentContract arkPaymentContract:
-                if (arkPaymentContract.User.ToBytes().SequenceEqual(user.ToBytes()))
+                var arkPaymentUserKey = OutputDescriptorHelpers.Extract(arkPaymentContract.User).XOnlyPubKey;
+                if (arkPaymentUserKey.ToBytes().SequenceEqual(user.ToBytes()))
                 {
-                    return ToArkCoin(contract, vtxo, signer, arkPaymentContract.CollaborativePath(), null, null, null, recoverable, expiresAt);
+                    return ToArkPsbtSigner(walletId, contract, vtxo, signerDescriptor, signer,
+                        arkPaymentContract.CollaborativePath(), null, null, null);
                 }
-
                 break;
+
             case HashLockedArkPaymentContract hashLockedArkPaymentContract:
-                if (hashLockedArkPaymentContract.User!.ToBytes().SequenceEqual(user.ToBytes()))
+                var hashLockedUserKey = OutputDescriptorHelpers.Extract(hashLockedArkPaymentContract.User!).XOnlyPubKey;
+                if (hashLockedUserKey.ToBytes().SequenceEqual(user.ToBytes()))
                 {
-                    return ToArkCoin(contract, vtxo, signer,
+                    return ToArkPsbtSigner(walletId, contract, vtxo, signerDescriptor, signer,
                         hashLockedArkPaymentContract.CreateClaimScript(),
-                        new WitScript(Op.GetPushOp(hashLockedArkPaymentContract.Preimage)), null, null, recoverable,expiresAt);
+                        new WitScript(Op.GetPushOp(hashLockedArkPaymentContract.Preimage)), null, null);
+                }
+                break;
+
+            case VHTLCContract htlc:
+                var htlcReceiverKey = OutputDescriptorHelpers.Extract(htlc.Receiver).XOnlyPubKey;
+                var htlcSenderKey = OutputDescriptorHelpers.Extract(htlc.Sender).XOnlyPubKey;
+                if (htlc.Preimage is not null && htlcReceiverKey.ToBytes().SequenceEqual(user.ToBytes()))
+                {
+                    return ToArkPsbtSigner(walletId, contract, vtxo, signerDescriptor, signer,
+                        htlc.CreateClaimScript(),
+                        new WitScript(Op.GetPushOp(htlc.Preimage!)), null, null);
                 }
 
-                break;
-            case VHTLCContract htlc:
-                if (htlc.Preimage is not null && htlc.Receiver.ToBytes().SequenceEqual(user.ToBytes()))
-                {
-                    return ToArkCoin(contract, vtxo, signer,
-                        htlc.CreateClaimScript(),
-                        new WitScript(Op.GetPushOp(htlc.Preimage!)), null, null, recoverable, expiresAt);
-                }
-                
                 var (timestamp, height) = await bitcoinTimeChainProvider.Get(cancellationToken);
 
                 switch (htlc.RefundLocktime.IsTimeLock)
                 {
                     case true:
-                        if (htlc.RefundLocktime.Date <= Utils.UnixTimeToDateTime(timestamp) && htlc.Sender.ToBytes().SequenceEqual(user.ToBytes()))
+                        if (htlc.RefundLocktime.Date <= Utils.UnixTimeToDateTime(timestamp) && htlcSenderKey.ToBytes().SequenceEqual(user.ToBytes()))
                         {
-                            return ToArkCoin(contract, vtxo, signer,
+                            return ToArkPsbtSigner(walletId, contract, vtxo, signerDescriptor, signer,
                                 htlc.CreateRefundWithoutReceiverScript(),
-                                null, htlc.RefundLocktime, null, recoverable, expiresAt);
+                                null, htlc.RefundLocktime, null);
                         }
                         break;
                     case false:
-                        if (htlc.RefundLocktime.Height <= height && htlc.Sender.ToBytes().SequenceEqual(user.ToBytes()))
+                        if (htlc.RefundLocktime.Height <= height && htlcSenderKey.ToBytes().SequenceEqual(user.ToBytes()))
                         {
-                            return ToArkCoin(contract, vtxo, signer,
+                            return ToArkPsbtSigner(walletId, contract, vtxo, signerDescriptor, signer,
                                 htlc.CreateRefundWithoutReceiverScript(),
-                                null, htlc.RefundLocktime, null, recoverable, expiresAt);
+                                null, htlc.RefundLocktime, null);
                         }
                         break;
                 }
@@ -254,20 +281,57 @@ public class ArkadeSpender(
         return null;
     }
 
-    private static SpendableArkCoinWithSigner ToArkCoin(ArkContract c, ICoinable vtxo, IArkadeWalletSigner signer,
-        ScriptBuilder leaf, WitScript? witness, LockTime? lockTime, Sequence? sequence, bool recoverable, DateTimeOffset expiry )
+    private static ArkPsbtSigner ToArkPsbtSigner(
+        string walletId,
+        ArkContract contract,
+        VTXO vtxo,
+        OutputDescriptor signerDescriptor,
+        ISigningEntity signer,
+        ScriptBuilder spendingScript,
+        WitScript? spendingWitness,
+        LockTime? lockTime,
+        Sequence? sequence)
     {
-        return new SpendableArkCoinWithSigner(c, expiry, vtxo.Outpoint, vtxo.TxOut, signer, leaf, witness, lockTime, sequence, recoverable);
+        var outpoint = new OutPoint(uint256.Parse(vtxo.TransactionId), (uint)vtxo.TransactionOutputIndex);
+        var txOut = new TxOut(Money.Satoshis(vtxo.Amount), Script.FromHex(vtxo.Script));
+
+        var coin = new ArkCoin(
+            walletIdentifier: walletId,
+            contract: contract,
+            birth: vtxo.SeenAt,
+            expiresAt: vtxo.ExpiresAt,
+            expiresAtHeight: vtxo.ExpiresAtHeight,
+            outPoint: outpoint,
+            txOut: txOut,
+            signerDescriptor: signerDescriptor,
+            spendingScriptBuilder: spendingScript,
+            spendingConditionWitness: spendingWitness,
+            lockTime: lockTime,
+            sequence: sequence,
+            recoverable: vtxo.Recoverable
+        );
+        return new ArkPsbtSigner(coin, signer);
     }
 
-    public Task<ArkAddress> GetDestination(ArkWallet wallet, ArkOperatorTerms arkOperatorTerms)
+    public async Task<ArkAddress> GetDestination(ArkWallet wallet, ArkServerInfo serverInfo)
     {
-        var destination = wallet.Destination;
-        destination ??= 
-            ContractUtils
-                .DerivePaymentContract(new DeriveContractRequest(arkOperatorTerms, wallet.PublicKey))
-                .GetArkAddress();
-        return Task.FromResult(destination);
+        // If wallet has an explicit destination set, use it
+        if (!string.IsNullOrEmpty(wallet.WalletDestination))
+        {
+            return ArkAddress.Parse(wallet.WalletDestination);
+        }
+
+        // Otherwise derive a default payment contract address for this wallet
+        // Get the wallet's signing entity to derive a payment contract
+        var signers = await arkadeWalletSignerProvider.GetSigners([wallet.Id], CancellationToken.None);
+        if (!signers.TryGetValue(wallet.Id, out var signer))
+        {
+            throw new InvalidOperationException($"Could not get signer for wallet {wallet.Id}");
+        }
+
+        var userDescriptor = await signer.GetOutputDescriptor(CancellationToken.None);
+        var paymentContract = new ArkPaymentContract(serverInfo.SignerKey, serverInfo.UnilateralExit, userDescriptor);
+        return paymentContract.GetArkAddress();
     }
 
     /// <summary>
@@ -276,10 +340,10 @@ public class ArkadeSpender(
     /// <param name="availableCoins">Available coins sorted by value descending</param>
     /// <param name="targetAmount">Target amount to send</param>
     /// <param name="dustThreshold">Dust threshold from operator terms</param>
-    /// <param name="allowSubdustChange">Whether subdust change is acceptable (true if user explicitly wants subdust output)</param>
+    /// <param name="currentSubDustOutputs">Current number of subdust outputs</param>
     /// <returns>Selected coins or null if impossible</returns>
-    private List<SpendableArkCoinWithSigner>? SelectCoins(
-        List<SpendableArkCoinWithSigner> availableCoins,
+    private List<ArkPsbtSigner>? SelectCoins(
+        List<ArkPsbtSigner> availableCoins,
         Money targetAmount,
         Money dustThreshold,
         int currentSubDustOutputs)
@@ -287,13 +351,13 @@ public class ArkadeSpender(
         if (availableCoins.Count == 0)
             return null;
 
-        var totalAvailable = availableCoins.Sum(x => x.TxOut.Value);
+        var totalAvailable = availableCoins.Sum(x => x.Coin.TxOut.Value);
         if (totalAvailable < targetAmount)
             return null;
 
         // Strategy 1: Try to find exact match or match with change > dust
         // Start with largest coins first (greedy approach)
-        var selected = new List<SpendableArkCoinWithSigner>();
+        var selected = new List<ArkPsbtSigner>();
         Money currentTotal = Money.Zero;
 
         foreach (var coin in availableCoins)
@@ -302,39 +366,39 @@ public class ArkadeSpender(
             {
                 var change = currentTotal - targetAmount;
                 // Check if change is acceptable (either 0, > dust, or we can add another subdust OP_RETURN)
-                var canAddSubdustChange = (currentSubDustOutputs + 1) <= ArkTransactionBuilder.MaxOpReturnOutputs;
+                var canAddSubdustChange = (currentSubDustOutputs + 1) <= 3; // Max 3 OP_RETURN outputs
                 if (change == Money.Zero || change >= dustThreshold || canAddSubdustChange)
                     break;
             }
 
             selected.Add(coin);
-            currentTotal += coin.TxOut.Value;
+            currentTotal += coin.Coin.TxOut.Value;
         }
 
         var finalChange = currentTotal - targetAmount;
-        
+
         // If we have subdust change and can't add another OP_RETURN, try to find better combination
-        var canAddSubdust = (currentSubDustOutputs + 1) <= ArkTransactionBuilder.MaxOpReturnOutputs;
+        var canAddSubdust = (currentSubDustOutputs + 1) <= 3; // Max 3 OP_RETURN outputs
         if (finalChange > Money.Zero && finalChange < dustThreshold && !canAddSubdust)
         {
             logger.LogDebug("Greedy selection resulted in subdust change ({Change} sats). Attempting to find better combination.", finalChange);
-            
+
             // Strategy 2: Try adding one more coin to push change above dust threshold
             var remainingCoins = availableCoins.Except(selected).ToList();
             foreach (var extraCoin in remainingCoins)
             {
-                var newChange = finalChange + extraCoin.TxOut.Value;
+                var newChange = finalChange + extraCoin.Coin.TxOut.Value;
                 if (newChange >= dustThreshold)
                 {
-                    logger.LogDebug("Adding extra coin ({CoinValue} sats) pushes change above dust threshold ({NewChange} sats).", 
-                        extraCoin.TxOut.Value, newChange);
+                    logger.LogDebug("Adding extra coin ({CoinValue} sats) pushes change above dust threshold ({NewChange} sats).",
+                        extraCoin.Coin.TxOut.Value, newChange);
                     selected.Add(extraCoin);
                     return selected;
                 }
             }
-            
+
             logger.LogDebug("Could not push change above dust by adding single coin. Trying alternative combinations.");
-            
+
             // Strategy 3: Try to find combination that results in no change or change > dust
             var betterSelection = TryFindBetterCombination(availableCoins, targetAmount, dustThreshold);
             if (betterSelection != null)
@@ -342,7 +406,7 @@ public class ArkadeSpender(
                 logger.LogDebug("Found better coin combination avoiding subdust change.");
                 return betterSelection;
             }
-            
+
             // Strategy 4: If we can't avoid subdust, use all coins to maximize change
             logger.LogDebug("Could not avoid subdust change. Using all available coins.");
             return availableCoins;
@@ -354,8 +418,8 @@ public class ArkadeSpender(
     /// <summary>
     /// Attempts to find a better coin combination that avoids subdust change
     /// </summary>
-    private List<SpendableArkCoinWithSigner>? TryFindBetterCombination(
-        List<SpendableArkCoinWithSigner> availableCoins,
+    private List<ArkPsbtSigner>? TryFindBetterCombination(
+        List<ArkPsbtSigner> availableCoins,
         Money targetAmount,
         Money dustThreshold)
     {
@@ -363,7 +427,7 @@ public class ArkadeSpender(
         // Look for exact match first
         foreach (var coin in availableCoins)
         {
-            if (coin.TxOut.Value == targetAmount)
+            if (coin.Coin.TxOut.Value == targetAmount)
                 return [coin];
         }
 
@@ -372,10 +436,10 @@ public class ArkadeSpender(
         {
             for (int j = i + 1; j < availableCoins.Count; j++)
             {
-                var total = availableCoins[i].TxOut.Value + availableCoins[j].TxOut.Value;
+                var total = availableCoins[i].Coin.TxOut.Value + availableCoins[j].Coin.TxOut.Value;
                 if (total < targetAmount)
                     continue;
-                    
+
                 var change = total - targetAmount;
                 if (change == Money.Zero || change >= dustThreshold)
                     return [availableCoins[i], availableCoins[j]];
@@ -389,10 +453,10 @@ public class ArkadeSpender(
             {
                 for (int k = j + 1; k < availableCoins.Count && k < 10; k++)
                 {
-                    var total = availableCoins[i].TxOut.Value + availableCoins[j].TxOut.Value + availableCoins[k].TxOut.Value;
+                    var total = availableCoins[i].Coin.TxOut.Value + availableCoins[j].Coin.TxOut.Value + availableCoins[k].Coin.TxOut.Value;
                     if (total < targetAmount)
                         continue;
-                        
+
                     var change = total - targetAmount;
                     if (change == Money.Zero || change >= dustThreshold)
                         return [availableCoins[i], availableCoins[j], availableCoins[k]];

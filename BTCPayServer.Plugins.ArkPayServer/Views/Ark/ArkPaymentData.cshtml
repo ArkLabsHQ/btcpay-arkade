@@ -26,7 +26,7 @@
 			Amount = payment.Value.ToString(CultureInfo.InvariantCulture),
 			Outpoint = paymentData.Outpoint,
 			ReceivedTime = payment.ReceivedTime,
-			Contract = promptDetails.Contract.ToString(),
+			Contract = promptDetails.ContractString,
 			Currency = payment.Currency
 		};
 		return vm;

@@ -9,12 +9,14 @@ using BTCPayServer.Plugins.ArkPayServer.Lightning.Events;
 using BTCPayServer.Plugins.ArkPayServer.Models;
 using BTCPayServer.Plugins.ArkPayServer.Models.Events;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
+using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using BTCPayServer.Services.Invoices;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NArk;
-using NArk.Services.Abstractions;
+using NArk.Transport;
+using NArk.Swaps.Helpers;
 using NBitcoin;
 using NBXplorer;
 using Newtonsoft.Json.Linq;
@@ -25,7 +27,7 @@ public class ArkContractInvoiceListener(
     IMemoryCache memoryCache,
     InvoiceRepository invoiceRepository,
     ArkadePaymentMethodHandler arkadePaymentMethodHandler,
-    IOperatorTermsService operatorTermsService,
+    IClientTransport clientTransport,
     EventAggregator eventAggregator,
     ArkWalletService arkWalletService,
     PaymentService paymentService,
@@ -47,7 +49,7 @@ public class ArkContractInvoiceListener(
 
     private async Task HandleSwapUpdate(ArkSwapUpdated lightningSwapUpdated)
     {
-        var terms = await operatorTermsService.GetOperatorTerms();
+        var terms = await clientTransport.GetServerInfoAsync();
         var active = ArkLightningClient.Map(lightningSwapUpdated.Swap, terms.Network)
             .Status == LightningInvoiceStatus.Unpaid;
         await arkWalletService.ToggleContract(lightningSwapUpdated.Swap.WalletId, lightningSwapUpdated.Swap.ContractScript,
@@ -62,13 +64,14 @@ public class ArkContractInvoiceListener(
 
     private async Task OnVTXOs(VTXOsUpdated arg)
     {
-        var terms = await operatorTermsService.GetOperatorTerms();
+        var terms = await clientTransport.GetServerInfoAsync();
+        var serverKey = OutputDescriptorHelpers.Extract(terms.SignerKey).XOnlyPubKey;
         foreach (var scriptVtxos in arg.Vtxos.GroupBy(c => c.Script))
         {
            var script = Script.FromHex(scriptVtxos.Key);
-            var address = ArkAddress.FromScriptPubKey(script, terms.SignerKey);
+            var address = ArkAddress.FromScriptPubKey(script, serverKey);
             var network = terms.Network;
-            var inv = await invoiceRepository.GetInvoiceFromAddress(ArkadePlugin.ArkadePaymentMethodId, address.ToString(network.ChainName == ChainName.Mainnet)); 
+            var inv = await invoiceRepository.GetInvoiceFromAddress(ArkadePlugin.ArkadePaymentMethodId, address.ToString(network.ChainName == ChainName.Mainnet));
             if (inv is null)
                 continue;
             foreach (var vtxo in scriptVtxos)
@@ -142,7 +145,15 @@ public class ArkContractInvoiceListener(
             return;
         }
 
-        await arkWalletService.ToggleContract(listenedContract.Details.WalletId, listenedContract.Details.Contract,
+        // Get the script from the contract string - need to parse with network
+        var serverInfo = await clientTransport.GetServerInfoAsync();
+        var contract = listenedContract.Details.GetContract(serverInfo.Network);
+        if (contract is null)
+        {
+            return;
+        }
+
+        await arkWalletService.ToggleContract(listenedContract.Details.WalletId, contract,
             active);
     }
 

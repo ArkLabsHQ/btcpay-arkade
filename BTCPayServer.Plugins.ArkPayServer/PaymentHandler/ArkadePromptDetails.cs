@@ -1,25 +1,31 @@
-using NArk;
 using NArk.Contracts;
-using Newtonsoft.Json;
+using NBitcoin;
 
 namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 
+/// <summary>
+/// Payment prompt details for Ark payments.
+/// Stores the contract as a serialized string to avoid JSON converter issues with Network-dependent parsing.
+/// </summary>
 public record ArkadePromptDetails(
     string WalletId,
-    [property: JsonConverter(typeof(ArkContractJsonConverter))]
-    ArkContract Contract);
-
-public class ArkContractJsonConverter : JsonConverter<ArkContract>
+    string ContractString)
 {
-    public override void WriteJson(JsonWriter writer, ArkContract? value, JsonSerializer serializer)
+    /// <summary>
+    /// Creates prompt details from a wallet ID and contract.
+    /// </summary>
+    public ArkadePromptDetails(string walletId, ArkContract contract)
+        : this(walletId, contract.ToString())
     {
-        writer.WriteValue(value?.ToString());
     }
 
-    public override ArkContract? ReadJson(JsonReader reader, Type objectType, ArkContract? existingValue, bool hasExistingValue,
-        JsonSerializer serializer)
+    /// <summary>
+    /// Parses the contract with the specified network.
+    /// </summary>
+    public ArkContract? GetContract(Network network)
     {
-        var contractString = reader.Value?.ToString() ?? string.Empty;
-        return string.IsNullOrEmpty(contractString) ? null : ArkContract.Parse(contractString);
+        if (string.IsNullOrEmpty(ContractString))
+            return null;
+        return ArkContract.Parse(ContractString, network);
     }
 }

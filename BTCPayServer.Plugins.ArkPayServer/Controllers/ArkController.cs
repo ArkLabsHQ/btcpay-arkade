@@ -30,9 +30,11 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using NArk;
-using NArk.Boltz.Client;
+using NArk.Swaps.Boltz.Client;
+using NArk.Swaps.Helpers;
 using NArk.Contracts;
-using NArk.Services.Abstractions;
+using NArk.Transport;
+using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using NBitcoin;
 using NBitcoin.DataEncoders;
 using NBitcoin.Secp256k1;
@@ -51,7 +53,7 @@ IAuthorizationService authorizationService,
     StoreRepository storeRepository,
     ArkWalletService arkWalletService,
     PaymentMethodHandlerDictionary paymentMethodHandlerDictionary,
-    IOperatorTermsService operatorTermsService,
+    IClientTransport clientTransport,
     ArkadeSpendingService arkadeSpendingService,
     ArkAutomatedPayoutSenderFactory payoutSenderFactory,
     PayoutProcessorService payoutProcessorService,
@@ -203,9 +205,10 @@ IAuthorizationService authorizationService,
             
             if (activeContract != null)
             {
-                var terms = await operatorTermsService.GetOperatorTerms(cancellationToken);
+                var terms = await clientTransport.GetServerInfoAsync(cancellationToken);
                 var script = Script.FromHex(activeContract.Script);
-                var address = ArkAddress.FromScriptPubKey(script, terms.SignerKey);
+                var serverKey = OutputDescriptorHelpers.Extract(terms.SignerKey).XOnlyPubKey;
+                var address = ArkAddress.FromScriptPubKey(script, serverKey);
                 defaultAddress = address.ToString(terms.Network.ChainName == ChainName.Mainnet);
             }
         }
@@ -216,7 +219,7 @@ IAuthorizationService authorizationService,
         string? arkOperatorError = null;
         try
         {
-            var terms = await operatorTermsService.GetOperatorTerms(cancellationToken);
+            var terms = await clientTransport.GetServerInfoAsync(cancellationToken);
             arkOperatorConnected = terms != null;
         }
         catch (Exception ex)
@@ -747,7 +750,7 @@ IAuthorizationService authorizationService,
         var spendableCoins = await arkadeSpender.GetSpendableCoins([config.WalletId], true, HttpContext.RequestAborted);
         var spendableOutpoints = spendableCoins
             .SelectMany(kvp => kvp.Value)
-            .Select(coin => coin.Outpoint)
+            .Select(coin => coin.Coin.Outpoint)
             .ToHashSet();
 
         // Apply spendable filter if specified
@@ -1174,21 +1177,22 @@ IAuthorizationService authorizationService,
 
         try
         {
+            var terms = await clientTransport.GetServerInfoAsync(cancellationToken);
+
             // Parse the contract string to extract type and data
             // Try to parse the contract to validate it
-            var arkContract = ArkContract.Parse(contractString);
+            var arkContract = ArkContract.Parse(contractString, terms.Network);
             if (arkContract == null)
             {
                 TempData[WellKnownTempData.ErrorMessage] = "Failed to parse contract. Invalid contract type or data.";
                 return RedirectToAction(nameof(Contracts), new { storeId });
             }
 
-            var terms = await operatorTermsService.GetOperatorTerms(cancellationToken);
             var script = arkContract.GetArkAddress().ScriptPubKey;
             var scriptHex = script.ToHex();
 
             await using var dbContext = dbContextFactory.CreateContext();
-            
+
             // Check if contract already exists
             var existingContract = await dbContext.WalletContracts
                 .FirstOrDefaultAsync(c => c.WalletId == config.WalletId && c.Script == scriptHex, cancellationToken);
@@ -1199,13 +1203,14 @@ IAuthorizationService authorizationService,
                 return RedirectToAction(nameof(Contracts), new { storeId });
             }
 
-            // Create the contract
+            // Create the contract using ToEntity to get the contract data
+            var contractEntity = arkContract.ToEntity(config.WalletId);
             var newContract = new ArkWalletContract
             {
                 Script = scriptHex,
                 WalletId = config.WalletId,
                 Type = arkContract.Type,
-                ContractData = arkContract.GetContractData(),
+                ContractData = contractEntity.AdditionalData,
                 Active = true,
                 CreatedAt = DateTimeOffset.UtcNow
             };
@@ -1248,9 +1253,10 @@ IAuthorizationService authorizationService,
 
         if (ArkAddress.TryParse(wallet, out var addr))
         {
-            var terms = await operatorTermsService.GetOperatorTerms();
+            var terms = await clientTransport.GetServerInfoAsync();
+            var serverKey = OutputDescriptorHelpers.Extract(terms.SignerKey).XOnlyPubKey;
 
-            if (!terms.SignerKey.ToBytes().SequenceEqual(addr!.ServerKey.ToBytes()))
+            if (!serverKey.ToBytes().SequenceEqual(addr!.ServerKey.ToBytes()))
                 throw new Exception("Invalid destination address");
 
             return new TemporaryWalletSettings(GenerateWallet(), null, wallet, true);
@@ -1369,15 +1375,15 @@ IAuthorizationService authorizationService,
         var spendableCoins = await arkadeSpender.GetSpendableCoins([walletId], false, cancellationToken);
         var spendableOutpoints = spendableCoins
             .SelectMany(kvp => kvp.Value)
-            .Select(coin => coin.Outpoint)
+            .Select(coin => coin.Coin.Outpoint)
             .ToHashSet();
 
         // Get spendable coins including recoverable
         var spendableCoinsWithRecoverable = await arkadeSpender.GetSpendableCoins([walletId], true, cancellationToken);
         var recoverableOutpoints = spendableCoinsWithRecoverable
             .SelectMany(kvp => kvp.Value)
-            .Where(coin => coin.Recoverable)
-            .Select(coin => coin.Outpoint)
+            .Where(coin => coin.Coin.Recoverable)
+            .Select(coin => coin.Coin.Outpoint)
             .ToHashSet();
 
         // Available: actually spendable right now (not recoverable, passes contract conditions)
@@ -1410,7 +1416,7 @@ IAuthorizationService authorizationService,
         // These are not recoverable, not locked, but also not spendable
         var allSpendableOutpoints = spendableCoins
             .SelectMany(kvp => kvp.Value)
-            .Select(coin => coin.Outpoint)
+            .Select(coin => coin.Coin.Outpoint)
             .Concat(recoverableOutpoints)
             .ToHashSet();
 
@@ -1479,9 +1485,10 @@ IAuthorizationService authorizationService,
             
             if (activeContract != null)
             {
-                var terms = await operatorTermsService.GetOperatorTerms(cancellationToken);
+                var terms = await clientTransport.GetServerInfoAsync(cancellationToken);
                 var script = Script.FromHex(activeContract.Script);
-                var address = ArkAddress.FromScriptPubKey(script, terms.SignerKey);
+                var serverKey = OutputDescriptorHelpers.Extract(terms.SignerKey).XOnlyPubKey;
+                var address = ArkAddress.FromScriptPubKey(script, serverKey);
                 defaultAddress = address.ToString(terms.Network.ChainName == ChainName.Mainnet);
             }
         }
@@ -1492,7 +1499,7 @@ IAuthorizationService authorizationService,
         string? arkOperatorError = null;
         try
         {
-            var terms = await operatorTermsService.GetOperatorTerms(cancellationToken);
+            var terms = await clientTransport.GetServerInfoAsync(cancellationToken);
             arkOperatorConnected = terms != null;
         }
         catch (Exception ex)

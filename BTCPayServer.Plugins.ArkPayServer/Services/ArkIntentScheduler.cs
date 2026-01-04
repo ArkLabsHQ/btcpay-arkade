@@ -3,8 +3,9 @@ using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using BTCPayServer.Plugins.ArkPayServer.Services.Policies;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using NArk.Abstractions;
 using NArk.Services;
-using NArk.Services.Abstractions;
+using NArk.Transport;
 
 // Example usage:
 // var policy = new FluentVtxoPolicy(logger)
@@ -30,7 +31,7 @@ public class ArkIntentScheduler : IHostedService, IDisposable
     private readonly ArkWalletService _arkWalletService;
     private readonly ILogger<ArkIntentScheduler> _logger;
     private readonly ILogger<FluentVtxoPolicy> _policyLogger;
-    private readonly IOperatorTermsService _operatorTermsService;
+    private readonly IClientTransport _clientTransport;
 
     private readonly ConcurrentDictionary<string, List<IVtxoIntentSchedulingPolicy>> _walletPolicies = new();
     private CancellationTokenSource? _serviceCts;
@@ -42,14 +43,14 @@ public class ArkIntentScheduler : IHostedService, IDisposable
         ArkWalletService arkWalletService,
         ILogger<ArkIntentScheduler> logger,
         ILogger<FluentVtxoPolicy> policyLogger,
-        IOperatorTermsService operatorTermsService)
+        IClientTransport clientTransport)
     {
         _intentService = intentService;
         _arkadeSpender = arkadeSpender;
         _arkWalletService = arkWalletService;
         _logger = logger;
         _policyLogger = policyLogger;
-        _operatorTermsService = operatorTermsService;
+        _clientTransport = clientTransport;
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -280,9 +281,9 @@ public class ArkIntentScheduler : IHostedService, IDisposable
                 wallet.Id, intentSpec.Reason, intentSpec.InputCoins.Length);
             
             var coins = intentSpec.InputCoins;
-            var totalAmount = coins.Sum(c => c.Amount);
+            var totalAmount = coins.Sum(c => c.Coin.TxOut.Value);
             // Use provided outputs or default to sending back to wallet
-            IntentTxOut[] outputs;
+            ArkTxOut[] outputs;
             if (intentSpec.Outputs.Length > 0)
             {
                 outputs = intentSpec.Outputs;
@@ -290,17 +291,12 @@ public class ArkIntentScheduler : IHostedService, IDisposable
             else
             {
                 // Default: send all funds back to wallet (refreshes VTXOs, moves from recoverable state, etc.)
-                var destination = await _arkadeSpender.GetDestination(wallet, await _operatorTermsService.GetOperatorTerms(cancellationToken));
-                
-                
+                var destination = await _arkadeSpender.GetDestination(wallet, await _clientTransport.GetServerInfoAsync(cancellationToken));
+
+
                 outputs =
                 [
-                    new IntentTxOut
-                    {
-                        ScriptPubKey = destination.ScriptPubKey,
-                        Type = IntentTxOut.IntentOutputType.VTXO,
-                        Value = (ulong)totalAmount
-                    }
+                    new ArkTxOut(ArkTxOutType.Vtxo, totalAmount, destination.ScriptPubKey.GetDestination()!)
                 ];
             }
             // Create the intent

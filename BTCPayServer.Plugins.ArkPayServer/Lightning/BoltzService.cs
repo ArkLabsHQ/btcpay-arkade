@@ -10,12 +10,13 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NArk;
-using NArk.Boltz.Client;
-using NArk.Boltz.Models.WebSocket;
+using NArk.Swaps.Boltz.Client;
+using NArk.Swaps.Boltz.Models;
+using NArk.Swaps.Boltz.Models.WebSocket;
 using NArk.Contracts;
 using NArk.Models;
 using NArk.Services;
-using NArk.Services.Abstractions;
+using NArk.Transport;
 using NBitcoin;
 using NBitcoin.Crypto;
 using NBXplorer;
@@ -26,17 +27,17 @@ public class BoltzService(
     ArkadeSpender arkadeSpender,
     EventAggregator eventAggregator,
     ArkPluginDbContextFactory dbContextFactory,
-    BoltzSwapService boltzSwapService,
     BoltzClient boltzClient,
+    PluginBoltzSwapService pluginBoltzSwapService,
     ArkWalletService walletService,
     ArkVtxoSynchronizationService arkVtxoSynchronizationService,
-    IOperatorTermsService operatorTermsService,
+    IClientTransport clientTransport,
     ILogger<BoltzService> logger) : IHostedService
 {
     private CompositeDisposable _leases = new();
     private BoltzWebsocketClient? _wsClient;
     private CancellationTokenSource? _periodicPollCts;
-    private async Task<Network> Network(CancellationToken cancellationToken) => (await operatorTermsService.GetOperatorTerms(cancellationToken)).Network;
+    private async Task<Network> Network(CancellationToken cancellationToken) => (await clientTransport.GetServerInfoAsync(cancellationToken)).Network;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -434,7 +435,7 @@ public class BoltzService(
             var receiverKey = await signer.GetPublicKey(cancellationToken);
 
             // Create reverse swap with just the receiver key - sender key comes from Boltz response
-            swapResult = await boltzSwapService.CreateReverseSwap(
+            swapResult = await pluginBoltzSwapService.CreateReverseSwap(
                 createInvoiceRequest,
                 receiverKey, cancellationToken);
             
@@ -457,14 +458,14 @@ public class BoltzService(
                 logger.LogWarning(e, "Unable to validate reverse swap fees, proceeding anyway");
             }
             
-            var contractScript = swapResult.Contract.GetArkAddress().ScriptPubKey.ToHex();
+            var contractEntity = swapResult.Contract.ToEntity(walletId);
             arkWalletContract =new ArkWalletContract
             {
-                Script = contractScript,
+                Script = contractEntity.Script,
                 WalletId = walletId,
                 Type = swapResult.Contract.Type,
                 Active = true,
-                ContractData = swapResult.Contract.GetContractData()
+                ContractData = contractEntity.AdditionalData
             };
                 return (arkWalletContract, swapResult.Contract);
         }, cancellationToken);
@@ -527,11 +528,11 @@ public class BoltzService(
         {
             var sender = await signer.GetPublicKey(cancellationToken);
 
-            // Create reverse swap with just the receiver key - sender key comes from Boltz response
-            swapResult = await boltzSwapService.CreateSubmarineSwap(
+            // Create submarine swap with sender key - receiver key comes from Boltz response
+            swapResult = await pluginBoltzSwapService.CreateSubmarineSwap(
                 paymentRequest,
                 sender,
-                cancellationToken: cancellationToken);
+                cancellationToken);
             
             try
             {
@@ -547,14 +548,14 @@ public class BoltzService(
                 logger.LogWarning(e, "Unable to validate submarine swap fees, proceeding anyway");
             }
             
-            var contractScript = swapResult.Contract.GetArkAddress().ScriptPubKey.ToHex();
+            var contractEntity = swapResult.Contract.ToEntity(walletId);
             arkWalletContract = new ArkWalletContract
             {
-                Script = contractScript,
+                Script = contractEntity.Script,
                 WalletId = walletId,
                 Type = swapResult.Contract.Type,
                 Active = true,
-                ContractData = swapResult.Contract.GetContractData()
+                ContractData = contractEntity.AdditionalData
             };
 
             return (arkWalletContract, swapResult.Contract);

@@ -1,6 +1,6 @@
 using NArk.Abstractions.Wallets;
-using NArk.Extensions;
 using NBitcoin;
+using NBitcoin.DataEncoders;
 using NBitcoin.Scripting;
 using NBitcoin.Secp256k1;
 using NBitcoin.Secp256k1.Musig;
@@ -28,7 +28,7 @@ public class SingleKeySigningEntity : ISigningEntity
         _xOnlyPubKey = _publicKey.ToXOnlyPubKey();
 
         // Create a simple taproot descriptor: tr(pubkey_hex)
-        var pubKeyHex = _xOnlyPubKey.ToBytes().ToHexStringLower();
+        var pubKeyHex = Convert.ToHexString(_xOnlyPubKey.ToBytes()).ToLowerInvariant();
         var taprootPubKey = new TaprootPubKey(_xOnlyPubKey.ToBytes());
         _outputDescriptor = OutputDescriptor.Parse($"tr({pubKeyHex})", network);
 
@@ -41,9 +41,38 @@ public class SingleKeySigningEntity : ISigningEntity
     /// </summary>
     public static SingleKeySigningEntity FromNsec(string nsec, Network network)
     {
-        var decoded = Bech32Encoder.ExtractWitnessFromBech32("nsec", nsec, Bech32Encoder.Encoding.Bech32);
-        var privKey = ECPrivKey.Create(decoded);
+        // nsec1... is bech32 encoding (not bech32m), with 5-bit groups
+        // Decode using NBitcoin's Bech32 facilities
+        var encoder = Encoders.Bech32("nsec");
+        // The DecodeDataRaw returns 5-bit groups, need to convert to 8-bit bytes
+        var decoded = encoder.DecodeDataRaw(nsec, out var encodingType);
+        // Convert from 5-bit to 8-bit
+        var bytes = ConvertBits(decoded, 5, 8, false);
+        var privKey = ECPrivKey.Create(bytes);
         return new SingleKeySigningEntity(privKey, network);
+    }
+
+    private static byte[] ConvertBits(byte[] data, int fromBits, int toBits, bool pad)
+    {
+        var acc = 0;
+        var bits = 0;
+        var result = new List<byte>();
+        var maxv = (1 << toBits) - 1;
+        foreach (var value in data)
+        {
+            acc = (acc << fromBits) | value;
+            bits += fromBits;
+            while (bits >= toBits)
+            {
+                bits -= toBits;
+                result.Add((byte)((acc >> bits) & maxv));
+            }
+        }
+        if (pad && bits > 0)
+        {
+            result.Add((byte)((acc << (toBits - bits)) & maxv));
+        }
+        return result.ToArray();
     }
 
     /// <summary>
@@ -61,7 +90,7 @@ public class SingleKeySigningEntity : ISigningEntity
         return Task.FromResult(new Dictionary<string, string>
         {
             ["type"] = "single-key",
-            ["pubkey"] = _xOnlyPubKey.ToBytes().ToHexStringLower()
+            ["pubkey"] = Convert.ToHexString(_xOnlyPubKey.ToBytes()).ToLowerInvariant()
         });
     }
 
@@ -91,7 +120,7 @@ public class SingleKeySigningEntity : ISigningEntity
         {
             throw new InvalidOperationException("Failed to sign data");
         }
-        return Task.FromResult(new SignResult(sig.ToBytes(), SignatureHashType.SchnorrDefault));
+        return Task.FromResult(new SignResult(sig, _xOnlyPubKey));
     }
 
     public Task<MusigPartialSignature> SignMusig(

@@ -10,10 +10,16 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NArk;
+using NArk.Abstractions;
+using NArk.Extensions;
 using NArk.Helpers;
+using NArk.Models;
 using NArk.Services;
+using NArk.Transactions;
+using NArk.Transport;
 using NBitcoin;
 using NBitcoin.Crypto;
+using NBitcoin.Secp256k1;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
 
@@ -26,8 +32,9 @@ public class ArkIntentService(
     ArkService.ArkServiceClient arkServiceClient,
     ArkadeWalletSignerProvider signerProvider,
     ArkWalletService arkWalletService,
-    CachedOperatorTermsService operatorTermsService,
-    ArkTransactionBuilder arkTransactionBuilder,
+    CachedServerInfoService serverInfoService,
+    IClientTransport clientTransport,
+    TransactionHelpers.ArkTransactionBuilder arkTransactionBuilder,
     ArkadeSpender arkadeSpender,
     ILogger<ArkIntentService> logger)
     : IHostedService, IDisposable
@@ -104,19 +111,19 @@ public class ArkIntentService(
     /// </summary>
     public async Task<string> CreateIntentAsync(
         string walletId,
-        SpendableArkCoinWithSigner[] coins,
-        IntentTxOut[]? outputs,
+        ArkPsbtSigner[] coins,
+        ArkTxOut[]? outputs,
         DateTimeOffset? validFrom = null,
         DateTimeOffset? validUntil = null,
         CancellationToken cancellationToken = default)
     {
-        outputs ??= await GetDefaultOutputs(coins.Sum(c => c.Amount), walletId, cancellationToken);        
+        outputs ??= await GetDefaultOutputs(coins.Sum(c => c.Coin.Amount), walletId, cancellationToken);        
         
         await using var dbContext = dbContextFactory.CreateContext();
-        
+
         // Check if any VTXOs are already locked
-        var coinTxIds = coins.Select(c => c.Outpoint.Hash.ToString()).ToHashSet();
-        
+        var coinTxIds = coins.Select(c => c.Coin.Outpoint.Hash.ToString()).ToHashSet();
+
         var potentiallyLockedVtxos = await dbContext.IntentVtxos
             .Include(iv => iv.Intent)
             .Include(iv => iv.Vtxo)
@@ -124,11 +131,11 @@ public class ArkIntentService(
                          coinTxIds.Contains(iv.VtxoTransactionId))
             .Select(iv => iv.Vtxo)
             .ToListAsync(cancellationToken);
-        
+
         // Filter in memory to check exact outpoint matches
-        var coinOutpointSet = coins.Select(c => $"{c.Outpoint.Hash}:{c.Outpoint.N}").ToHashSet();
+        var coinOutpointSet = coins.Select(c => $"{c.Coin.Outpoint.Hash}:{c.Coin.Outpoint.N}").ToHashSet();
         var lockedVtxos = potentiallyLockedVtxos.Where(v => coinOutpointSet.Contains($"{v.TransactionId}:{v.TransactionOutputIndex}")).ToList();
-        
+
         if (lockedVtxos.Any())
         {
             throw new InvalidOperationException(
@@ -140,8 +147,8 @@ public class ArkIntentService(
         if (signer == null)
         {
             throw new InvalidOperationException($"Signer not available for wallet {walletId}");
-        } 
-        var vtxoScripts = coins.Select(c => c.Contract.GetArkAddress().ScriptPubKey.ToHex()).ToList();
+        }
+        var vtxoScripts = coins.Select(c => c.Coin.Contract.GetArkAddress().ScriptPubKey.ToHex()).ToList();
         // ensure the wallet has the contract of the vtxos in question
        
         var contracts =
@@ -159,11 +166,11 @@ public class ArkIntentService(
         // Generate intent transactions with BIP322 signatures
         var effectiveValidFrom = validFrom ?? DateTimeOffset.UtcNow;
         var effectiveValidUntil = validUntil ?? DateTimeOffset.UtcNow.Add(DefaultIntentExpiry);
-        
+
         var cosigners = new[] { await signer.GetPublicKey(cancellationToken) };
-        var terms = await operatorTermsService.GetOperatorTerms(cancellationToken);
-        var (registerTx, deleteTx, registerMsg, deleteMsg) = await IntentUtils.CreateIntent(
-            terms.Network,
+        var serverInfo = await serverInfoService.GetServerInfoAsync(cancellationToken);
+        var (registerTx, deleteTx, registerMsg, deleteMsg) = await CreateIntentsAsync(
+            serverInfo.Network,
             cosigners,
             effectiveValidFrom,
             effectiveValidUntil,
@@ -174,13 +181,13 @@ public class ArkIntentService(
         // Convert coins to VTXO entities for database storage
         var vtxoEntities = coins.Select(coin => new VTXO
         {
-            TransactionId = coin.Outpoint.Hash.ToString(),
-            TransactionOutputIndex = (int)coin.Outpoint.N,
-            Amount = coin.TxOut.Value.Satoshi,
-            Script = coin.TxOut.ScriptPubKey.ToHex(),
+            TransactionId = coin.Coin.Outpoint.Hash.ToString(),
+            TransactionOutputIndex = (int)coin.Coin.Outpoint.N,
+            Amount = coin.Coin.TxOut.Value.Satoshi,
+            Script = coin.Coin.TxOut.ScriptPubKey.ToHex(),
             SeenAt = DateTimeOffset.UtcNow,
-            
-            Recoverable = coin.Recoverable
+
+            Recoverable = coin.Coin.Recoverable
         }).ToList();
         
         foreach (var entityEntry in vtxoEntities.Select(dbContext.Entry))
@@ -224,22 +231,17 @@ public class ArkIntentService(
         return intent.InternalId.ToString();
     }
 
-    private async Task<IntentTxOut[]> GetDefaultOutputs(Money totalAmount, string destinationWalletId, CancellationToken cancellationToken)
+    private async Task<ArkTxOut[]> GetDefaultOutputs(Money totalAmount, string destinationWalletId, CancellationToken cancellationToken)
     {
         var wallet = await arkWalletService.GetWallet(destinationWalletId, cancellationToken);
 
         if (wallet is null) throw new Exception("Destination wallet did not exist");
-        
+
         // Default: send all funds back to wallet (refreshes VTXOs, moves from recoverable state, etc.)
-        var destination = await arkadeSpender.GetDestination(wallet, await operatorTermsService.GetOperatorTerms(cancellationToken));
+        var destination = await arkadeSpender.GetDestination(wallet, await serverInfoService.GetServerInfoAsync(cancellationToken));
 
         return [
-            new IntentTxOut
-            {
-                ScriptPubKey = destination.ScriptPubKey,
-                Type = IntentTxOut.IntentOutputType.VTXO,
-                Value = totalAmount
-            }
+            new ArkTxOut(ArkTxOutType.Vtxo, totalAmount, destination.ScriptPubKey.GetDestination()!)
         ];
     }
 
@@ -681,7 +683,7 @@ public class ArkIntentService(
         
         // Get spendable coins for all wallets, filtered by the specific VTXOs locked in intents
         var walletCoins = await arkadeSpender.GetSpendableCoins(walletIds.ToArray(), allVtxoOutpoints, true, cancellationToken);
-        var terms = await operatorTermsService.GetOperatorTerms(cancellationToken);
+        var serverInfo = await serverInfoService.GetServerInfoAsync(cancellationToken);
         // Confirm registration and create batch sessions for all selected intents
         foreach (var intentId in selectedIntentIds)
         {
@@ -711,7 +713,7 @@ public class ArkIntentService(
                     .ToHashSet();
                 
                 var spendableCoins = allWalletCoins
-                    .Where(coin => intentVtxoOutpoints.Contains(coin.Outpoint))
+                    .Where(coin => intentVtxoOutpoints.Contains(coin.Coin.Outpoint))
                     .ToList();
                 
                 if (spendableCoins.Count == 0)
@@ -734,10 +736,10 @@ public class ArkIntentService(
 
                 // Create and initialize batch session
                 var session = new BatchSession(
-                    operatorTermsService,
+                    clientTransport,
                     arkServiceClient,
                     arkTransactionBuilder,
-                    terms.Network,
+                    serverInfo.Network,
                     signer,
                     intent,
                     spendableCoins.ToArray(),
@@ -762,7 +764,7 @@ public class ArkIntentService(
     {
         try
         {
-            var message = JsonSerializer.Deserialize<RegisterIntentMessage>(registerProofMessage);
+            var message = JsonSerializer.Deserialize<Messages.RegisterIntentMessage>(registerProofMessage);
             return message?.CosignersPublicKeys ?? [];
         }
         catch (Exception)
@@ -803,6 +805,157 @@ public class ArkIntentService(
         intent.CommitmentTransactionId = finalizedEvent.CommitmentTxid;
         intent.UpdatedAt = DateTimeOffset.UtcNow;
         await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    #endregion
+
+    #region Intent Creation Helpers
+
+    /// <summary>
+    /// Creates register and delete intent PSBTs with BIP322 signatures.
+    /// Replicates NNark's IntentGenerationService.CreateIntents logic.
+    /// </summary>
+    private static async Task<(PSBT RegisterTx, PSBT DeleteTx, string RegisterMessage, string DeleteMessage)> CreateIntentsAsync(
+        Network network,
+        ECPubKey[] cosigners,
+        DateTimeOffset validAt,
+        DateTimeOffset expireAt,
+        IReadOnlyCollection<ArkPsbtSigner> inputSigners,
+        IReadOnlyCollection<ArkTxOut>? outputs = null,
+        CancellationToken cancellationToken = default)
+    {
+        var registerMsg = new Messages.RegisterIntentMessage
+        {
+            Type = "register",
+            OnchainOutputsIndexes = outputs?.Select((x, i) => (x, i))
+                .Where(o => o.x.Type == ArkTxOutType.Onchain)
+                .Select((_, i) => i).ToArray() ?? [],
+            ValidAt = validAt.ToUnixTimeSeconds(),
+            ExpireAt = expireAt.ToUnixTimeSeconds(),
+            CosignersPublicKeys = cosigners.Select(c => c.ToBytes().ToHexStringLower()).ToArray()
+        };
+
+        var deleteMsg = new Messages.DeleteIntentMessage
+        {
+            Type = "delete",
+            ExpireAt = expireAt.ToUnixTimeSeconds()
+        };
+
+        var registerMessage = JsonSerializer.Serialize(registerMsg);
+        var deleteMessage = JsonSerializer.Serialize(deleteMsg);
+
+        var registerTx = await CreateIntentPsbtAsync(registerMessage, network, inputSigners.ToArray(), outputs?.Cast<TxOut>().ToArray(), cancellationToken);
+        var deleteTx = await CreateIntentPsbtAsync(deleteMessage, network, inputSigners.ToArray(), null, cancellationToken);
+
+        return (registerTx, deleteTx, registerMessage, deleteMessage);
+    }
+
+    /// <summary>
+    /// Creates a BIP322-style PSBT for intent proof.
+    /// </summary>
+    private static async Task<PSBT> CreateIntentPsbtAsync(
+        string message,
+        Network network,
+        ArkPsbtSigner[] inputs,
+        IReadOnlyCollection<TxOut>? outputs,
+        CancellationToken cancellationToken = default)
+    {
+        var firstInput = inputs.First();
+        var toSignTx = CreateIntentBasePsbt(
+            firstInput.Coin.ScriptPubKey,
+            network,
+            message,
+            2U,
+            0U,
+            0U,
+            inputs.Select(i => i.Coin).Cast<Coin>().ToArray());
+
+        var toSignGTx = toSignTx.GetGlobalTransaction();
+        if (outputs is not null && outputs.Count != 0)
+        {
+            toSignGTx.Outputs.RemoveAt(0);
+            toSignGTx.Outputs.AddRange(outputs);
+        }
+
+        // Update first input coin with the to_spend transaction details
+        var updatedInputs = new List<ArkPsbtSigner> { firstInput with { Coin = new ArkCoin(firstInput.Coin) } };
+        updatedInputs.AddRange(inputs.Skip(1));
+        updatedInputs[0].Coin.TxOut = toSignTx.Inputs[0].GetTxOut()!;
+        updatedInputs[0].Coin.Outpoint = toSignTx.Inputs[0].PrevOut;
+
+        var precomputedTransactionData = toSignGTx.PrecomputeTransactionData(updatedInputs.Select(i => i.Coin.TxOut).ToArray());
+
+        toSignTx = PSBT.FromTransaction(toSignGTx, network).UpdateFrom(toSignTx);
+
+        foreach (var signer in updatedInputs)
+        {
+            await signer.SignAndFillPsbt(toSignTx, precomputedTransactionData, cancellationToken: cancellationToken);
+        }
+
+        return toSignTx;
+    }
+
+    /// <summary>
+    /// Creates the base PSBT structure for BIP322 intent proof.
+    /// </summary>
+    private static PSBT CreateIntentBasePsbt(
+        Script pkScript,
+        Network network,
+        string message,
+        uint version = 0, uint lockTime = 0, uint sequence = 0, Coin[]? fundProofOutputs = null)
+    {
+        var messageHash = CreateTaggedMessageHash("ark-intent-proof-message", message);
+
+        // Create the "to_spend" transaction (BIP322 challenge)
+        var toSpend = network.CreateTransaction();
+        toSpend.Version = 0;
+        toSpend.LockTime = 0;
+        toSpend.Inputs.Add(new TxIn(new OutPoint(uint256.Zero, 0xFFFFFFFF), new Script(OpcodeType.OP_0, Op.GetPushOp(messageHash)))
+        {
+            Sequence = 0,
+            WitScript = WitScript.Empty,
+        });
+        toSpend.Outputs.Add(new TxOut(Money.Zero, pkScript));
+        var toSpendTxId = toSpend.GetHash();
+
+        // Create the "to_sign" transaction (the proof)
+        var toSign = network.CreateTransaction();
+        toSign.Version = version;
+        toSign.LockTime = lockTime;
+        toSign.Inputs.Add(new TxIn(new OutPoint(toSpendTxId, 0))
+        {
+            Sequence = sequence
+        });
+
+        fundProofOutputs ??= [];
+
+        foreach (var input in fundProofOutputs)
+        {
+            toSign.Inputs.Add(new TxIn(input.Outpoint, Script.Empty)
+            {
+                Sequence = sequence,
+            });
+        }
+        toSign.Outputs.Add(new TxOut(Money.Zero, new Script(OpcodeType.OP_RETURN)));
+
+        var psbt = PSBT.FromTransaction(toSign, network);
+        psbt.Settings.AutomaticUTXOTrimming = false;
+        psbt.AddTransactions(toSpend);
+        psbt.AddCoins(fundProofOutputs.Cast<ICoin>().ToArray());
+
+        return psbt;
+    }
+
+    /// <summary>
+    /// Creates a tagged SHA256 hash of a message (replicates NArk.Helpers.HashHelpers)
+    /// </summary>
+    private static byte[] CreateTaggedMessageHash(string tag, string message)
+    {
+        var bytes = Encoding.UTF8.GetBytes(message);
+        using var sha = new NBitcoin.Secp256k1.SHA256();
+        sha.InitializeTagged(tag);
+        sha.Write(bytes);
+        return sha.GetHash();
     }
 
     #endregion

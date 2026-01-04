@@ -66,6 +66,7 @@
             <Private Condition="'$(Configuration)' == 'Debug'">true</Private>
         </ProjectReference>
         <!-- Packages not provided by NNark -->
+        <PackageReference Include="Grpc.Net.ClientFactory" Version="2.66.0" />
         <PackageReference Include="FlexLabs.EntityFrameworkCore.Upsert" Version="8.1.2" />
         <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.14.0" />
         <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.16"/>

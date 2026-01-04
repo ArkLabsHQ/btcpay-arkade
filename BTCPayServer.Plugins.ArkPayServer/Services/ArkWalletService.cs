@@ -4,33 +4,37 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Ark.V1;
 using BTCPayServer.Plugins.ArkPayServer.Data;
-using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Hosting;
 using NArk;
+using NArk.Abstractions.Wallets;
 using NArk.Contracts;
 using NArk.Services;
 using NArk.Models;
+using NArk.Transport;
 using NBitcoin;
 using NBitcoin.Secp256k1;
 using NArk.Extensions;
-using NArk.Services.Abstractions;
+using NArk.Swaps.Helpers;
 using BTCPayServer.Plugins.ArkPayServer.Cache;
+using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using BTCPayServer.Lightning;
+using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
+using ArkWallet = BTCPayServer.Plugins.ArkPayServer.Data.Entities.ArkWallet;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
 
 public class ArkWalletService(
     TrackedContractsCache activeContractsCache,
     ArkPluginDbContextFactory dbContextFactory,
-    IOperatorTermsService operatorTermsService,
+    IClientTransport clientTransport,
     ArkVtxoSynchronizationService arkVtxoSyncronizationService,
     IMemoryCache memoryCache,
     ILogger<ArkWalletService> logger) : IHostedService, IArkadeMultiWalletSigner
 {
-
     private TaskCompletionSource started = new();
-    private ConcurrentDictionary<string, ECPrivKey> walletSigners = new();
+    private ConcurrentDictionary<string, ISigningEntity> walletSigners = new();
+    private Network? _network;
 
     public async Task<ArkWallet?> GetWallet(string walletId, CancellationToken cancellationToken)
     {
@@ -85,23 +89,31 @@ public class ArkWalletService(
 
     public async Task<ArkContract> DerivePaymentContract(string walletId, CancellationToken cancellationToken)
     {
-        var terms = await operatorTermsService.GetOperatorTerms(cancellationToken);
+        var serverInfo = await clientTransport.GetServerInfoAsync(cancellationToken);
         return (await DeriveNewContract(walletId, async wallet =>
         {
-            var paymentContract = ContractUtils.DerivePaymentContract(
-                new DeriveContractRequest(terms, wallet.PublicKey, RandomUtils.GetBytes(32)));
-            var address = paymentContract.GetArkAddress();
+            // Get the signing entity for this wallet
+            var signingEntity = await CreateSigner(walletId, cancellationToken);
+            var userDescriptor = await signingEntity.GetOutputDescriptor(cancellationToken);
+
+            // Create the payment contract with the new NNark API
+            var paymentContract = new ArkPaymentContract(
+                serverInfo.SignerKey,
+                serverInfo.UnilateralExit,
+                userDescriptor);
+
+            var entity = paymentContract.ToEntity(walletId);
             var contract = new ArkWalletContract
             {
                 WalletId = walletId,
                 Active = true,
-                ContractData = paymentContract.GetContractData(),
-                Script = address.ScriptPubKey.ToHex(),
-                Type = paymentContract.Type,
-
+                ContractData = entity.AdditionalData,
+                Script = entity.Script,
+                Type = entity.Type,
+                SigningEntityDescriptor = userDescriptor.ToString()
             };
 
-            return (contract, paymentContract);
+            return (contract, (ArkContract)paymentContract);
         }, cancellationToken))!;
     }
 
@@ -137,28 +149,32 @@ public class ArkWalletService(
     public async Task<string> Upsert(string walletValue, string? destination, bool owner,
         CancellationToken cancellationToken = default)
     {
-        var publicKey = KeyExtensions.GetXOnlyPubKeyFromWallet(walletValue);
-        var terms = await operatorTermsService.GetOperatorTerms(cancellationToken);
+        var serverInfo = await clientTransport.GetServerInfoAsync(cancellationToken);
+
+        // Extract public key from wallet value (nsec)
+        var signingEntity = SingleKeySigningEntity.FromNsec(walletValue, serverInfo.Network);
+        var publicKey = (await signingEntity.GetPublicKey(cancellationToken)).ToXOnlyPubKey();
+        var walletId = Convert.ToHexString(publicKey.ToBytes()).ToLowerInvariant();
+
         if (destination is not null)
         {
             var addr = ArkAddress.Parse(destination);
-            if (!terms.SignerKey.ToBytes().SequenceEqual(addr.ServerKey.ToBytes()))
+            var serverKey = OutputDescriptorHelpers.Extract(serverInfo.SignerKey).XOnlyPubKey;
+            if (!serverKey.ToBytes().SequenceEqual(addr.ServerKey.ToBytes()))
             {
                 throw new InvalidOperationException("Invalid destination server key.");
             }
-            
         }
 
         await using var dbContext = dbContextFactory.CreateContext();
         var wallet = new ArkWallet()
         {
-            Id = publicKey.ToHex(),
+            Id = walletId,
             WalletDestination = destination,
             Wallet = walletValue,
         };
         var commandBuilder = dbContext.Wallets.Upsert(wallet);
 
-        
         if (!owner)
         {
             commandBuilder = commandBuilder.NoUpdate();
@@ -166,24 +182,34 @@ public class ArkWalletService(
 
         if (await commandBuilder.RunAsync(cancellationToken) > 0)
         {
-            memoryCache.Set("ark-wallet-" + publicKey.ToHex(),wallet);
+            memoryCache.Set("ark-wallet-" + walletId, wallet);
         }
-        LoadWalletSigner(publicKey.ToHex(), walletValue);
+        LoadWalletSigner(walletId, walletValue, serverInfo.Network);
 
-        await DeriveNewContract(publicKey.ToHex(), wallet =>
+        await DeriveNewContract(walletId, async w =>
         {
-            var contract = ContractUtils.DerivePaymentContract(new DeriveContractRequest(terms, wallet.PublicKey));
-            return Task.FromResult<(ArkWalletContract newContractData, ArkContract newContract)?>((new ArkWalletContract
+            // Get signing entity and descriptor
+            var signer = await CreateSigner(walletId, cancellationToken);
+            var userDescriptor = await signer.GetOutputDescriptor(cancellationToken);
+
+            var paymentContract = new ArkPaymentContract(
+                serverInfo.SignerKey,
+                serverInfo.UnilateralExit,
+                userDescriptor);
+
+            var entity = paymentContract.ToEntity(walletId);
+            return (new ArkWalletContract
             {
-                WalletId = publicKey.ToHex(),
+                WalletId = walletId,
                 Active = true,
-                ContractData = contract.GetContractData(),
-                Script = contract.GetArkAddress().ScriptPubKey.ToHex(),
-                Type = contract.Type,
-            }, contract));
+                ContractData = entity.AdditionalData,
+                Script = entity.Script,
+                Type = entity.Type,
+                SigningEntityDescriptor = userDescriptor.ToString()
+            }, (ArkContract)paymentContract);
         }, cancellationToken);
-        
-        return publicKey.ToHex();
+
+        return walletId;
     }
 
     public async Task ToggleContract(string detailsWalletId, ArkContract detailsContract, bool active)
@@ -247,9 +273,10 @@ public class ArkWalletService(
     {
         if (destination is not null)
         {
-            var terms = await operatorTermsService.GetOperatorTerms(cancellationToken);
+            var serverInfo = await clientTransport.GetServerInfoAsync(cancellationToken);
             var addr = ArkAddress.Parse(destination);
-            if (!terms.SignerKey.ToBytes().SequenceEqual(addr.ServerKey.ToBytes()))
+            var serverKey = OutputDescriptorHelpers.Extract(serverInfo.SignerKey).XOnlyPubKey;
+            if (!serverKey.ToBytes().SequenceEqual(addr.ServerKey.ToBytes()))
             {
                 throw new InvalidOperationException("Invalid destination server key.");
             }
@@ -264,13 +291,17 @@ public class ArkWalletService(
 
         wallet.WalletDestination = destination;
         await dbContext.SaveChangesAsync(cancellationToken);
-        
+
         // Update cache
         memoryCache.Set("ark-wallet-" + walletId, wallet);
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        // Get network from server info
+        var serverInfo = await clientTransport.GetServerInfoAsync(cancellationToken);
+        _network = serverInfo.Network;
+
         await using var dbContext = dbContextFactory.CreateContext();
 
         // load all wallets that have a private key as a signer
@@ -278,18 +309,19 @@ public class ArkWalletService(
             .Select(wallet => new { wallet.Id, wallet.Wallet }).ToListAsync(cancellationToken);
         foreach (var wallet in wallets)
         {
-            LoadWalletSigner(wallet.Id, wallet.Wallet);
+            LoadWalletSigner(wallet.Id, wallet.Wallet, _network);
         }
 
         started.SetResult();
     }
 
-    private void LoadWalletSigner(string id, string wallet)
+    private void LoadWalletSigner(string id, string wallet, Network network)
     {
         try
         {
-            walletSigners[id] = KeyExtensions.GetKeyFromWallet(wallet);
-
+            // Parse nsec to get signing entity
+            var signingEntity = SingleKeySigningEntity.FromNsec(wallet, network);
+            walletSigners[id] = signingEntity;
         }
         catch (Exception e)
         {
@@ -301,6 +333,7 @@ public class ArkWalletService(
     {
         started = new TaskCompletionSource();
         walletSigners = new();
+        _network = null;
         return Task.CompletedTask;
     }
 
@@ -310,9 +343,9 @@ public class ArkWalletService(
         return walletSigners.ContainsKey(walletId);
     }
 
-    public Task<IArkadeWalletSigner> CreateSigner(string walletId, CancellationToken cancellationToken = default)
+    public Task<ISigningEntity> CreateSigner(string walletId, CancellationToken cancellationToken = default)
     {
-        return Task.FromResult<IArkadeWalletSigner>(new MemoryWalletSigner(walletSigners[walletId]));
+        return Task.FromResult(walletSigners[walletId]);
     }
 
     public async Task UpdateBalances(string configWalletId, bool onlyActive,

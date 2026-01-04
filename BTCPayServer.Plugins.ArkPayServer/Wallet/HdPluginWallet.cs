@@ -1,6 +1,5 @@
 using NArk.Abstractions.Wallets;
-using NArk.Extensions;
-using NArk.Helpers;
+using NArk.Swaps.Helpers;
 using NBitcoin;
 using NBitcoin.Scripting;
 using NBitcoin.Secp256k1;

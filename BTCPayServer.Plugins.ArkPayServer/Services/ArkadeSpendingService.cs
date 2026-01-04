@@ -7,12 +7,12 @@ using BTCPayServer.Plugins.ArkPayServer.Exceptions;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Services.Invoices;
 using NArk;
-using NArk.Services.Abstractions;
+using NArk.Transport;
 using NBitcoin;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
 
-public class ArkadeSpendingService(ArkWalletService arkWalletService, ArkadeSpender arkadeSpender, IOperatorTermsService operatorTermsService, PaymentMethodHandlerDictionary paymentMethodHandlerDictionary)
+public class ArkadeSpendingService(ArkWalletService arkWalletService, ArkadeSpender arkadeSpender, IClientTransport clientTransport, PaymentMethodHandlerDictionary paymentMethodHandlerDictionary)
 {
     public async Task<string?> Spend(StoreData store, string destination, CancellationToken cancellationToken)
     {
@@ -27,7 +27,7 @@ public class ArkadeSpendingService(ArkWalletService arkWalletService, ArkadeSpen
         if (!config.GeneratedByStore)
             throw new IncompleteArkadeSetupException("Wallet does not belong to the current store.");
         
-        var terms = await operatorTermsService.GetOperatorTerms(cancellationToken);
+        var terms = await clientTransport.GetServerInfoAsync(cancellationToken);
         
         if (destination.Replace("lightning:", "", StringComparison.InvariantCultureIgnoreCase) is { } lnbolt11 &&
             BOLT11PaymentRequest.TryParse(lnbolt11, out var bolt11, terms.Network))
