@@ -6,31 +6,36 @@ using BTCPayServer.Abstractions.Models;
 using BTCPayServer.Configuration;
 using BTCPayServer.Lightning;
 using BTCPayServer.Payments;
+using BTCPayServer.PayoutProcessors;
 using BTCPayServer.Payouts;
 using BTCPayServer.Plugins.ArkPayServer.Data;
 using BTCPayServer.Plugins.ArkPayServer.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
+using BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
 using BTCPayServer.Plugins.ArkPayServer.Services;
+using BTCPayServer.Plugins.ArkPayServer.Services.Policies;
 using BTCPayServer.Plugins.ArkPayServer.Storage;
+using Grpc.Net.ClientFactory;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using NArk;
+using NArk.Abstractions.Blockchain;
 using NArk.Abstractions.Contracts;
 using NArk.Abstractions.Intents;
+using NArk.Abstractions.Safety;
 using NArk.Abstractions.VTXOs;
-using NArk.Helpers;
+using NArk.Abstractions.Wallets;
+using NArk.Hosting;
+using NArk.Services;
+using NArk.Sweeper;
 using NArk.Swaps.Abstractions;
 using NArk.Swaps.Boltz.Client;
+using NArk.Swaps.Services;
 using NArk.Transport;
 using NArk.Transport.GrpcClient;
 using NBitcoin;
 using System.Reflection;
 using System.Text.Json;
-using BTCPayServer.PayoutProcessors;
-using Grpc.Net.ClientFactory;
-using BTCPayServer.Plugins.ArkPayServer.Cache;
-using BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
 
 namespace BTCPayServer.Plugins.ArkPayServer;
 
@@ -74,7 +79,6 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         serviceCollection.AddSingleton<AsyncKeyedLocker>();
         
         serviceCollection.AddSingleton<ArkadeWalletSignerProvider>();
-        serviceCollection.AddSingleton<ArkadeContractSweeper>();
         serviceCollection.AddDbContext<ArkPluginDbContext>((provider, o) =>
         {
             var factory = provider.GetRequiredService<ArkPluginDbContextFactory>();
@@ -82,38 +86,47 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         });
         serviceCollection.AddStartupTask<ArkPluginMigrationRunner>();
 
-        // Register NNark storage adapters
+        // Register NNark storage adapters (plugin-specific EF Core implementations)
         serviceCollection.AddSingleton<IVtxoStorage, EfCoreVtxoStorage>();
         serviceCollection.AddSingleton<IContractStorage, EfCoreContractStorage>();
         serviceCollection.AddSingleton<IIntentStorage, EfCoreIntentStorage>();
         serviceCollection.AddSingleton<ISwapStorage, EfCoreSwapStorage>();
+        serviceCollection.AddSingleton<IWalletStorage, EfCoreWalletStorage>();
 
+        // Register NNark core abstractions (plugin-specific implementations)
+        serviceCollection.AddSingleton<ISafetyService, NArk.Safety.AsyncKeyedLock.AsyncSafetyService>();
+        serviceCollection.AddSingleton<IWallet, Wallet.PluginWalletAdapter>();
+        serviceCollection.AddSingleton<IChainTimeProvider>(provider => provider.GetRequiredService<BitcoinTimeChainProvider>());
+
+        // Register NNark core services using the hosting extension
+        serviceCollection.AddArkCoreServices();
+
+        // Register plugin-specific sweep policies for automatic VTXO consolidation
+        serviceCollection.AddSingleton<ISweepPolicy, HashlockPaymentSweepPolicy>();
+        serviceCollection.AddSingleton<ISweepPolicy, DestinationSweepPolicy>();
+
+        // Configure NNark SimpleIntentScheduler for automatic VTXO refresh
+        serviceCollection.Configure<NArk.Models.Options.SimpleIntentSchedulerOptions>(options =>
+        {
+            options.Threshold = TimeSpan.FromDays(1); // Refresh VTXOs expiring within 1 day
+        });
+        serviceCollection.AddSingleton<IIntentScheduler, SimpleIntentScheduler>();
+
+        // Plugin-specific services
         serviceCollection.AddSingleton<ArkWalletService>();
         serviceCollection.AddSingleton<ArkadeSpender>();
-        // Note: ArkTransactionBuilder is now TransactionHelpers.ArkTransactionBuilder in NNark
-        // serviceCollection.AddSingleton<TransactionHelpers.ArkTransactionBuilder>();
         serviceCollection.AddSingleton<ArkadeCheckoutModelExtension>();
         serviceCollection.AddSingleton<ArkadeCheckoutCheatModeExtension>();
         serviceCollection.AddSingleton<ICheckoutModelExtension>(provider => provider.GetRequiredService<ArkadeCheckoutModelExtension>());
         serviceCollection.AddSingleton<ICheckoutCheatModeExtension>(provider => provider.GetRequiredService<ArkadeCheckoutCheatModeExtension>());
         serviceCollection.AddSingleton<IArkadeMultiWalletSigner>(provider => provider.GetRequiredService<ArkWalletService>());
-        serviceCollection.AddSingleton<ArkVtxoSynchronizationService>();
         serviceCollection.AddSingleton<ArkContractInvoiceListener>();
-        serviceCollection.AddSingleton<ArkIntentService>();
-        serviceCollection.AddSingleton<ArkIntentScheduler>();
         serviceCollection.AddSingleton<BitcoinTimeChainProvider>();
         serviceCollection.AddHostedService<ArkWalletService>(provider => provider.GetRequiredService<ArkWalletService>());
-        serviceCollection.AddHostedService<ArkVtxoSynchronizationService>(provider => provider.GetRequiredService<ArkVtxoSynchronizationService>());
         serviceCollection.AddHostedService<ArkContractInvoiceListener>(provider => provider.GetRequiredService<ArkContractInvoiceListener>());
-        serviceCollection.AddHostedService<ArkadeContractSweeper>(provider => provider.GetRequiredService<ArkadeContractSweeper>());
-        serviceCollection.AddHostedService<ArkIntentService>(provider => provider.GetRequiredService<ArkIntentService>());
-        // serviceCollection.AddHostedService<ArkIntentScheduler>(provider => provider.GetRequiredService<ArkIntentScheduler>());
         serviceCollection.AddHostedService<BitcoinTimeChainProvider>(provider => provider.GetRequiredService<BitcoinTimeChainProvider>());
 
         serviceCollection.AddSingleton<ArkadeSpendingService>();
-
-        serviceCollection.AddSingleton<TrackedContractsCache>();
-        serviceCollection.AddHostedService<TrackedContractsCache>(provider => provider.GetRequiredService<TrackedContractsCache>());
 
         // Register Arkade checkout view
         serviceCollection.AddUIExtension("checkout-end", "Arkade/ArkadeMethodCheckout");
@@ -154,13 +167,15 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
             {
                 client.BaseAddress = new Uri(config.BoltzUri);
             });
-            
-            // Register the Boltz swap services only when BoltzClient is available
-            serviceCollection.AddSingleton<PluginBoltzSwapService>();
-            serviceCollection.AddSingleton<BoltzService>();
-            serviceCollection.AddHostedService<BoltzService>(provider => provider.GetRequiredService<BoltzService>());
+
+            // Register NNark swap services (SwapsManagementService + SwapSweepPolicy)
+            serviceCollection.AddArkSwapServices();
+
+            // Register plugin-specific Boltz limits service
+            serviceCollection.AddSingleton<BoltzLimitsService>();
+
             serviceCollection.AddUIExtension("ln-payment-method-setup-tabhead", "/Views/Ark/ArkLNSetupTabhead.cshtml");
-            
+
             // Register LNURL filter to apply Boltz limits
             serviceCollection.AddSingleton<ArkadeLNURLPayRequestFilter>();
             serviceCollection.AddSingleton<IPluginHookFilter>(provider => provider.GetRequiredService<ArkadeLNURLPayRequestFilter>());
@@ -169,7 +184,8 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         {
             // Register null implementations so DI can inject null for optional dependencies
             serviceCollection.AddSingleton<BoltzClient>(provider => null!);
-            serviceCollection.AddSingleton<BoltzService>(provider => null!);
+            serviceCollection.AddSingleton<SwapsManagementService>(provider => null!);
+            serviceCollection.AddSingleton<BoltzLimitsService>(provider => null!);
         }
     }
 

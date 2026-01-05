@@ -1,11 +1,12 @@
 ﻿using BTCPayServer.HostedServices;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
+using NArk.Abstractions.Blockchain;
 using Newtonsoft.Json;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
 
-public class BitcoinTimeChainProvider : EventHostedServiceBase
+public class BitcoinTimeChainProvider : EventHostedServiceBase, IChainTimeProvider
 {
     private readonly ExplorerClientProvider _explorerClientProvider;
     private readonly IMemoryCache _cache;
@@ -45,6 +46,15 @@ public class BitcoinTimeChainProvider : EventHostedServiceBase
             var info = JsonConvert.DeserializeObject<GetBlockchainInfoResponse>(result.ResultString);
             return (info.MedianTime, info.Blocks);
         });
+    }
+
+    /// <summary>
+    /// Implements IChainTimeProvider.GetChainTime for NNark compatibility.
+    /// </summary>
+    public async Task<TimeHeight> GetChainTime(CancellationToken cancellationToken = default)
+    {
+        var (timestamp, height) = await Get(cancellationToken);
+        return new TimeHeight(DateTimeOffset.FromUnixTimeSeconds(timestamp), height);
     }
 
     public class GetBlockchainInfoResponse

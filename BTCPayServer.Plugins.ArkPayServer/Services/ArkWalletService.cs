@@ -16,7 +16,6 @@ using NBitcoin;
 using NBitcoin.Secp256k1;
 using NArk.Extensions;
 using NArk.Swaps.Helpers;
-using BTCPayServer.Plugins.ArkPayServer.Cache;
 using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using BTCPayServer.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
@@ -25,10 +24,9 @@ using ArkWallet = BTCPayServer.Plugins.ArkPayServer.Data.Entities.ArkWallet;
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
 
 public class ArkWalletService(
-    TrackedContractsCache activeContractsCache,
     ArkPluginDbContextFactory dbContextFactory,
     IClientTransport clientTransport,
-    ArkVtxoSynchronizationService arkVtxoSyncronizationService,
+    VtxoPollingService vtxoPollingService,
     IMemoryCache memoryCache,
     ILogger<ArkWalletService> logger) : IHostedService, IArkadeMultiWalletSigner
 {
@@ -141,8 +139,6 @@ public class ArkWalletService(
             logger.LogInformation("New contract derived for wallet {WalletId}: {Script}", walletId,
             contract.Value.newContractData.Script);
 
-        activeContractsCache.TriggerUpdate();
-
         return contract.Value.newContract;
     }
 
@@ -232,10 +228,7 @@ public class ArkWalletService(
             detailsWalletId);
 
         contract.Active = active;
-        if (await dbContext.SaveChangesAsync() > 0)
-        {
-            activeContractsCache.TriggerUpdate();
-        }
+        await dbContext.SaveChangesAsync();
     }
 
     public async Task<bool> WalletExists(string walletId, CancellationToken cancellationToken = default)
@@ -357,7 +350,7 @@ public class ArkWalletService(
             .Select(c => c.Script)
             .ToListAsync(cancellationToken);
 
-        await arkVtxoSyncronizationService.PollScriptsForVtxos(wallets.ToHashSet(), cancellationToken);
+        await vtxoPollingService.PollScriptsForVtxos(wallets.ToHashSet(), cancellationToken);
     }
 
     public async Task<(IReadOnlyCollection<ArkWalletContract> Contracts, Dictionary<string, VTXO[]> ContractVtxos)> GetArkWalletContractsAsync(

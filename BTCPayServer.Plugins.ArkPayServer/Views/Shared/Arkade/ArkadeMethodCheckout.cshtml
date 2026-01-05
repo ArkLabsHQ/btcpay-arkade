@@ -15,32 +15,32 @@
 
 <template id="@ArkadePlugin.CheckoutBodyComponentName">
     <div class="payment-box">
-        <div v-if="model.invoiceBitcoinUrlQR" class="qr-container clipboard-button" :data-qr-value="model.invoiceBitcoinUrlQR" :data-clipboard="model.invoiceBitcoinUrl" data-clipboard-confirm-element="#Address_@Model.PaymentMethodId [data-clipboard]">
+        <div v-if="model.invoiceBitcoinUrlQR" class="qr-container clipboard-button" :data-qr-value="model.invoiceBitcoinUrlQR" :data-clipboard="model.invoiceBitcoinUrl" data-clipboard-confirm-element="#Address_@Model.PaymentMethodId [data-clipboard]" data-testid="arkade-qr">
             <div>
                 <qrcode :value="model.invoiceBitcoinUrlQR" tag="div" :options="qrOptions" />
             </div>
             <img class="qr-icon" :src="model.cryptoImage" :alt="model.paymentMethodName"/>
         </div>
-        <div v-if="model.address" class="input-group mt-3">
+        <div v-if="model.address" class="input-group mt-3" data-testid="ark-address">
             <div class="form-floating" id="ArkAddress_@Model.PaymentMethodId">
                 <vc:truncate-center text="model.address" is-vue="true" padding="15" elastic="true" classes="form-control-plaintext" />
                 <label>Ark Address</label>
             </div>
         </div>
-        <div v-if="onchainAddress" class="input-group mt-3">
+        <div v-if="onchainAddress" class="input-group mt-3" data-testid="onchain-address">
             <div class="form-floating" id="OnchainAddress_@Model.PaymentMethodId">
                 <vc:truncate-center text="onchainAddress" is-vue="true" padding="15" elastic="true" classes="form-control-plaintext" />
                 <label>Bitcoin Address</label>
             </div>
         </div>
-        <div v-if="lightning && shouldShowLightning" class="input-group mt-3">
+        <div v-if="lightning && shouldShowLightning" class="input-group mt-3" data-testid="bolt11-invoice">
             <div class="form-floating" id="Lightning_@Model.PaymentMethodId">
                 <vc:truncate-center text="lightning" is-vue="true" padding="15" elastic="true" classes="form-control-plaintext" />
                 <label v-t="'lightning'"></label>
             </div>
         </div>
         <a v-if="model.invoiceBitcoinUrl && model.showPayInWalletButton" class="btn btn-primary rounded-pill w-100 mt-4" id="PayInWallet" target="_blank"
-           :href="model.invoiceBitcoinUrl" :title="$t('Arkade payment link')" v-t="'pay_in_wallet'"></a>
+           :href="model.invoiceBitcoinUrl" :title="$t('Arkade payment link')" v-t="'pay_in_wallet'" data-testid="pay-in-wallet-btn"></a>
         
         <!-- NFC Support baked in -->
         <div v-if="nfcDisplay" class="mt-4" id="NFC">

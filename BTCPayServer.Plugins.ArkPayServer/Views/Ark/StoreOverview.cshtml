@@ -38,19 +38,19 @@ else
             <div class="card-body">
                 <div class="row g-2">
                     <div class="col-6">
-                        <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#transferModal">
+                        <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#transferModal" data-testid="send-btn">
                             Transfer Funds
                         </button>
                     </div>
                     <div class="col-6">
                         <form asp-action="SyncWallet" method="post" asp-route-storeId="@storeId" class="h-100">
-                            <button type="submit" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center">
+                            <button type="submit" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-testid="sync-wallet-btn">
                                 Sync Wallet
                             </button>
                         </form>
                     </div>
                     <div class="col-6">
-                        <a asp-action="Vtxos" asp-route-storeId="@storeId" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center">
+                        <a asp-action="Vtxos" asp-route-storeId="@storeId" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-testid="view-vtxos-btn">
                             View VTXOs
                         </a>
                     </div>
@@ -75,13 +75,13 @@ else
                     @if (Model.SignerAvailable && !string.IsNullOrEmpty(Model.Wallet))
                     {
                         <div class="col-6">
-                            <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#showPrivateKeyModal">
+                            <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#showPrivateKeyModal" data-testid="show-private-key-btn">
                                 Show Private Key
                             </button>
                         </div>
                     }
                     <div class="col-6">
-                        <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#clearWalletModal">
+                        <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#clearWalletModal" data-testid="clear-wallet-btn">
                             Clear Wallet
                         </button>
                     </div>
@@ -102,8 +102,8 @@ else
                     <div class="mb-3">
                         <label class="text-muted small">Default Ark Address</label>
                         <div class="input-group input-group-sm">
-                            <input type="text" class="form-control form-control-sm font-monospace" value="@Model.DefaultAddress" readonly />
-                            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="copyAddress()">
+                            <input type="text" class="form-control form-control-sm font-monospace" value="@Model.DefaultAddress" readonly data-testid="receive-address" />
+                            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="copyAddress()" data-testid="copy-address-btn">
                                 📋
                             </button>
                         </div>
@@ -244,20 +244,20 @@ else
 </div>
 <partial name="_ServiceConnections" model="Model" />
 <!-- Transfer Modal -->
-<div class="modal fade" id="transferModal" tabindex="-1" aria-labelledby="transferModalLabel" aria-hidden="true">
+<div class="modal fade" id="transferModal" tabindex="-1" aria-labelledby="transferModalLabel" aria-hidden="true" data-testid="transfer-modal">
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title" id="transferModalLabel">Transfer Funds</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close" data-testid="close-modal-btn"></button>
             </div>
             <form asp-action="SpendOverview" method="get" asp-route-storeId="@storeId">
                 <div class="modal-body">
                     <div class="form-group mb-3">
                         <label class="form-label">Destination</label>
-                        <input type="text" name="destinations" class="form-control" 
-                               placeholder="BIP21 URI, Lightning invoice, or Ark address..." 
-                               required />
+                        <input type="text" name="destinations" class="form-control"
+                               placeholder="BIP21 URI, Lightning invoice, or Ark address..."
+                               required data-testid="destination-input" />
                         <div class="form-text">
                             Enter a BIP21 URI, Lightning invoice (BOLT11), or Ark address to send funds to
                         </div>
@@ -277,7 +277,7 @@ else
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Continue</button>
+                    <button type="submit" class="btn btn-primary" data-testid="confirm-send-btn">Continue</button>
                 </div>
             </form>
         </div>

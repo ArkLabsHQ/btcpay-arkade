@@ -1,9 +1,6 @@
 using BTCPayServer.Abstractions.Contracts;
-using BTCPayServer.Client;
 using BTCPayServer.Client.Models;
-using BTCPayServer.Common;
 using BTCPayServer.Data;
-using BTCPayServer.Payments;
 using BTCPayServer.PayoutProcessors;
 using BTCPayServer.Payouts;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;

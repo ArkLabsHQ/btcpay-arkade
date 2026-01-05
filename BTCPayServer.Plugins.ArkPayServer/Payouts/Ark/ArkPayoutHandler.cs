@@ -8,10 +8,8 @@ using BTCPayServer.Data;
 using BTCPayServer.HostedServices;
 using BTCPayServer.Payments.Bitcoin;
 using BTCPayServer.Payouts;
-using BTCPayServer.Plugins.ArkPayServer.Cache;
 using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using BTCPayServer.Plugins.ArkPayServer.Exceptions;
-using BTCPayServer.Plugins.ArkPayServer.Models.Events;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Services;
 using BTCPayServer.Services;
@@ -23,6 +21,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using NArk;
+using NArk.Abstractions.VTXOs;
 using NArk.Transport;
 using NArk.Swaps.Helpers;
 using NBitcoin;
@@ -34,20 +33,45 @@ using StoreData = BTCPayServer.Data.StoreData;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
 
-public class ArkPayoutHandler(
-    ILogger<ArkPayoutHandler> logger,
-    IClientTransport clientTransport,
-    EventAggregator eventAggregator,
-    PaymentMethodHandlerDictionary paymentMethodHandlerDictionary,
-    ApplicationDbContextFactory dbContextFactory,
-    BTCPayNetworkJsonSerializerSettings jsonSerializerSettings,
-    BTCPayNetworkProvider networkProvider,
-    TrackedContractsCache trackedContractsCache,
-    NotificationSender notificationSender,
-        ArkConfiguration arkConfiguration
-    
-) : IPayoutHandler, IHasNetwork
+public class ArkPayoutHandler : IPayoutHandler, IHasNetwork
 {
+    private readonly ILogger<ArkPayoutHandler> _logger;
+    private readonly IClientTransport _clientTransport;
+    private readonly EventAggregator _eventAggregator;
+    private readonly PaymentMethodHandlerDictionary _paymentMethodHandlerDictionary;
+    private readonly ApplicationDbContextFactory _dbContextFactory;
+    private readonly BTCPayNetworkJsonSerializerSettings _jsonSerializerSettings;
+    private readonly BTCPayNetworkProvider _networkProvider;
+    private readonly NotificationSender _notificationSender;
+    private readonly ArkConfiguration _arkConfiguration;
+    private readonly IVtxoStorage _vtxoStorage;
+
+    public ArkPayoutHandler(
+        ILogger<ArkPayoutHandler> logger,
+        IClientTransport clientTransport,
+        EventAggregator eventAggregator,
+        PaymentMethodHandlerDictionary paymentMethodHandlerDictionary,
+        ApplicationDbContextFactory dbContextFactory,
+        BTCPayNetworkJsonSerializerSettings jsonSerializerSettings,
+        BTCPayNetworkProvider networkProvider,
+        NotificationSender notificationSender,
+        ArkConfiguration arkConfiguration,
+        IVtxoStorage vtxoStorage)
+    {
+        _logger = logger;
+        _clientTransport = clientTransport;
+        _eventAggregator = eventAggregator;
+        _paymentMethodHandlerDictionary = paymentMethodHandlerDictionary;
+        _dbContextFactory = dbContextFactory;
+        _jsonSerializerSettings = jsonSerializerSettings;
+        _networkProvider = networkProvider;
+        _notificationSender = notificationSender;
+        _arkConfiguration = arkConfiguration;
+        _vtxoStorage = vtxoStorage;
+
+        // Subscribe directly to NNark's VTXO storage events
+        _vtxoStorage.VtxosChanged += OnVtxoChanged;
+    }
     public AsyncKeyedLock.AsyncKeyedLocker<string> PayoutLocker = new AsyncKeyedLocker<string>();
     
     public string Currency => "BTC";
@@ -59,7 +83,7 @@ public class ArkPayoutHandler(
             storeData
                 .GetPaymentMethodConfig<ArkadePaymentMethodConfig>(
                     ArkadePlugin.ArkadePaymentMethodId,
-                    paymentMethodHandlerDictionary,
+                    _paymentMethodHandlerDictionary,
                     true
                 );
 
@@ -68,7 +92,6 @@ public class ArkPayoutHandler(
 
     public Task TrackClaim(ClaimRequest claimRequest, PayoutData payoutData)
     {
-        trackedContractsCache.TriggerUpdate();
         return Task.CompletedTask;
     }
 
@@ -78,7 +101,7 @@ public class ArkPayoutHandler(
         destination = destination.Trim();
         try
         {
-            var terms = await clientTransport.GetServerInfoAsync(cancellationToken);
+            var terms = await _clientTransport.GetServerInfoAsync(cancellationToken);
 
             if (destination.StartsWith("bitcoin:", StringComparison.InvariantCultureIgnoreCase))
             {
@@ -112,14 +135,14 @@ public class ArkPayoutHandler(
         var parseResult = ParseProofType(payout.Proof);
         if (parseResult is null)
             return null!;
-        
+
         if (parseResult.Value.MaybeType == ArkPayoutProof.Type)
         {
             var res = parseResult.Value.Object.ToObject<ArkPayoutProof>(
-                JsonSerializer.Create(jsonSerializerSettings.GetSerializer(payoutMethodId))
+                JsonSerializer.Create(_jsonSerializerSettings.GetSerializer(payoutMethodId))
             )!;
-            
-            res.Link = $"{arkConfiguration.ArkUri}/v1/indexer/vtxos?scripts={ArkAddress.Parse(payout.DedupId).ScriptPubKey.ToHex()}";
+
+            res.Link = $"{_arkConfiguration.ArkUri}/v1/indexer/vtxos?scripts={ArkAddress.Parse(payout.DedupId).ScriptPubKey.ToHex()}";
             return res;
         }
 
@@ -152,72 +175,72 @@ public class ArkPayoutHandler(
 
     public void StartBackgroundCheck(Action<Type[]> subscribe)
     {
-        subscribe([typeof(VTXOsUpdated)]);
+        // We subscribe directly to IVtxoStorage.VtxosChanged in constructor
     }
 
-    public async Task BackgroundCheck(object o)
+    public Task BackgroundCheck(object o)
     {
-        if (o is VTXOsUpdated vtxoEvent)
-        {
+        // We handle VTXO changes via OnVtxoChanged event handler
+        return Task.CompletedTask;
+    }
 
-            var terms = await clientTransport.GetServerInfoAsync();
+    private async void OnVtxoChanged(object? sender, ArkVtxo vtxo)
+    {
+        try
+        {
+            // Skip spent VTXOs
+            if (vtxo.SpentByTransactionId is not null)
+                return;
+
+            var terms = await _clientTransport.GetServerInfoAsync();
             var serverKey = OutputDescriptorHelpers.Extract(terms.SignerKey).XOnlyPubKey;
-            var newVtxos = vtxoEvent.Vtxos.Where(vtxo => vtxo.SpentByTransactionId is null)
-                .GroupBy(vtxo => vtxo.Script).ToDictionary(g => ArkAddress.FromScriptPubKey(Script.FromHex(g.Key), serverKey).ToString(terms.Network.ChainName == ChainName.Mainnet), g => g.ToArray());           
-            
-            var addresses = newVtxos.Keys.ToArray();
-            
-            await using var ctx = dbContextFactory.CreateContext();
-            var payouts = await ctx.Payouts
-                .Include(o => o.StoreData)
-                .Include(o => o.PullPaymentData)
+            var address = ArkAddress.FromScriptPubKey(Script.FromHex(vtxo.Script), serverKey)
+                .ToString(terms.Network.ChainName == ChainName.Mainnet);
+
+            await using var ctx = _dbContextFactory.CreateContext();
+            var payout = await ctx.Payouts
+                .Include(p => p.StoreData)
+                .Include(p => p.PullPaymentData)
                 .Where(p => p.State == PayoutState.AwaitingPayment)
                 .Where(p => p.PayoutMethodId == PayoutMethodId.ToString())
-                .Where(p => addresses.Contains(p.DedupId))
-                .ToListAsync();
+                .Where(p => p.DedupId == address)
+                .FirstOrDefaultAsync();
 
-            foreach (var payout in payouts)
+            if (payout is null)
+                return;
+
+            if (PayoutLocker.LockOrNullAsync(payout.Id, 0) is var locker && await locker is { } disposable)
             {
-                if (PayoutLocker.LockOrNullAsync(payout.Id, 0) is var locker && await locker is { } disposable)
+                using (disposable)
                 {
-                    using (disposable)
-                    {
+                    // Check if amount matches
+                    var vtxoAmount = Money.Satoshis(vtxo.Amount).ToDecimal(MoneyUnit.BTC);
+                    if (payout.Amount is null || vtxoAmount != payout.Amount)
+                        return;
 
-
-                        if (!newVtxos.TryGetValue(payout.DedupId, out var matched))
+                    SetProofBlob(payout,
+                        new ArkPayoutProof { TransactionId = uint256.Parse(vtxo.TransactionId), DetectedInBackground = true });
+                    await _notificationSender.SendNotification(new StoreScope(payout.StoreDataId),
+                        new ExternalPayoutTransactionNotification()
                         {
-                            continue;
-                        }
-
-                        if (payout.Amount is null || matched.All(vtxo =>
-                                Money.Satoshis(vtxo.Amount).ToDecimal(MoneyUnit.BTC) != payout.Amount))
-                        {
-                            continue;
-                        }
-
-                        var txId = matched
-                            .First(vtxo => Money.Satoshis(vtxo.Amount).ToDecimal(MoneyUnit.BTC) == payout.Amount)
-                            .TransactionId;
-                        SetProofBlob(payout,
-                            new ArkPayoutProof {TransactionId = uint256.Parse(txId), DetectedInBackground = true,});
-                        await notificationSender.SendNotification(new StoreScope(payout.StoreDataId),
-                            new ExternalPayoutTransactionNotification()
-                            {
-                                PaymentMethod = payout.PayoutMethodId,
-                                PayoutId = payout.Id,
-                                StoreId = payout.StoreDataId
-                            });
-                        await ctx.SaveChangesAsync();
-                        eventAggregator.Publish(new PayoutEvent(PayoutEvent.PayoutEventType.Updated, payout));
-                    }
+                            PaymentMethod = payout.PayoutMethodId,
+                            PayoutId = payout.Id,
+                            StoreId = payout.StoreDataId
+                        });
+                    await ctx.SaveChangesAsync();
+                    _eventAggregator.Publish(new PayoutEvent(PayoutEvent.PayoutEventType.Updated, payout));
                 }
             }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error handling VTXO change for payout detection");
         }
     }
 
     public async Task<decimal> GetMinimumPayoutAmount(IClaimDestination claimDestination)
     {
-        var terms = await clientTransport.GetServerInfoAsync();
+        var terms = await _clientTransport.GetServerInfoAsync();
         return terms.Dust.ToDecimal(MoneyUnit.BTC);
     }
 
@@ -239,7 +262,7 @@ public class ArkPayoutHandler(
         switch (action)
         {
             case "mark-paid":
-                await using (var context = dbContextFactory.CreateContext())
+                await using (var context = _dbContextFactory.CreateContext())
                 {
                     var payouts = (await PullPaymentHostedService.GetPayouts(new PullPaymentHostedService.PayoutQuery()
                         {
@@ -267,7 +290,7 @@ public class ArkPayoutHandler(
                     Severity = StatusMessageModel.StatusSeverity.Success
                 };
             case "reject-payment":
-                await using (var context = dbContextFactory.CreateContext())
+                await using (var context = _dbContextFactory.CreateContext())
                 {
                     var payouts = (await PullPaymentHostedService.GetPayouts(new PullPaymentHostedService.PayoutQuery()
                         {
@@ -301,9 +324,9 @@ public class ArkPayoutHandler(
 
     public async Task<IActionResult> InitiatePayment(string[] payoutIds)
     {
-        var terms = await clientTransport.GetServerInfoAsync();
+        var terms = await _clientTransport.GetServerInfoAsync();
 
-        await using var ctx = dbContextFactory.CreateContext();
+        await using var ctx = _dbContextFactory.CreateContext();
         ctx.ChangeTracker.QueryTrackingBehavior = QueryTrackingBehavior.NoTracking;
         var payouts = await ctx.Payouts
             .Include(data => data.PullPaymentData)
@@ -318,7 +341,7 @@ public class ArkPayoutHandler(
 
         foreach (var payout in payouts)
         {
-            var blob = payout.GetBlob(jsonSerializerSettings);
+            var blob = payout.GetBlob(_jsonSerializerSettings);
             if (payout.GetPayoutMethodId() != PayoutMethodId)
                 continue;
             var claim = await ParseClaimDestination(blob.Destination, CancellationToken.None);
@@ -332,7 +355,7 @@ public class ArkPayoutHandler(
 
     public async Task<string?> TryGenerateBip21(PayoutData payout, (IClaimDestination destination, string error) claim)
     {
-        var terms = await clientTransport.GetServerInfoAsync();
+        var terms = await _clientTransport.GetServerInfoAsync();
         switch (claim.destination)
         {
             case ArkUriClaimDestination uriClaimDestination:
@@ -354,16 +377,16 @@ public class ArkPayoutHandler(
         }
     }
 
-    public BTCPayNetwork Network => networkProvider.GetNetwork<BTCPayNetwork>(Currency);
-    
-    public void SetProofBlob(PayoutData data, ArkPayoutProof blob)
+    public BTCPayNetwork Network => _networkProvider.GetNetwork<BTCPayNetwork>(Currency);
+
+    public void SetProofBlob(PayoutData data, ArkPayoutProof? blob)
     {
-         data.SetProofBlob(blob, jsonSerializerSettings.GetSerializer(data.GetPayoutMethodId()));
+        data.SetProofBlob(blob, _jsonSerializerSettings.GetSerializer(data.GetPayoutMethodId()));
     }
-    
+
     public JObject SerializeProof(ArkPayoutProof arkPayoutProof)
     {
-        var serializer = JsonSerializer.Create(jsonSerializerSettings.GetSerializer(PayoutMethodId));
+        var serializer = JsonSerializer.Create(_jsonSerializerSettings.GetSerializer(PayoutMethodId));
         return JObject.FromObject(arkPayoutProof, serializer);
     }
 }

@@ -14,7 +14,7 @@ using BTCPayServer.Payments.Lightning;
 using BTCPayServer.PayoutProcessors;
 using BTCPayServer.PayoutProcessors.Lightning;
 using BTCPayServer.Payouts;
-using BTCPayServer.Plugins.ArkPayServer.Cache;
+using NArk.Abstractions.Contracts;
 using BTCPayServer.Plugins.ArkPayServer.Data;
 using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using BTCPayServer.Plugins.ArkPayServer.Exceptions;
@@ -30,11 +30,16 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using NArk;
+using NArk.Abstractions;
+using NArk.Abstractions.Intents;
 using NArk.Swaps.Boltz.Client;
 using NArk.Swaps.Helpers;
 using NArk.Contracts;
+using NArk.Services;
+using NArk.Transactions;
 using NArk.Transport;
 using BTCPayServer.Plugins.ArkPayServer.Wallet;
+using PluginArkIntentState = BTCPayServer.Plugins.ArkPayServer.Data.ArkIntentState;
 using NBitcoin;
 using NBitcoin.DataEncoders;
 using NBitcoin.Secp256k1;
@@ -44,7 +49,7 @@ namespace BTCPayServer.Plugins.ArkPayServer.Controllers;
 [Route("plugins/ark")]
 [Authorize(AuthenticationSchemes = AuthenticationSchemes.Cookie)]
 public class ArkController(
-    BoltzService? boltzService,
+    BoltzLimitsService? boltzLimitsService,
     BoltzClient? boltzClient,
     ArkConfiguration arkConfiguration,
 IAuthorizationService authorizationService,
@@ -60,10 +65,12 @@ IAuthorizationService authorizationService,
     PullPaymentHostedService pullPaymentHostedService,
     EventAggregator eventAggregator,
     ArkadeWalletSignerProvider walletSignerProvider,
-    ArkIntentService arkIntentService,
+    IIntentGenerationService intentGenerationService,
+    IIntentStorage intentStorage,
+    ISigningService signingService,
     ArkadeSpender arkadeSpender,
     BitcoinTimeChainProvider bitcoinTimeChainProvider,
-    TrackedContractsCache trackedContractsCache) : Controller
+    IContractStorage contractStorage) : Controller
 {
     [HttpGet("stores/{storeId}/initial-setup")]
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
@@ -242,22 +249,19 @@ IAuthorizationService authorizationService,
         
         try
         {
-            if (boltzService != null)
+            if (boltzLimitsService != null)
             {
-                // Get cached limits from BoltzService (fetches if expired)
-                var limits = await boltzService.GetLimitsAsync(cancellationToken);
-                if (limits != null)
-                {
-                    boltzConnected = true;
-                    boltzReverseMinAmount = limits.ReverseMinAmount;
-                    boltzReverseMaxAmount = limits.ReverseMaxAmount;
-                    boltzReverseFeePercentage = limits.ReverseFeePercentage;
-                    boltzReverseMinerFee = limits.ReverseMinerFee;
-                    boltzSubmarineMinAmount = limits.SubmarineMinAmount;
-                    boltzSubmarineMaxAmount = limits.SubmarineMaxAmount;
-                    boltzSubmarineFeePercentage = limits.SubmarineFeePercentage;
-                    boltzSubmarineMinerFee = limits.SubmarineMinerFee;
-                }
+                // Get cached limits from BoltzLimitsService (fetches if expired)
+                var limits = await boltzLimitsService.GetLimitsAsync(cancellationToken);
+                boltzConnected = true;
+                boltzReverseMinAmount = limits.ReverseMinAmount;
+                boltzReverseMaxAmount = limits.ReverseMaxAmount;
+                boltzReverseFeePercentage = limits.ReverseFeePercentage;
+                boltzReverseMinerFee = limits.ReverseMinerFee;
+                boltzSubmarineMinAmount = limits.SubmarineMinAmount;
+                boltzSubmarineMaxAmount = limits.SubmarineMaxAmount;
+                boltzSubmarineFeePercentage = limits.SubmarineFeePercentage;
+                boltzSubmarineMinerFee = limits.SubmarineMinerFee;
             }
         }
         catch (Exception ex)
@@ -539,8 +543,9 @@ IAuthorizationService authorizationService,
             ContractSwaps = contractSwaps,
             CanManageContracts = config.GeneratedByStore,
             Debug = debug,
-            CachedSwapScripts = boltzService?.GetActiveSwapsCache().Values.ToHashSet() ?? [],
-            CachedContractScripts = trackedContractsCache.Contracts.Select(c => c.Script).ToHashSet()
+            CachedSwapScripts = [], // Active swap scripts tracked by SwapsManagementService internally
+            CachedContractScripts = (await contractStorage.LoadActiveContracts(cancellationToken: HttpContext.RequestAborted))
+                .Select(c => c.Script).ToHashSet()
         };
 
         return View(model);
@@ -619,7 +624,7 @@ IAuthorizationService authorizationService,
             SearchText = searchText,
             Search = new SearchString(searchTerm),
             Debug = debug,
-            CachedSwapIds = boltzService?.GetActiveSwapsCache().Keys.ToHashSet() ?? []
+            CachedSwapIds = [] // Active swap IDs tracked by SwapsManagementService internally
         };
 
         return View(model);
@@ -639,28 +644,37 @@ IAuthorizationService authorizationService,
 
         try
         {
-            if (boltzService == null)
+            if (boltzClient == null)
             {
-                TempData[WellKnownTempData.ErrorMessage] = "Boltz service is not configured";
+                TempData[WellKnownTempData.ErrorMessage] = "Boltz client is not configured";
                 return RedirectToAction(nameof(Swaps), new { storeId });
             }
-            
-            // Poll the specific swap
-            var (updates, matchedScripts) = await boltzService.PollActiveManually(
-                swaps => swaps.Where(swap => swap.SwapId == swapId && swap.WalletId == config.WalletId),
-                HttpContext.RequestAborted);
 
-            if (updates.Count > 0)
+            // Fetch the swap from DB
+            await using var dbContext = dbContextFactory.CreateContext();
+            var swap = await dbContext.Swaps
+                .FirstOrDefaultAsync(s => s.SwapId == swapId && s.WalletId == config.WalletId, HttpContext.RequestAborted);
+
+            if (swap == null)
             {
-                TempData[WellKnownTempData.SuccessMessage] = $"Swap {swapId} polled successfully. Status: {updates[0].Swap.Status}";
+                TempData[WellKnownTempData.ErrorMessage] = $"Swap {swapId} not found.";
+                return RedirectToAction("Swaps", new { storeId });
             }
-            else if (matchedScripts.Count > 0)
+
+            // Poll Boltz API directly
+            var statusResponse = await boltzClient.GetSwapStatusAsync(swapId, HttpContext.RequestAborted);
+            var newStatus = MapBoltzStatus(statusResponse.Status);
+
+            if (swap.Status != newStatus)
             {
-                TempData[WellKnownTempData.SuccessMessage] = $"Swap {swapId} polled successfully. No status change detected.";
+                swap.Status = newStatus;
+                swap.UpdatedAt = DateTimeOffset.UtcNow;
+                await dbContext.SaveChangesAsync(HttpContext.RequestAborted);
+                TempData[WellKnownTempData.SuccessMessage] = $"Swap {swapId} polled successfully. Status updated to: {newStatus}";
             }
             else
             {
-                TempData[WellKnownTempData.ErrorMessage] = $"Swap {swapId} not found or not active.";
+                TempData[WellKnownTempData.SuccessMessage] = $"Swap {swapId} polled successfully. No status change (current: {swap.Status}).";
             }
         }
         catch (Exception ex)
@@ -669,6 +683,18 @@ IAuthorizationService authorizationService,
         }
 
         return RedirectToAction("Swaps", new { storeId });
+    }
+
+    private static ArkSwapStatus MapBoltzStatus(string status)
+    {
+        return status switch
+        {
+            "swap.created" or "invoice.set" => ArkSwapStatus.Pending,
+            "invoice.failedToPay" or "invoice.expired" or "swap.expired" or "transaction.failed" or "transaction.refunded" => ArkSwapStatus.Failed,
+            "transaction.mempool" => ArkSwapStatus.Pending,
+            "transaction.confirmed" or "invoice.settled" or "transaction.claimed" => ArkSwapStatus.Settled,
+            _ => ArkSwapStatus.Unknown
+        };
     }
 
     [HttpGet("stores/{storeId}/vtxos")]
@@ -803,7 +829,7 @@ IAuthorizationService authorizationService,
             return View(new StoreIntentsViewModel { StoreId = storeId });
 
         // Get state filter
-        ArkIntentState? stateFilter = null;
+        PluginArkIntentState? stateFilter = null;
         if (new SearchString(searchTerm).ContainsFilter("state"))
         {
             var stateFilters = new SearchString(searchTerm).GetFilterArray("state");
@@ -811,11 +837,11 @@ IAuthorizationService authorizationService,
             {
                 stateFilter = stateFilters[0] switch
                 {
-                    "waiting-submit" => ArkIntentState.WaitingToSubmit,
-                    "waiting-batch" => ArkIntentState.WaitingForBatch,
-                    "batch-succeeded" => ArkIntentState.BatchSucceeded,
-                    "batch-failed" => ArkIntentState.BatchFailed,
-                    "cancelled" => ArkIntentState.Cancelled,
+                    "waiting-submit" => PluginArkIntentState.WaitingToSubmit,
+                    "waiting-batch" => PluginArkIntentState.WaitingForBatch,
+                    "batch-succeeded" => PluginArkIntentState.BatchSucceeded,
+                    "batch-failed" => PluginArkIntentState.BatchFailed,
+                    "cancelled" => PluginArkIntentState.Cancelled,
                     _ => null
                 };
             }
@@ -973,13 +999,39 @@ IAuthorizationService authorizationService,
                 return RedirectToAction(nameof(StoreOverview), new { storeId });
             }
 
-            // Create intent with all VTXOs (no outputs = refresh intent)
-            var intentId = await arkIntentService.CreateIntentAsync(
+            // Get server info for destination address
+            var serverInfo = await clientTransport.GetServerInfoAsync(cancellationToken);
+            var wallet = await arkWalletService.GetWallet(config.WalletId, cancellationToken);
+            if (wallet == null)
+            {
+                TempData[WellKnownTempData.ErrorMessage] = "Wallet not found.";
+                return RedirectToAction(nameof(StoreOverview), new { storeId });
+            }
+
+            // Get destination for refresh (back to same wallet)
+            var destination = await arkadeSpender.GetDestination(wallet, serverInfo);
+            var totalAmount = coins.Sum(c => c.Coin.TxOut.Value);
+
+            // Build signers dictionary
+            var signers = new Dictionary<ArkCoinLite, ArkPsbtSigner>();
+            foreach (var coin in coins)
+            {
+                signers[coin.Coin.ToLite()] = coin;
+            }
+
+            // Build ArkIntentSpec for refresh (send back to wallet)
+            var arkIntentSpec = new ArkIntentSpec(
+                signers.Keys.ToArray(),
+                [new ArkTxOut(ArkTxOutType.Vtxo, totalAmount, destination.ScriptPubKey.GetDestination()!)],
+                DateTimeOffset.UtcNow,
+                DateTimeOffset.UtcNow.AddMinutes(5)
+            );
+
+            // Create intent via NNark
+            var intentId = await intentGenerationService.GenerateManualIntent(
                 config.WalletId,
-                coins.ToArray(),
-                null,
-                null,
-                null,
+                arkIntentSpec,
+                signers,
                 cancellationToken);
 
             TempData[WellKnownTempData.SuccessMessage] = $"Refresh intent created with {coins.Count} VTXOs. Intent will be submitted automatically.";
@@ -1007,7 +1059,28 @@ IAuthorizationService authorizationService,
 
         try
         {
-            await arkIntentService.CancelIntentAsync(internalId, "User requested cancellation", cancellationToken);
+            // Get the intent from storage
+            var intent = await intentStorage.GetIntentByInternalId(Guid.Parse(internalId), cancellationToken);
+            if (intent == null)
+            {
+                TempData[WellKnownTempData.ErrorMessage] = "Intent not found.";
+                return RedirectToAction(nameof(Intents), new { storeId });
+            }
+
+            // If intent was submitted, delete from server
+            if (intent.State == NArk.Abstractions.Intents.ArkIntentState.WaitingForBatch)
+            {
+                await clientTransport.DeleteIntent(intent, cancellationToken);
+            }
+
+            // Update storage to mark as cancelled
+            await intentStorage.SaveIntent(intent.WalletId, intent with
+            {
+                State = NArk.Abstractions.Intents.ArkIntentState.Cancelled,
+                CancellationReason = "User requested cancellation",
+                UpdatedAt = DateTimeOffset.UtcNow
+            }, cancellationToken);
+
             TempData[WellKnownTempData.SuccessMessage] = "Intent cancelled successfully.";
         }
         catch (InvalidOperationException ex)
@@ -1400,10 +1473,10 @@ IAuthorizationService authorizationService,
         var intentVtxoScripts = await dbContext.IntentVtxos
             .Include(iv => iv.Intent)
             .Include(iv => iv.Vtxo)
-            .Where(iv => iv.Intent.WalletId == walletId && 
-                        (iv.Intent.State == ArkIntentState.WaitingToSubmit || 
-                         iv.Intent.State == ArkIntentState.WaitingForBatch))
-            .Select(iv => new { iv.Vtxo.TransactionId, iv.Vtxo.TransactionOutputIndex })
+            .Where(iv => iv.Intent.WalletId == walletId &&
+                        (iv.Intent.State == PluginArkIntentState.WaitingToSubmit ||
+                         iv.Intent.State == PluginArkIntentState.WaitingForBatch))
+            .Select(iv => new { iv.Vtxo!.TransactionId, iv.Vtxo.TransactionOutputIndex })
             .ToListAsync(cancellationToken);
 
         var lockedBalance = vtxos
@@ -1596,9 +1669,9 @@ IAuthorizationService authorizationService,
 
             // Check if wallet has any pending intents
             var hasPendingIntents = await dbContext.Intents
-                .AnyAsync(i => i.WalletId == walletId && 
-                              (i.State == ArkIntentState.WaitingToSubmit || 
-                               i.State == ArkIntentState.WaitingForBatch), 
+                .AnyAsync(i => i.WalletId == walletId &&
+                              (i.State == PluginArkIntentState.WaitingToSubmit ||
+                               i.State == PluginArkIntentState.WaitingForBatch),
                          cancellationToken);
 
             if (hasPendingIntents)

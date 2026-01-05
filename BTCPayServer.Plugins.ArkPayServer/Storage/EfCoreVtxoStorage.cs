@@ -48,9 +48,12 @@ public class EfCoreVtxoStorage : IVtxoStorage
             db.Vtxos.Add(entity);
         }
 
-        await db.SaveChangesAsync(cancellationToken);
+        if (await db.SaveChangesAsync(cancellationToken) > 0)
+        {
+            // Raise event for direct subscribers (e.g., ArkPayoutHandler, ArkContractInvoiceListener)
+            VtxosChanged?.Invoke(this, vtxo);
+        }
 
-        VtxosChanged?.Invoke(this, vtxo);
 
         return isNew;
     }

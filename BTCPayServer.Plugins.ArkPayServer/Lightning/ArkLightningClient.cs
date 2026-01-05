@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using NArk;
 using NArk.Contracts;
+using NArk.Swaps.Services;
 using NArk.Transport;
 using NBitcoin;
 using NodeInfo = BTCPayServer.Lightning.NodeInfo;
@@ -17,9 +18,10 @@ public class ArkLightningClient(
     IClientTransport clientTransport,
     Network network,
     string walletId,
-    BoltzService boltzService,
+    SwapsManagementService swapsManagementService,
+    BoltzLimitsService boltzLimitsService,
     ArkPluginDbContextFactory dbContextFactory,
-    EventAggregator eventAggregator,
+    NArk.Swaps.Abstractions.ISwapStorage swapStorage,
     ILogger<ArkLightningInvoiceListener> logger) : IExtendedLightningClient
 {
     public async Task<LightningInvoice?> GetInvoice(string invoiceId, CancellationToken cancellation = default)
@@ -197,16 +199,36 @@ public class ArkLightningClient(
         {
             throw new InvalidOperationException("Sub-dust amounts are not supported");
         }
-        
-        var swap = await boltzService.CreateReverseSwap(walletId, createInvoiceRequest,
-            cancellation);
+
+        // Validate amount against Boltz limits
+        var amountSats = (long)createInvoiceRequest.Amount.ToUnit(LightMoneyUnit.Satoshi);
+        var (isValid, errorMessage) = await boltzLimitsService.ValidateAmountAsync(amountSats, isReverse: true, cancellation);
+        if (!isValid)
+        {
+            throw new InvalidOperationException(errorMessage);
+        }
+
+        // Create reverse swap via NNark's SwapsManagementService
+        var invoice = await swapsManagementService.InitiateReverseSwap(walletId, createInvoiceRequest, cancellation);
+
+        // Fetch the created swap from DB to return proper LightningInvoice
+        await using var dbContext = dbContextFactory.CreateContext();
+        var swap = await dbContext.Swaps
+            .Include(s => s.Contract)
+            .FirstOrDefaultAsync(s => s.Invoice == invoice && s.WalletId == walletId, cancellation);
+
+        if (swap == null)
+        {
+            throw new InvalidOperationException("Failed to create reverse swap");
+        }
+
         return Map(swap, network);
     }
 
     public Task<ILightningInvoiceListener> Listen(CancellationToken cancellation = default)
     {
         return Task.FromResult<ILightningInvoiceListener>(
-            new ArkLightningInvoiceListener(walletId, logger, eventAggregator, network, cancellation));
+            new ArkLightningInvoiceListener(walletId, logger, swapStorage, dbContextFactory, network, cancellation));
     }
 
     public Task<LightningNodeInformation> GetInfo(CancellationToken cancellation = default)
@@ -248,11 +270,31 @@ public class ArkLightningClient(
             {
                 throw new NotSupportedException("BOLT11 is required");
             }
-            
-            
+
             var pr = BOLT11PaymentRequest.Parse(bolt11, network);
-            var result = await boltzService.CreateSubmarineSwap(walletId, pr, cancellation);
-        
+
+            // Validate amount against Boltz limits
+            var amountSats = (long)(pr.MinimumAmount?.ToUnit(LightMoneyUnit.Satoshi) ?? 0);
+            var (isValid, errorMessage) = await boltzLimitsService.ValidateAmountAsync(amountSats, isReverse: false, cancellation);
+            if (!isValid)
+            {
+                return new PayResponse(PayResult.Error, errorMessage);
+            }
+
+            // Create submarine swap via NNark's SwapsManagementService
+            await swapsManagementService.InitiateSubmarineSwap(walletId, pr, autoPay: true, cancellation);
+
+            // Fetch the created swap from DB to return proper PayResponse
+            await using var dbContext = dbContextFactory.CreateContext();
+            var result = await dbContext.Swaps
+                .Include(s => s.Contract)
+                .FirstOrDefaultAsync(s => s.Invoice == bolt11 && s.WalletId == walletId, cancellation);
+
+            if (result == null)
+            {
+                return new PayResponse(PayResult.Error, "Failed to create submarine swap");
+            }
+
             var payment = MapPayment(result);
             return new PayResponse()
             {
@@ -265,13 +307,11 @@ public class ArkLightningClient(
                     TotalAmount = payment.AmountSent
                 }
             };
-            
         }
         catch (Exception e)
         {
             return new PayResponse(PayResult.Error, e.Message);
         }
-       
     }
 
     public Task<PayResponse> Pay(string bolt11, CancellationToken cancellation = default)

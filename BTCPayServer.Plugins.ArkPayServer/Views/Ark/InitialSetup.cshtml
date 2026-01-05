@@ -26,7 +26,7 @@
 <div class="mt-5">
     <h3 class="my-4">I have a wallet</h3>
     <div class="list-group">
-        <a href="#" class="list-group-item list-group-item-action" data-bs-toggle="collapse" data-bs-target="#importExisting">
+        <a href="#" class="list-group-item list-group-item-action" data-bs-toggle="collapse" data-bs-target="#importExisting" data-testid="legacy-wallet-option">
             <div class="image">
                 <vc:icon symbol="wallet-existing"/>
             </div>
@@ -44,7 +44,7 @@
                 <form asp-action="InitialSetup" method="post" asp-route-storeId="@storeId" id="importExistingForm">
                     <div class="form-group mb-3">
                         <label asp-for="Wallet" class="form-label">Wallet Configuration</label>
-                        <input asp-for="Wallet" class="form-control" placeholder="nsec... / npub... / wallet-id" id="existingWalletInput" required/>
+                        <input asp-for="Wallet" class="form-control" placeholder="nsec... / npub... / wallet-id" id="existingWalletInput" required data-testid="nsec-input"/>
                         <span asp-validation-for="Wallet" class="text-danger"></span>
                         <div class="form-text mt-2">
                             <strong>Options:</strong>
@@ -55,7 +55,7 @@
                             </ul>
                         </div>
                     </div>
-                    <button name="command" type="submit" value="save" class="btn btn-primary">Continue</button>
+                    <button name="command" type="submit" value="save" class="btn btn-primary" data-testid="import-wallet-btn">Continue</button>
                 </form>
             </div>
         </div>
@@ -65,7 +65,7 @@
 <div class="mt-5">
     <h3 class="my-4">I don't have a wallet</h3>
     <div class="list-group">
-        <a href="#" class="list-group-item list-group-item-action" data-bs-toggle="collapse" data-bs-target="#createNew">
+        <a href="#" class="list-group-item list-group-item-action" data-bs-toggle="collapse" data-bs-target="#createNew" data-testid="hd-wallet-option">
             <div class="image">
                 <vc:icon symbol="wallet-new"/>
             </div>
@@ -76,7 +76,7 @@
             <vc:icon symbol="caret-right"/>
         </a>
     </div>
-    
+
     <div id="createNew" class="collapse mt-3 @(hasValidationError && !hasWalletValue ? "show" : "")">
         <div class="card">
             <div class="card-body">
@@ -86,7 +86,7 @@
                         <strong>Info:</strong> A new hot wallet will be generated automatically for you.
                     </div>
                     <p>This will create a new Ark wallet that is stored on your BTCPay Server. Make sure to back up your wallet after creation.</p>
-                    <button name="command" type="submit" value="save" class="btn btn-primary">Create Wallet</button>
+                    <button name="command" type="submit" value="save" class="btn btn-primary" data-testid="create-wallet-btn">Create Wallet</button>
                 </form>
             </div>
         </div>

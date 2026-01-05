@@ -5,9 +5,7 @@ using BTCPayServer.Events;
 using BTCPayServer.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using BTCPayServer.Plugins.ArkPayServer.Lightning;
-using BTCPayServer.Plugins.ArkPayServer.Lightning.Events;
 using BTCPayServer.Plugins.ArkPayServer.Models;
-using BTCPayServer.Plugins.ArkPayServer.Models.Events;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using BTCPayServer.Services.Invoices;
@@ -15,8 +13,11 @@ using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NArk;
-using NArk.Transport;
+using NArk.Abstractions.VTXOs;
+using NArk.Swaps.Abstractions;
 using NArk.Swaps.Helpers;
+using NArk.Swaps.Models;
+using NArk.Transport;
 using NBitcoin;
 using NBXplorer;
 using Newtonsoft.Json.Linq;
@@ -31,6 +32,8 @@ public class ArkContractInvoiceListener(
     EventAggregator eventAggregator,
     ArkWalletService arkWalletService,
     PaymentService paymentService,
+    IVtxoStorage vtxoStorage,
+    ISwapStorage swapStorage,
     ILogger<ArkContractInvoiceListener> logger)
     : IHostedService
 {
@@ -41,19 +44,29 @@ public class ArkContractInvoiceListener(
     {
         await QueueMonitoredInvoices(cancellationToken);
         _leases.Add(eventAggregator.SubscribeAsync<InvoiceEvent>(OnInvoiceEvent));
-        _leases.Add(eventAggregator.SubscribeAsync<VTXOsUpdated>(OnVTXOs));
-        _leases.Add(eventAggregator.SubscribeAsync<ArkSwapUpdated>(HandleSwapUpdate));
+
+        // Subscribe to NNark's storage events directly
+        vtxoStorage.VtxosChanged += OnVtxoChanged;
+        swapStorage.SwapsChanged += OnSwapChanged;
 
         _ = PollAllInvoices(cancellationToken);
     }
 
-    private async Task HandleSwapUpdate(ArkSwapUpdated lightningSwapUpdated)
+    private async void OnSwapChanged(object? sender, NArk.Swaps.Models.ArkSwap swap)
     {
-        var terms = await clientTransport.GetServerInfoAsync();
-        var active = ArkLightningClient.Map(lightningSwapUpdated.Swap, terms.Network)
-            .Status == LightningInvoiceStatus.Unpaid;
-        await arkWalletService.ToggleContract(lightningSwapUpdated.Swap.WalletId, lightningSwapUpdated.Swap.ContractScript,
-            active);
+        try
+        {
+            // Only process reverse submarine swaps (Lightning -> Ark)
+            if (swap.SwapType != NArk.Swaps.Models.ArkSwapType.ReverseSubmarine)
+                return;
+
+            var active = swap.Status == NArk.Swaps.Models.ArkSwapStatus.Pending;
+            await arkWalletService.ToggleContract(swap.WalletId, swap.ContractScript, active);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error handling swap change for {SwapId}", swap.SwapId);
+        }
     }
 
     private async Task OnInvoiceEvent(InvoiceEvent invoiceEvent)
@@ -62,22 +75,33 @@ public class ArkContractInvoiceListener(
         _checkInvoices.Writer.TryWrite(invoiceEvent.Invoice.Id);
     }
 
-    private async Task OnVTXOs(VTXOsUpdated arg)
+    private async void OnVtxoChanged(object? sender, ArkVtxo vtxo)
     {
-        var terms = await clientTransport.GetServerInfoAsync();
-        var serverKey = OutputDescriptorHelpers.Extract(terms.SignerKey).XOnlyPubKey;
-        foreach (var scriptVtxos in arg.Vtxos.GroupBy(c => c.Script))
+        try
         {
-           var script = Script.FromHex(scriptVtxos.Key);
+            var terms = await clientTransport.GetServerInfoAsync();
+            var serverKey = OutputDescriptorHelpers.Extract(terms.SignerKey).XOnlyPubKey;
+            var script = Script.FromHex(vtxo.Script);
             var address = ArkAddress.FromScriptPubKey(script, serverKey);
             var network = terms.Network;
             var inv = await invoiceRepository.GetInvoiceFromAddress(ArkadePlugin.ArkadePaymentMethodId, address.ToString(network.ChainName == ChainName.Mainnet));
             if (inv is null)
-                continue;
-            foreach (var vtxo in scriptVtxos)
+                return;
+
+            // Map NNark's ArkVtxo to plugin's VTXO entity
+            var vtxoEntity = new VTXO
             {
-                await HandlePaymentData(vtxo, inv, arkadePaymentMethodHandler);
-            }
+                TransactionId = vtxo.TransactionId,
+                TransactionOutputIndex = (int)vtxo.TransactionOutputIndex,
+                Amount = (long)vtxo.Amount,
+                Script = vtxo.Script,
+                SeenAt = vtxo.CreatedAt
+            };
+            await HandlePaymentData(vtxoEntity, inv, arkadePaymentMethodHandler);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error handling VTXO change for {TxId}:{Index}", vtxo.TransactionId, vtxo.TransactionOutputIndex);
         }
     }
 
@@ -131,6 +155,8 @@ public class ArkContractInvoiceListener(
     
     public Task StopAsync(CancellationToken cancellationToken)
     {
+        vtxoStorage.VtxosChanged -= OnVtxoChanged;
+        swapStorage.SwapsChanged -= OnSwapChanged;
         _leases.Dispose();
         _leases = new CompositeDisposable();
         return Task.CompletedTask;

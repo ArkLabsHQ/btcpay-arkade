@@ -15,12 +15,12 @@ namespace BTCPayServer.Plugins.ArkPayServer.Lightning;
 /// </summary>
 public class ArkadeLightningLimitsService : IDisposable
 {
-    private readonly BoltzService? _boltzService;
+    private readonly BoltzLimitsService? _boltzLimitsService;
     private readonly PaymentMethodHandlerDictionary _paymentMethodHandlerDictionary;
     private readonly IMemoryCache _memoryCache;
     private readonly StoreRepository _storeRepository;
     private readonly CompositeDisposable _leases = new();
-    
+
     private static readonly TimeSpan CacheExpiry = TimeSpan.FromMinutes(5);
 
     public ArkadeLightningLimitsService(
@@ -28,13 +28,13 @@ public class ArkadeLightningLimitsService : IDisposable
         EventAggregator eventAggregator,
         IMemoryCache memoryCache,
         StoreRepository storeRepository,
-        BoltzService? boltzService = null)
+        BoltzLimitsService? boltzLimitsService = null)
     {
-        _boltzService = boltzService;
+        _boltzLimitsService = boltzLimitsService;
         _paymentMethodHandlerDictionary = paymentMethodHandlerDictionary;
         _memoryCache = memoryCache;
         _storeRepository = storeRepository;
-        
+
         // Subscribe to store update events to automatically clear cache
         _leases.Add(eventAggregator.Subscribe<StoreEvent.Updated>(ev =>
         {
@@ -106,8 +106,8 @@ public class ArkadeLightningLimitsService : IDisposable
             return true;
         }
 
-        // If BoltzService is not available, disallow Lightning for Arkade stores
-        if (_boltzService == null)
+        // If BoltzLimitsService is not available, disallow Lightning for Arkade stores
+        if (_boltzLimitsService == null)
         {
             return false;
         }
@@ -115,7 +115,7 @@ public class ArkadeLightningLimitsService : IDisposable
         // Validate against Boltz limits
         try
         {
-            var (isValid, _) = await _boltzService.ValidateAmountAsync(amountSats, isReverse: true, cancellationToken);
+            var (isValid, _) = await _boltzLimitsService.ValidateAmountAsync(amountSats, isReverse: true, cancellationToken);
             return isValid;
         }
         catch (Exception)
@@ -144,9 +144,9 @@ public class ArkadeLightningLimitsService : IDisposable
             return true;
         }
 
-        // If BoltzService is not available, disallow Lightning for Arkade stores
+        // If BoltzLimitsService is not available, disallow Lightning for Arkade stores
         // since we can't fulfill Lightning payments without Boltz
-        if (_boltzService == null)
+        if (_boltzLimitsService == null)
         {
             return false;
         }
@@ -154,7 +154,7 @@ public class ArkadeLightningLimitsService : IDisposable
         // Validate against Boltz limits
         try
         {
-            var (isValid, _) = await _boltzService.ValidateAmountAsync(amountSats, isReverse: true, cancellationToken);
+            var (isValid, _) = await _boltzLimitsService.ValidateAmountAsync(amountSats, isReverse: true, cancellationToken);
             return isValid;
         }
         catch (Exception)
@@ -175,14 +175,14 @@ public class ArkadeLightningLimitsService : IDisposable
             return null;
         }
 
-        if (_boltzService == null)
+        if (_boltzLimitsService == null)
         {
             return null;
         }
 
         try
         {
-            return await _boltzService.GetLimitsAsync(cancellationToken);
+            return await _boltzLimitsService.GetLimitsAsync(cancellationToken);
         }
         catch (Exception)
         {

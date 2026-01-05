@@ -1,15 +1,11 @@
-using Ark.V1;
 using AsyncKeyedLock;
 using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using NArk;
 using NArk.Abstractions;
 using NArk.Abstractions.Wallets;
 using ArkWallet = BTCPayServer.Plugins.ArkPayServer.Data.Entities.ArkWallet;
 using NArk.Contracts;
-using NArk.Models;
 using NArk.Scripts;
 using NArk.Services;
 using NArk.Transactions;
@@ -17,7 +13,6 @@ using NArk.Transport;
 using NArk.Swaps.Helpers;
 using NBitcoin;
 using NBitcoin.Scripting;
-using NBitcoin.Secp256k1;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
 
@@ -25,25 +20,20 @@ public class ArkadeSpender(
     AsyncKeyedLocker asyncKeyedLocker,
     ArkadeWalletSignerProvider arkadeWalletSignerProvider,
     ISpendingService spendingService,
-    ArkService.ArkServiceClient arkServiceClient,
     ArkWalletService arkWalletService,
     ILogger<ArkadeSpender> logger,
     IClientTransport clientTransport,
-    ArkVtxoSynchronizationService arkVtxoSynchronizationService,
+    VtxoPollingService vtxoPollingService,
     BitcoinTimeChainProvider bitcoinTimeChainProvider)
 {
     public async Task<uint256> Spend(string walletId, TxOut[] outputs, CancellationToken cancellationToken = default)
     {
-        var coinSet = await GetSpendableCoins([walletId],false, cancellationToken);
+        // Convert TxOut[] to ArkTxOut[] for NNark API
+        var arkOutputs = outputs.Select(o =>
+            new ArkTxOut(ArkTxOutType.Vtxo, o.Value, o.ScriptPubKey.GetDestination()!)).ToArray();
 
-        if (!coinSet.TryGetValue(walletId, out var coins) || coins.Count == 0)
-        {
-            throw new InvalidOperationException($"No coins to spend for wallet {walletId}");
-        }
-
-        logger.LogInformation($"Found {coins.Count} VTXOs to spend for wallet {walletId}");
-        var wallet = await arkWalletService.GetWallet(walletId, cancellationToken);
-        return await Spend(wallet, coins, outputs, cancellationToken);
+        // Use NNark's SpendingService which handles coin selection, change, and subdust internally
+        return await spendingService.Spend(walletId, arkOutputs, cancellationToken);
     }
 
     public async Task<uint256> Spend(ArkWallet wallet, IEnumerable<ArkPsbtSigner> coins, TxOut[] outputs,
@@ -119,7 +109,7 @@ public class ArkadeSpender(
                 .Concat(
                     outputs.Select(y => y.ScriptPubKey.ToHex())).ToHashSet();
 
-            await arkVtxoSynchronizationService.PollScriptsForVtxos(scripts.ToHashSet(), cancellationToken);
+            await vtxoPollingService.PollScriptsForVtxos(scripts.ToHashSet(), cancellationToken);
             throw;
         }
     }
