@@ -84,6 +84,11 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
             var factory = provider.GetRequiredService<ArkPluginDbContextFactory>();
             factory.ConfigureBuilder(o);
         });
+        serviceCollection.AddDbContextFactory<ArkPluginDbContext>((provider, o) =>
+        {
+            var factory = provider.GetRequiredService<ArkPluginDbContextFactory>();
+            factory.ConfigureBuilder(o);
+        });
         serviceCollection.AddStartupTask<ArkPluginMigrationRunner>();
 
         // Register NNark storage adapters (plugin-specific EF Core implementations)
@@ -113,6 +118,7 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         serviceCollection.AddSingleton<IIntentScheduler, SimpleIntentScheduler>();
 
         // Plugin-specific services
+        serviceCollection.AddSingleton<VtxoPollingService>();
         serviceCollection.AddSingleton<ArkWalletService>();
         serviceCollection.AddSingleton<ArkadeSpender>();
         serviceCollection.AddSingleton<ArkadeCheckoutModelExtension>();
@@ -163,10 +169,14 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         // Register Boltz services only if BoltzUri is configured
         if (!string.IsNullOrWhiteSpace(config.BoltzUri))
         {
-            serviceCollection.AddHttpClient<BoltzClient>(client =>
+            // Configure BoltzClient options
+            serviceCollection.Configure<NArk.Swaps.Boltz.Models.BoltzClientOptions>(options =>
             {
-                client.BaseAddress = new Uri(config.BoltzUri);
+                options.BoltzUrl = config.BoltzUri;
+                options.WebsocketUrl = config.BoltzUri;
             });
+
+            serviceCollection.AddHttpClient<BoltzClient>();
 
             // Register NNark swap services (SwapsManagementService + SwapSweepPolicy)
             serviceCollection.AddArkSwapServices();

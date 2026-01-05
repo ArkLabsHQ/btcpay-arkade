@@ -21,15 +21,15 @@ public class ArkWalletContract
 
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 
+    public List<ArkSwap> Swaps { get; set; }
+
     /// <summary>
-    /// The output descriptor of the signing entity used to create this contract.
+    /// Gets the signing entity descriptor from ContractData["user"].
     /// For HD wallets: full descriptor with derivation path (e.g., tr([fp/86'/0'/0']xpub/0/5))
     /// For legacy wallets: simple tr(pubkey) descriptor
-    /// Used to look up the correct key for signing.
     /// </summary>
-    public string? SigningEntityDescriptor { get; set; }
-
-    public List<ArkSwap> Swaps { get; set; }
+    public string? GetSigningEntityDescriptor() =>
+        ContractData?.TryGetValue("user", out var user) == true ? user : null;
 
     internal static void OnModelCreating(ModelBuilder builder)
     {

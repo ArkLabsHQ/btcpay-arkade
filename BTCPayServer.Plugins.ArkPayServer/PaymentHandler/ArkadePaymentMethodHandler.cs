@@ -3,6 +3,7 @@ using BTCPayServer.Payments;
 using BTCPayServer.Plugins.ArkPayServer.Services;
 using BTCPayServer.Services;
 using NArk;
+using NArk.Services;
 using NArk.Transport;
 using NBitcoin;
 using Newtonsoft.Json;
@@ -12,7 +13,7 @@ namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 
 public class ArkadePaymentMethodHandler(
     BTCPayServerEnvironment btcPayServerEnvironment,
-    ArkWalletService arkWalletService,
+    IContractService contractService,
     IClientTransport clientTransport
 ) : IPaymentMethodHandler
 {
@@ -43,7 +44,7 @@ public class ArkadePaymentMethodHandler(
             throw new PaymentMethodUnavailableException("Amount too small");
         }
 
-        var contract = await arkWalletService.DerivePaymentContract(arkadePaymentMethodConfig.WalletId, CancellationToken.None);
+        var contract = await contractService.DerivePaymentContract(arkadePaymentMethodConfig.WalletId, CancellationToken.None);
         var details = new ArkadePromptDetails(arkadePaymentMethodConfig.WalletId, contract);
         var address = contract.GetArkAddress();
 

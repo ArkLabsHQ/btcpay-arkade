@@ -32,32 +32,26 @@
         <!-- NNark core libraries -->
         <ProjectReference Include="..\submodules\NNark\NArk\NArk.csproj" >
             <Properties>StaticWebAssetsEnabled=false</Properties>
-            <ExcludeAssets>runtime;contentFiles</ExcludeAssets>
             <Private>true</Private>
         </ProjectReference>
         <ProjectReference Include="..\submodules\NNark\NArk.Abstractions\NArk.Abstractions.csproj" >
             <Properties>StaticWebAssetsEnabled=false</Properties>
-            <ExcludeAssets>runtime;contentFiles</ExcludeAssets>
             <Private>true</Private>
         </ProjectReference>
         <ProjectReference Include="..\submodules\NNark\NArk.Swaps\NArk.Swaps.csproj" >
             <Properties>StaticWebAssetsEnabled=false</Properties>
-            <ExcludeAssets>runtime;contentFiles</ExcludeAssets>
             <Private>true</Private>
         </ProjectReference>
         <ProjectReference Include="..\submodules\NNark\NArk.Transport.GrpcClient\NArk.Transport.GrpcClient.csproj" >
             <Properties>StaticWebAssetsEnabled=false</Properties>
-            <ExcludeAssets>runtime;contentFiles</ExcludeAssets>
             <Private>true</Private>
         </ProjectReference>
         <ProjectReference Include="..\submodules\NNark\NArk.Hosting\NArk.Hosting.csproj" >
             <Properties>StaticWebAssetsEnabled=false</Properties>
-            <ExcludeAssets>runtime;contentFiles</ExcludeAssets>
             <Private>true</Private>
         </ProjectReference>
         <ProjectReference Include="..\submodules\NNark\NArk.Safety.AsyncKeyedLock\NArk.Safety.AsyncKeyedLock.csproj" >
             <Properties>StaticWebAssetsEnabled=false</Properties>
-            <ExcludeAssets>runtime;contentFiles</ExcludeAssets>
             <Private>true</Private>
         </ProjectReference>
         <!-- BTCPayServer -->
@@ -65,7 +59,14 @@
             <Private>false</Private>
             <Private Condition="'$(Configuration)' == 'Debug'">true</Private>
         </ProjectReference>
-        <!-- Packages not provided by NNark -->
+        <!-- NNark transitive dependencies (must be explicit for plugin publish) -->
+        <PackageReference Include="AsyncKeyedLock" Version="7.1.8" />
+        <PackageReference Include="BTCPayServer.Lightning.Common" Version="1.5.2" />
+        <PackageReference Include="Cel" Version="0.3.2" />
+        <PackageReference Include="NBitcoin" Version="9.0.4" />
+        <PackageReference Include="NBitcoin.Secp256k1" Version="3.2.0" />
+        <!-- Additional packages -->
+        <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
         <PackageReference Include="Grpc.Net.ClientFactory" Version="2.66.0" />
         <PackageReference Include="FlexLabs.EntityFrameworkCore.Upsert" Version="8.1.2" />
         <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.14.0" />

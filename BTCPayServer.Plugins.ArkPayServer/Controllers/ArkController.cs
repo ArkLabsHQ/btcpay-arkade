@@ -1350,12 +1350,9 @@ IAuthorizationService authorizationService,
     }
     private static string GenerateWallet()
     {
-        var key = RandomUtils.GetBytes(32)!;
-        var encoder = Encoders.Bech32("nsec");
-        encoder.SquashBytes = true;
-        encoder.StrictLength = false;
-        var nsec = encoder.EncodeData(key, Bech32EncodingType.BECH32);
-        return nsec;
+        // Generate HD wallet with BIP-39 mnemonic (12 words)
+        var mnemonic = new Mnemonic(Wordlist.English, WordCount.Twelve);
+        return mnemonic.ToString();
     }
 
     private static PaymentMethodId GetLightningPaymentMethod() => PaymentTypes.LN.GetPaymentMethodId("BTC");

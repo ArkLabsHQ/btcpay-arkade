@@ -133,13 +133,18 @@ public class PluginWalletAdapter : IWallet
                 cancellationToken);
         }
 
-        // If still not found, try to find by matching the descriptor in contracts
+        // If still not found, try to find by matching the descriptor in contracts' ContractData["user"]
         if (wallet == null)
         {
             var descriptorString = outputDescriptor.ToString();
-            var contract = await db.WalletContracts.FirstOrDefaultAsync(
-                c => c.SigningEntityDescriptor == descriptorString,
-                cancellationToken);
+            // ContractData is stored as JSONB - query contracts and check in memory
+            // This is a fallback path that should rarely be hit
+            var contracts = await db.WalletContracts
+                .Where(c => c.ContractData != null)
+                .ToListAsync(cancellationToken);
+
+            var contract = contracts.FirstOrDefault(
+                c => c.GetSigningEntityDescriptor() == descriptorString);
 
             if (contract != null)
             {

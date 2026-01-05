@@ -19,12 +19,7 @@ public class ArkWallet
     public string? WalletDestination { get; set; }
 
     public List<ArkWalletContract> Contracts { get; set; } = [];
-
-    /// <summary>
-    /// JSON-serialized intent scheduling policies for this wallet.
-    /// </summary>
-    public string? IntentSchedulingPolicy { get; set; }
-
+    
     /// <summary>
     /// The type of wallet (Legacy nsec or HD mnemonic).
     /// Defaults to Legacy for backwards compatibility.
