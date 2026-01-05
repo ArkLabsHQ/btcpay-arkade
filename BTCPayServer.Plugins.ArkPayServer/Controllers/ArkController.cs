@@ -1032,9 +1032,10 @@ IAuthorizationService authorizationService,
                 config.WalletId,
                 arkIntentSpec,
                 signers,
+                force: true,
                 cancellationToken);
 
-            TempData[WellKnownTempData.SuccessMessage] = $"Refresh intent created with {coins.Count} VTXOs. Intent will be submitted automatically.";
+            TempData[WellKnownTempData.SuccessMessage] = $"Refresh intent {intentId} created with {coins.Count} VTXOs. Intent will be submitted automatically.";
         }
         catch (Exception ex)
         {
