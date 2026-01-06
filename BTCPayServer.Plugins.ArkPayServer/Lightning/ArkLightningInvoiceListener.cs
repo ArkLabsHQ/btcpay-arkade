@@ -6,7 +6,6 @@ using Microsoft.Extensions.Logging;
 using NArk.Swaps.Abstractions;
 using NArk.Swaps.Models;
 using NBitcoin;
-using NBXplorer;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Lightning;
 

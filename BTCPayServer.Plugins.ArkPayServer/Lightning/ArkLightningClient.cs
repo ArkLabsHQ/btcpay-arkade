@@ -5,7 +5,6 @@ using BTCPayServer.Plugins.ArkPayServer.Data;
 using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using NArk;
 using NArk.Contracts;
 using NArk.Swaps.Services;
 using NArk.Transport;
@@ -65,7 +64,7 @@ public class ArkLightningClient(
             _ => throw new NotSupportedException()
         };
 
-        VHTLCContract? contract =
+        var contract =
             ArkContract.Parse(reverseSwap.Contract.Type, reverseSwap.Contract.ContractData, network) as VHTLCContract;
 
         return new LightningInvoice
@@ -259,7 +258,7 @@ public class ArkLightningClient(
 
     public Task<PayResponse> Pay(PayInvoiceParams payParams, CancellationToken cancellation = default)
     {
-        return Pay(null, payParams, cancellation);
+        throw new NotSupportedException("BOLT11 is required");
     }
 
     public async Task<PayResponse> Pay(string bolt11, PayInvoiceParams payParams, CancellationToken cancellation = default)
@@ -350,7 +349,7 @@ public class ArkLightningClient(
         return Task.FromResult(ValidationResult.Success);
     }
 
-    public string? DisplayName => "Arkade Lightning (Boltz)";
+    public string DisplayName => "Arkade Lightning (Boltz)";
     public Uri? ServerUri => null;
 
     public override string ToString() => $"type=arkade;wallet-id={walletId}";

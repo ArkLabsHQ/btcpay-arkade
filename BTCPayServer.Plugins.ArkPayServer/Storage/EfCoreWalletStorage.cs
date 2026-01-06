@@ -79,7 +79,7 @@ public class EfCoreWalletStorage : IWalletStorage
             {
                 Id = walletId,
                 Wallet = Encoding.UTF8.GetString(arkWallet.WalletPrivateBytes),
-                WalletType = DetectWalletType(arkWallet.WalletPrivateBytes),
+                WalletType = arkWallet.GetWalletType(),
                 LastUsedIndex = arkWallet.LastAddressIndex,
                 AccountDescriptor = walletFingerprint
             };
@@ -116,26 +116,5 @@ public class EfCoreWalletStorage : IWalletStorage
 
         // For legacy wallets, use the wallet ID (which is the pubkey hex)
         return entity.Id;
-    }
-
-    private static WalletType DetectWalletType(byte[] walletBytes)
-    {
-        var walletString = Encoding.UTF8.GetString(walletBytes);
-
-        // Check if it's a BIP-39 mnemonic (12 or 24 words)
-        var words = walletString.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (words.Length == 12 || words.Length == 24)
-        {
-            return WalletType.HD;
-        }
-
-        // Check if it starts with nsec (legacy Nostr-style key)
-        if (walletString.StartsWith("nsec", StringComparison.OrdinalIgnoreCase))
-        {
-            return WalletType.Legacy;
-        }
-
-        // Default to Legacy for backwards compatibility
-        return WalletType.Legacy;
     }
 }

@@ -52,7 +52,7 @@ public class ArkController(
     BoltzLimitsService? boltzLimitsService,
     BoltzClient? boltzClient,
     ArkConfiguration arkConfiguration,
-IAuthorizationService authorizationService,
+    IAuthorizationService authorizationService,
     ArkPayoutHandler arkPayoutHandler,
     ArkPluginDbContextFactory dbContextFactory,
     StoreRepository storeRepository,
@@ -214,7 +214,7 @@ IAuthorizationService authorizationService,
             {
                 var terms = await clientTransport.GetServerInfoAsync(cancellationToken);
                 var script = Script.FromHex(activeContract.Script);
-                var serverKey = OutputDescriptorHelpers.Extract(terms.SignerKey).XOnlyPubKey;
+                var serverKey = terms.SignerKey.Extract().XOnlyPubKey;
                 var address = ArkAddress.FromScriptPubKey(script, serverKey);
                 defaultAddress = address.ToString(terms.Network.ChainName == ChainName.Mainnet);
             }
