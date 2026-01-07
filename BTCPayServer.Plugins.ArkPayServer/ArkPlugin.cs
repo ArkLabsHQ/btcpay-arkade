@@ -36,6 +36,7 @@ using NArk.Transport.GrpcClient;
 using NBitcoin;
 using System.Reflection;
 using System.Text.Json;
+using NArk.Blockchain.NBXplorer;
 
 namespace BTCPayServer.Plugins.ArkPayServer;
 
@@ -92,11 +93,17 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         serviceCollection.AddStartupTask<ArkPluginMigrationRunner>();
 
         // Register NNark storage adapters (plugin-specific EF Core implementations)
-        serviceCollection.AddSingleton<IVtxoStorage, EfCoreVtxoStorage>();
-        serviceCollection.AddSingleton<IContractStorage, EfCoreContractStorage>();
-        serviceCollection.AddSingleton<IIntentStorage, EfCoreIntentStorage>();
-        serviceCollection.AddSingleton<ISwapStorage, EfCoreSwapStorage>();
-        serviceCollection.AddSingleton<IWalletStorage, EfCoreWalletStorage>();
+        // Register concrete types first, then expose as interfaces
+        serviceCollection.AddSingleton<EfCoreVtxoStorage>();
+        serviceCollection.AddSingleton<IVtxoStorage>(sp => sp.GetRequiredService<EfCoreVtxoStorage>());
+        serviceCollection.AddSingleton<EfCoreContractStorage>();
+        serviceCollection.AddSingleton<IContractStorage>(sp => sp.GetRequiredService<EfCoreContractStorage>());
+        serviceCollection.AddSingleton<EfCoreIntentStorage>();
+        serviceCollection.AddSingleton<IIntentStorage>(sp => sp.GetRequiredService<EfCoreIntentStorage>());
+        serviceCollection.AddSingleton<EfCoreSwapStorage>();
+        serviceCollection.AddSingleton<ISwapStorage>(sp => sp.GetRequiredService<EfCoreSwapStorage>());
+        serviceCollection.AddSingleton<EfCoreWalletStorage>();
+        serviceCollection.AddSingleton<IWalletStorage>(sp => sp.GetRequiredService<EfCoreWalletStorage>());
 
         // Register NNark core abstractions (plugin-specific implementations)
         serviceCollection.AddSingleton<ISafetyService, NArk.Safety.AsyncKeyedLock.AsyncSafetyService>();
@@ -127,10 +134,10 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         serviceCollection.AddSingleton<ICheckoutCheatModeExtension>(provider => provider.GetRequiredService<ArkadeCheckoutCheatModeExtension>());
         serviceCollection.AddSingleton<IArkadeMultiWalletSigner>(provider => provider.GetRequiredService<ArkWalletService>());
         serviceCollection.AddSingleton<ArkContractInvoiceListener>();
-        serviceCollection.AddSingleton<BitcoinTimeChainProvider>();
+        serviceCollection.AddSingleton<ChainTimeProvider>();
+        serviceCollection.AddSingleton<IChainTimeProvider>(provider => provider.GetRequiredService<ChainTimeProvider>());
         serviceCollection.AddHostedService<ArkWalletService>(provider => provider.GetRequiredService<ArkWalletService>());
         serviceCollection.AddHostedService<ArkContractInvoiceListener>(provider => provider.GetRequiredService<ArkContractInvoiceListener>());
-        serviceCollection.AddHostedService<BitcoinTimeChainProvider>(provider => provider.GetRequiredService<BitcoinTimeChainProvider>());
 
         serviceCollection.AddSingleton<ArkadeSpendingService>();
 
