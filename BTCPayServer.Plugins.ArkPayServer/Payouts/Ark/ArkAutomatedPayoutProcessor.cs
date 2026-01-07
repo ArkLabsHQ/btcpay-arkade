@@ -9,6 +9,7 @@ using BTCPayServer.Services;
 using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Stores;
 using Microsoft.Extensions.Logging;
+using NArk.Abstractions.Wallets;
 using NArk.Transport;
 using NBitcoin;
 using PayoutData = BTCPayServer.Data.PayoutData;
@@ -22,7 +23,6 @@ public class ArkAutomatedPayoutProcessor: BaseAutomatedPayoutProcessor<ArkAutoma
     private readonly ArkadeSpendingService _arkSpendingService;
     private readonly PayoutMethodHandlerDictionary _payoutMethodHandlers;
     private readonly BTCPayNetworkJsonSerializerSettings _jsonSerializerSettings;
-    private readonly IArkadeMultiWalletSigner _arkadeMultiWalletSigner;
 
     public ArkAutomatedPayoutProcessor(
         IClientTransport clientTransport,
@@ -36,7 +36,7 @@ public class ArkAutomatedPayoutProcessor: BaseAutomatedPayoutProcessor<ArkAutoma
         ArkadeSpendingService arkSpendingService,
         PayoutMethodHandlerDictionary payoutMethodHandlers,
         BTCPayNetworkJsonSerializerSettings jsonSerializerSettings,
-        IArkadeMultiWalletSigner arkadeMultiWalletSigner
+        IWallet arkadeMultiWalletSigner
     ) 
         : base(ArkadePlugin.ArkadePaymentMethodId, logger, storeRepository, payoutProcessorSettings, applicationDbContextFactory, paymentHandlers, pluginHookService, eventAggregator)
     {
@@ -44,24 +44,16 @@ public class ArkAutomatedPayoutProcessor: BaseAutomatedPayoutProcessor<ArkAutoma
         _arkSpendingService = arkSpendingService;
         _payoutMethodHandlers = payoutMethodHandlers;
         _jsonSerializerSettings = jsonSerializerSettings;
-        _arkadeMultiWalletSigner = arkadeMultiWalletSigner;
     }
 
     protected override async Task Process(object paymentMethodConfig, List<PayoutData> payouts)
     {
         var payoutHandler = (ArkPayoutHandler)_payoutMethodHandlers[ArkadePlugin.ArkadePayoutMethodId];
         
-        var arkPaymentMethodConfig = (ArkadePaymentMethodConfig)paymentMethodConfig;
-        
         var terms = await _clientTransport.GetServerInfoAsync();
 
         var storeData = await _storeRepository.FindStore(PayoutProcessorSettings.StoreId) ??
             throw new InvalidOperationException("Could not find store by StoreId");
-
-        if (!await _arkadeMultiWalletSigner.CanHandle(arkPaymentMethodConfig.WalletId))
-        {
-            return;
-        }
         
         foreach (var payout in payouts)
         {

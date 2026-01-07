@@ -1,3 +1,4 @@
+using BTCPayServer.Plugins.ArkPayServer.Storage;
 using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using NArk;
 using NArk.Abstractions.Wallets;
@@ -14,7 +15,7 @@ namespace BTCPayServer.Plugins.ArkPayServer.Services.Policies;
 /// </summary>
 public class HashlockPaymentSweepPolicy(
     IWallet wallet,
-    ArkWalletService arkWalletService) : ISweepPolicy
+    EfCoreWalletStorage walletStorage) : ISweepPolicy
 {
     public bool CanSweep(IEnumerable<ArkUnspendableCoin> coins) =>
         coins.Any(c => c.Contract is HashLockedArkPaymentContract);
@@ -28,8 +29,8 @@ public class HashlockPaymentSweepPolicy(
         // Group by wallet to batch lookups
         var walletIds = hashlockCoins.Select(c => c.WalletIdentifier).Distinct().ToArray();
 
-        // Load wallets via cached service, filter for legacy wallets only
-        var wallets = await arkWalletService.GetWallets(walletIds, CancellationToken.None);
+        // Load wallets via storage, filter for legacy wallets only
+        var wallets = await walletStorage.GetWalletsByIdsAsync(walletIds, CancellationToken.None);
         var legacyWalletIds = wallets
             .Where(w => w.WalletType == WalletType.Legacy)
             .Select(w => w.Id)

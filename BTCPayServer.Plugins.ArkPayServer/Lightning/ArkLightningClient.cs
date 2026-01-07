@@ -1,9 +1,8 @@
 using System.ComponentModel.DataAnnotations;
 using BTCPayServer.Lightning;
 using BTCPayServer.Payments.Lightning;
-using BTCPayServer.Plugins.ArkPayServer.Data;
 using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
-using Microsoft.EntityFrameworkCore;
+using BTCPayServer.Plugins.ArkPayServer.Storage;
 using Microsoft.Extensions.Logging;
 using NArk.Contracts;
 using NArk.Swaps.Services;
@@ -19,35 +18,26 @@ public class ArkLightningClient(
     string walletId,
     SwapsManagementService swapsManagementService,
     BoltzLimitsService boltzLimitsService,
-    ArkPluginDbContextFactory dbContextFactory,
-    NArk.Swaps.Abstractions.ISwapStorage swapStorage,
+    EfCoreSwapStorage swapStorage,
+    EfCoreContractStorage contractStorage,
+    EfCoreVtxoStorage vtxoStorage,
     ILogger<ArkLightningInvoiceListener> logger) : IExtendedLightningClient
 {
     public async Task<LightningInvoice?> GetInvoice(string invoiceId, CancellationToken cancellation = default)
     {
-        await using var dbContext = dbContextFactory.CreateContext();
-        var reverseSwap = await dbContext.Swaps
-            .Include(s => s.Contract)
-            .FirstOrDefaultAsync(rs =>
-                    rs.WalletId == walletId &&
-                    rs.SwapType == ArkSwapType.ReverseSubmarine &&
-                    rs.SwapId == invoiceId,
-                cancellationToken: cancellation);
+        var reverseSwap = await swapStorage.GetSwapWithContractAsync(walletId, invoiceId, cancellation);
 
-        return reverseSwap == null ? null : Map(reverseSwap, network);
+        if (reverseSwap == null || reverseSwap.SwapType != ArkSwapType.ReverseSubmarine)
+            return null;
+
+        return Map(reverseSwap, network);
     }
 
     public async Task<LightningInvoice?> GetInvoice(uint256 paymentHash, CancellationToken cancellation = default)
     {
-        await using var dbContext = dbContextFactory.CreateContext();
         var paymentHashStr = paymentHash.ToString();
-        var reverseSwap = await dbContext.Swaps
-            .Include(s => s.Contract)
-            .FirstOrDefaultAsync(rs =>
-                    rs.WalletId == walletId &&
-                    rs.SwapType == ArkSwapType.ReverseSubmarine &&
-                    rs.Hash == paymentHashStr,
-                cancellationToken: cancellation);
+        var reverseSwap = await swapStorage.GetSwapByHashWithContractAsync(
+            walletId, paymentHashStr, ArkSwapType.ReverseSubmarine, cancellation);
 
         return reverseSwap == null ? null : Map(reverseSwap, network);
     }
@@ -92,16 +82,8 @@ public class ArkLightningClient(
     public async Task<LightningInvoice[]> ListInvoices(ListInvoicesParams request,
         CancellationToken cancellation = default)
     {
-        await using var dbContext = dbContextFactory.CreateContext();
-
-        var reverseSwaps = await dbContext.Swaps
-            .Include(s => s.Contract)
-            .Where(rs => rs.SwapType == ArkSwapType.ReverseSubmarine && rs.WalletId == walletId)
-            .Where(rs =>
-                request.PendingOnly == null || !request.PendingOnly.Value || rs.Status == ArkSwapStatus.Pending)
-            .OrderByDescending(rs => rs.CreatedAt)
-            .Skip((int) request.OffsetIndex.GetValueOrDefault(0))
-            .ToListAsync(cancellation);
+        var reverseSwaps = await swapStorage.ListReverseSwapsWithContractAsync(
+            walletId, request.PendingOnly, (int)request.OffsetIndex.GetValueOrDefault(0), cancellation);
 
         var invoices = new List<LightningInvoice>();
         foreach (var swap in reverseSwaps)
@@ -121,14 +103,8 @@ public class ArkLightningClient(
 
     public async Task<LightningPayment> GetPayment(string paymentHash, CancellationToken cancellation = default)
     {
-        await using var dbContext = dbContextFactory.CreateContext();
-        
-        var swap = await dbContext.Swaps
-            .Include(lightningSwap => lightningSwap.Contract)
-            .FirstOrDefaultAsync(rs =>
-                rs.SwapType == ArkSwapType.Submarine &&
-                rs.Hash == paymentHash
-                && rs.WalletId == walletId, cancellation);
+        var swap = await swapStorage.GetSwapByHashWithContractAsync(
+            walletId, paymentHash, ArkSwapType.Submarine, cancellation);
 
         if (swap == null)
             throw new KeyNotFoundException("Swap with the given payment hash was not found");
@@ -169,17 +145,9 @@ public class ArkLightningClient(
     public async Task<LightningPayment[]> ListPayments(ListPaymentsParams request,
         CancellationToken cancellation = default)
     {
-        await using var dbContext = dbContextFactory.CreateContext();
-        
-        var swaps = await dbContext.Swaps
-            .Include(lightningSwap => lightningSwap.Contract)
-            .Where(rs =>
-                rs.SwapType == ArkSwapType.Submarine &&
-                rs.WalletId == walletId)
-            
-            .Skip((int)request.OffsetIndex.GetValueOrDefault(0))
-            .ToListAsync(cancellation);
-        
+        var swaps = await swapStorage.ListSubmarineSwapsWithContractAsync(
+            walletId, (int)request.OffsetIndex.GetValueOrDefault(0), cancellation);
+
         return [.. swaps.Select(MapPayment)];
     }
 
@@ -211,10 +179,7 @@ public class ArkLightningClient(
         var invoice = await swapsManagementService.InitiateReverseSwap(walletId, createInvoiceRequest, cancellation);
 
         // Fetch the created swap from DB to return proper LightningInvoice
-        await using var dbContext = dbContextFactory.CreateContext();
-        var swap = await dbContext.Swaps
-            .Include(s => s.Contract)
-            .FirstOrDefaultAsync(s => s.Invoice == invoice && s.WalletId == walletId, cancellation);
+        var swap = await swapStorage.GetSwapByInvoiceWithContractAsync(walletId, invoice, cancellation);
 
         if (swap == null)
         {
@@ -227,7 +192,7 @@ public class ArkLightningClient(
     public Task<ILightningInvoiceListener> Listen(CancellationToken cancellation = default)
     {
         return Task.FromResult<ILightningInvoiceListener>(
-            new ArkLightningInvoiceListener(walletId, logger, swapStorage, dbContextFactory, network, cancellation));
+            new ArkLightningInvoiceListener(walletId, logger, swapStorage, network, cancellation));
     }
 
     public Task<LightningNodeInformation> GetInfo(CancellationToken cancellation = default)
@@ -237,15 +202,8 @@ public class ArkLightningClient(
 
     public async Task<LightningNodeBalance> GetBalance(CancellationToken cancellation = default)
     {
-        await using var dbContext = dbContextFactory.CreateContext();
-
-        var contracts = await dbContext.WalletContracts
-            .Where(c => c.WalletId == walletId).Select(c => c.Script).ToListAsync(cancellation);
-
-        var sum = await dbContext.Vtxos
-            .Where(vtxo => contracts.Contains(vtxo.Script))
-            .Where(vtxo => (vtxo.SpentByTransactionId == null || vtxo.SpentByTransactionId == "") && !vtxo.Recoverable) 
-            .SumAsync(v => v.Amount, cancellation);
+        var contractScripts = await contractStorage.GetContractScriptsAsync(walletId, cancellation);
+        var sum = await vtxoStorage.SumUnspentBalanceByContractScriptsAsync(contractScripts, cancellation);
 
         return new LightningNodeBalance()
         {
@@ -284,10 +242,7 @@ public class ArkLightningClient(
             await swapsManagementService.InitiateSubmarineSwap(walletId, pr, autoPay: true, cancellation);
 
             // Fetch the created swap from DB to return proper PayResponse
-            await using var dbContext = dbContextFactory.CreateContext();
-            var result = await dbContext.Swaps
-                .Include(s => s.Contract)
-                .FirstOrDefaultAsync(s => s.Invoice == bolt11 && s.WalletId == walletId, cancellation);
+            var result = await swapStorage.GetSwapByInvoiceWithContractAsync(walletId, bolt11, cancellation);
 
             if (result == null)
             {

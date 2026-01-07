@@ -1,3 +1,4 @@
+using BTCPayServer.Plugins.ArkPayServer.Storage;
 using Microsoft.Extensions.Logging;
 using NArk;
 using NArk.Abstractions.Wallets;
@@ -14,7 +15,7 @@ namespace BTCPayServer.Plugins.ArkPayServer.Services.Policies;
 /// </summary>
 public class DestinationSweepPolicy(
     IWallet wallet,
-    ArkWalletService arkWalletService,
+    EfCoreWalletStorage walletStorage,
     ILogger<DestinationSweepPolicy> logger) : ISweepPolicy
 {
     public bool CanSweep(IEnumerable<ArkUnspendableCoin> coins) =>
@@ -33,8 +34,8 @@ public class DestinationSweepPolicy(
         // Group by wallet
         var walletIds = spendableCoins.Select(c => c.WalletIdentifier).Distinct().ToArray();
 
-        // Load wallets via cached service, filter for those with destinations set
-        var wallets = await arkWalletService.GetWallets(walletIds, CancellationToken.None);
+        // Load wallets via storage, filter for those with destinations set
+        var wallets = await walletStorage.GetWalletsByIdsAsync(walletIds, CancellationToken.None);
         var walletsWithDestination = wallets
             .Where(w => !string.IsNullOrEmpty(w.WalletDestination))
             .ToDictionary(w => w.Id, w => w.WalletDestination!);

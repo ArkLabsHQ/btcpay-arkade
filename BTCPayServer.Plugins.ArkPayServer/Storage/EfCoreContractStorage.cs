@@ -112,4 +112,214 @@ public class EfCoreContractStorage : IContractStorage
             CreatedAt: entity.CreatedAt
         );
     }
+
+    #region Plugin-specific methods (wallet-guarded)
+
+    /// <summary>
+    /// Gets the first active contract for a wallet. Used for displaying default address.
+    /// </summary>
+    public async Task<ArkWalletContract?> GetFirstActiveContractAsync(
+        string walletId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        return await db.WalletContracts
+            .Where(c => c.WalletId == walletId && c.Active)
+            .OrderBy(c => c.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Gets a contract with its swaps included. Wallet ID guards ownership.
+    /// </summary>
+    public async Task<ArkWalletContract?> GetContractWithSwapsAsync(
+        string walletId,
+        string script,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        return await db.WalletContracts
+            .Include(c => c.Swaps)
+            .FirstOrDefaultAsync(c => c.WalletId == walletId && c.Script == script, cancellationToken);
+    }
+
+    /// <summary>
+    /// Checks if a contract with the given script exists for the wallet.
+    /// </summary>
+    public async Task<bool> ContractExistsAsync(
+        string walletId,
+        string script,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        return await db.WalletContracts
+            .AnyAsync(c => c.WalletId == walletId && c.Script == script, cancellationToken);
+    }
+
+    /// <summary>
+    /// Deletes a contract by script. Wallet ID guards ownership.
+    /// </summary>
+    public async Task<bool> DeleteContractAsync(
+        string walletId,
+        string script,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        var contract = await db.WalletContracts
+            .FirstOrDefaultAsync(c => c.WalletId == walletId && c.Script == script, cancellationToken);
+
+        if (contract == null)
+            return false;
+
+        db.WalletContracts.Remove(contract);
+        await db.SaveChangesAsync(cancellationToken);
+        return true;
+    }
+
+    /// <summary>
+    /// Gets all contract scripts for a wallet.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> GetContractScriptsAsync(
+        string walletId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        return await db.WalletContracts
+            .Where(c => c.WalletId == walletId)
+            .Select(c => c.Script)
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Gets contract scripts for active contracts only.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> GetActiveContractScriptsAsync(
+        string walletId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        return await db.WalletContracts
+            .Where(c => c.WalletId == walletId && c.Active)
+            .Select(c => c.Script)
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Toggles contract active status.
+    /// </summary>
+    public async Task<bool> ToggleContractAsync(
+        string walletId,
+        string script,
+        bool active,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        var contract = await db.WalletContracts.FirstOrDefaultAsync(
+            c => c.WalletId == walletId && c.Script == script && c.Active != active,
+            cancellationToken);
+
+        if (contract == null)
+            return false;
+
+        contract.Active = active;
+        await db.SaveChangesAsync(cancellationToken);
+        return true;
+    }
+
+    /// <summary>
+    /// Upserts a contract.
+    /// </summary>
+    public async Task<bool> UpsertContractAsync(
+        ArkWalletContract contract,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        var result = await db.WalletContracts.Upsert(contract).RunAndReturnAsync();
+        return result.Count > 0;
+    }
+
+    /// <summary>
+    /// Gets contracts with pagination and optional filtering.
+    /// </summary>
+    public async Task<IReadOnlyList<ArkWalletContract>> GetContractsWithPaginationAsync(
+        string walletId,
+        int skip = 0,
+        int count = 10,
+        string? searchText = null,
+        bool? active = null,
+        bool includeSwaps = false,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        var query = includeSwaps
+            ? db.WalletContracts.Include(c => c.Swaps)
+            : db.WalletContracts.AsQueryable();
+
+        query = query.Where(c => c.WalletId == walletId);
+
+        if (!string.IsNullOrEmpty(searchText))
+        {
+            query = query.Where(c => c.Script.Contains(searchText));
+        }
+
+        if (active.HasValue)
+        {
+            query = query.Where(c => c.Active == active.Value);
+        }
+
+        return await query
+            .OrderByDescending(c => c.CreatedAt)
+            .Skip(skip)
+            .Take(count)
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Gets contracts for multiple wallets with optional filtering.
+    /// </summary>
+    public async Task<IReadOnlyList<ArkWalletContract>> GetContractsForWalletsAsync(
+        string[]? walletIds = null,
+        string? searchText = null,
+        bool? active = null,
+        bool includeSwaps = false,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        var query = includeSwaps
+            ? db.WalletContracts.Include(c => c.Swaps)
+            : db.WalletContracts.AsQueryable();
+
+        if (walletIds != null && walletIds.Length > 0)
+        {
+            query = query.Where(c => walletIds.Contains(c.WalletId));
+        }
+
+        if (!string.IsNullOrEmpty(searchText))
+        {
+            query = query.Where(c => c.Script.Contains(searchText));
+        }
+
+        if (active.HasValue)
+        {
+            query = query.Where(c => c.Active == active.Value);
+        }
+
+        return await query
+            .OrderByDescending(c => c.CreatedAt)
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
+    }
+
+    #endregion
 }

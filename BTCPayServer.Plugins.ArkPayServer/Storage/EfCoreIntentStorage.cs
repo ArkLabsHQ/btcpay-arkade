@@ -264,4 +264,83 @@ public class EfCoreIntentStorage : IIntentStorage
         var bytes = guid.ToByteArray();
         return BitConverter.ToInt32(bytes, 0);
     }
+
+    #region Plugin-specific methods (wallet-guarded)
+
+    /// <summary>
+    /// Gets intent VTXOs grouped by intent InternalId.
+    /// </summary>
+    public async Task<Dictionary<int, ArkIntentVtxo[]>> GetIntentVtxosByIntentIdsAsync(
+        IEnumerable<int> intentIds,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        var idSet = intentIds.ToHashSet();
+        var vtxos = await db.IntentVtxos
+            .Include(iv => iv.Vtxo)
+            .Where(iv => idSet.Contains(iv.InternalId))
+            .ToArrayAsync(cancellationToken);
+
+        return vtxos
+            .GroupBy(iv => iv.InternalId)
+            .ToDictionary(g => g.Key, g => g.ToArray());
+    }
+
+    /// <summary>
+    /// Gets outpoints of VTXOs locked by pending intents for a wallet.
+    /// </summary>
+    public async Task<IReadOnlyList<(string TransactionId, int OutputIndex)>> GetLockedVtxoOutpointsAsync(
+        string walletId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        return await db.IntentVtxos
+            .Include(iv => iv.Intent)
+            .Include(iv => iv.Vtxo)
+            .Where(iv => iv.Intent.WalletId == walletId &&
+                        (iv.Intent.State == PluginArkIntentState.WaitingToSubmit ||
+                         iv.Intent.State == PluginArkIntentState.WaitingForBatch))
+            .Select(iv => new ValueTuple<string, int>(iv.Vtxo!.TransactionId, iv.Vtxo.TransactionOutputIndex))
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Gets intents with pagination and optional filtering.
+    /// </summary>
+    public async Task<IReadOnlyList<PluginArkIntent>> GetIntentsWithPaginationAsync(
+        string walletId,
+        int skip = 0,
+        int count = 10,
+        string? searchText = null,
+        PluginArkIntentState? state = null,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        var query = db.Intents.Where(i => i.WalletId == walletId);
+
+        if (!string.IsNullOrEmpty(searchText))
+        {
+            query = query.Where(i =>
+                (i.IntentId != null && i.IntentId.Contains(searchText)) ||
+                (i.BatchId != null && i.BatchId.Contains(searchText)) ||
+                (i.CommitmentTransactionId != null && i.CommitmentTransactionId.Contains(searchText)));
+        }
+
+        if (state.HasValue)
+        {
+            query = query.Where(i => i.State == state.Value);
+        }
+
+        return await query
+            .OrderByDescending(i => i.CreatedAt)
+            .Skip(skip)
+            .Take(count)
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
+    }
+
+    #endregion
 }

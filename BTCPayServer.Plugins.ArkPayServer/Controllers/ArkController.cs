@@ -23,6 +23,7 @@ using BTCPayServer.Plugins.ArkPayServer.Models;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
 using BTCPayServer.Plugins.ArkPayServer.Services;
+using BTCPayServer.Plugins.ArkPayServer.Storage;
 using BTCPayServer.Security;
 using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Stores;
@@ -39,7 +40,9 @@ using NArk.Services;
 using NArk.Transactions;
 using NArk.Transport;
 using BTCPayServer.Plugins.ArkPayServer.Wallet;
+using NArk.Abstractions.Blockchain;
 using PluginArkIntentState = BTCPayServer.Plugins.ArkPayServer.Data.ArkIntentState;
+using PluginArkSwapStatus = BTCPayServer.Plugins.ArkPayServer.Data.Entities.ArkSwapStatus;
 using NBitcoin;
 using NBitcoin.DataEncoders;
 using NBitcoin.Secp256k1;
@@ -54,9 +57,7 @@ public class ArkController(
     ArkConfiguration arkConfiguration,
     IAuthorizationService authorizationService,
     ArkPayoutHandler arkPayoutHandler,
-    ArkPluginDbContextFactory dbContextFactory,
     StoreRepository storeRepository,
-    ArkWalletService arkWalletService,
     PaymentMethodHandlerDictionary paymentMethodHandlerDictionary,
     IClientTransport clientTransport,
     ArkadeSpendingService arkadeSpendingService,
@@ -64,13 +65,17 @@ public class ArkController(
     PayoutProcessorService payoutProcessorService,
     PullPaymentHostedService pullPaymentHostedService,
     EventAggregator eventAggregator,
-    ArkadeWalletSignerProvider walletSignerProvider,
     IIntentGenerationService intentGenerationService,
     IIntentStorage intentStorage,
-    ISigningService signingService,
-    ArkadeSpender arkadeSpender,
-    BitcoinTimeChainProvider bitcoinTimeChainProvider,
-    IContractStorage contractStorage) : Controller
+    IArkadeMultiWalletSigner arkadeMultiWalletSigner,
+    ISpendingService arkadeSpender,
+    IChainTimeProvider bitcoinTimeChainProvider,
+    VtxoPollingService vtxoPollingService,
+    EfCoreContractStorage contractStorage,
+    EfCoreSwapStorage swapStorage,
+    EfCoreVtxoStorage vtxoStorage,
+    EfCoreIntentStorage efCoreIntentStorage,
+    EfCoreWalletStorage walletStorage) : Controller
 {
     [HttpGet("stores/{storeId}/initial-setup")]
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
@@ -106,16 +111,17 @@ public class ArkController(
             {
                 try
                 {
-                    walletSettings = walletSettings with
-                    {
-                        WalletId =
-                            await arkWalletService.Upsert(
-                                walletSettings.Wallet,
-                                walletSettings.Destination,
-                                walletSettings.IsOwnedByStore,
-                                HttpContext.RequestAborted
-                            )
-                    };
+                    var serverInfo = await clientTransport.GetServerInfoAsync(HttpContext.RequestAborted);
+                    var wallet = await WalletFactory.CreateWallet(
+                        walletSettings.Wallet,
+                        walletSettings.Destination,
+                        serverInfo,
+                        HttpContext.RequestAborted);
+
+                    // Signer is automatically registered via WalletSaved event
+                    await walletStorage.UpsertWalletAsync(wallet, walletSettings.IsOwnedByStore, HttpContext.RequestAborted);
+
+                    walletSettings = walletSettings with { WalletId = wallet.Id };
                 }
                 catch (Exception ex)
                 {
@@ -181,8 +187,9 @@ public class ArkController(
         if (config?.WalletId is null)
             return RedirectToAction(nameof(InitialSetup), new { storeId = store.Id });
 
-        var destination = await arkWalletService.GetWalletDestination(config.WalletId, cancellationToken);
-        
+        var wallet = await walletStorage.GetWalletByIdAsync(config.WalletId, cancellationToken);
+        var destination = wallet?.WalletDestination;
+
         // Get balances with error handling - indexer service may be unavailable
         ArkBalancesViewModel? balances = null;
         try
@@ -194,32 +201,24 @@ public class ArkController(
             // Log the error but don't fail the entire page
             TempData[WellKnownTempData.ErrorMessage] = $"Unable to fetch balances: {ex.Message}";
         }
-        
-        var signerAvailable = await walletSignerProvider.GetSigner(config.WalletId, cancellationToken) is not null;
+
+        var signerAvailable = await arkadeMultiWalletSigner.CanHandle(config.WalletId, cancellationToken);
         var includeData = config.GeneratedByStore ||
                           (await authorizationService.AuthorizeAsync(User, null,
                               new PolicyRequirement(Policies.CanModifyServerSettings))).Succeeded;
-        var walletInfo = await arkWalletService.GetWalletInfo(config.WalletId, includeData);
         
         // Get the default/active contract address
         string? defaultAddress = null;
-        await using (var dbContext = dbContextFactory.CreateContext())
+        var activeContract = await contractStorage.GetFirstActiveContractAsync(config.WalletId, cancellationToken);
+        if (activeContract != null)
         {
-            var activeContract = await dbContext.WalletContracts
-                .Where(c => c.WalletId == config.WalletId && c.Active)
-                .OrderBy(c => c.CreatedAt)
-                .FirstOrDefaultAsync(cancellationToken);
-            
-            if (activeContract != null)
-            {
-                var terms = await clientTransport.GetServerInfoAsync(cancellationToken);
-                var script = Script.FromHex(activeContract.Script);
-                var serverKey = terms.SignerKey.Extract().XOnlyPubKey;
-                var address = ArkAddress.FromScriptPubKey(script, serverKey);
-                defaultAddress = address.ToString(terms.Network.ChainName == ChainName.Mainnet);
-            }
+            var terms = await clientTransport.GetServerInfoAsync(cancellationToken);
+            var script = Script.FromHex(activeContract.Script);
+            var serverKey = terms.SignerKey.Extract().XOnlyPubKey;
+            var address = ArkAddress.FromScriptPubKey(script, serverKey);
+            defaultAddress = address.ToString(terms.Network.ChainName == ChainName.Mainnet);
         }
-        
+
         // Check Ark Operator connection
         string? arkOperatorUrl = arkConfiguration.ArkUri;
         bool arkOperatorConnected = false;
@@ -277,9 +276,9 @@ public class ArkController(
             WalletId = config.WalletId,
             Destination = destination,
             SignerAvailable = signerAvailable,
-            Wallet = walletInfo?.Wallet,
             DefaultAddress = defaultAddress,
             AllowSubDustAmounts = config.AllowSubDustAmounts,
+            Wallet = wallet?.Wallet,
             ArkOperatorUrl = arkOperatorUrl,
             ArkOperatorConnected = arkOperatorConnected,
             ArkOperatorError = arkOperatorError,
@@ -419,7 +418,7 @@ public class ArkController(
 
         if (command == "clear-destination")
         {
-            await arkWalletService.SetWalletDestination(config.WalletId, null, cancellationToken);
+            await walletStorage.UpdateWalletDestinationAsync(config.WalletId, null, cancellationToken);
             TempData[WellKnownTempData.SuccessMessage] = "Auto-sweep destination cleared.";
             return RedirectToAction(nameof(StoreOverview), new { storeId });
         }
@@ -432,10 +431,12 @@ public class ArkController(
                 TempData[WellKnownTempData.ErrorMessage] = "Cannot configure auto-sweep while sub-dust amounts are enabled. Disable sub-dust amounts first.";
                 return RedirectToAction(nameof(StoreOverview), new { storeId });
             }
-            
+
             try
             {
-                await arkWalletService.SetWalletDestination(config.WalletId, model.Destination, cancellationToken);
+                var serverInfo = await clientTransport.GetServerInfoAsync(cancellationToken);
+                WalletFactory.ValidateDestination(model.Destination, serverInfo);
+                await walletStorage.UpdateWalletDestinationAsync(config.WalletId, model.Destination, cancellationToken);
                 TempData[WellKnownTempData.SuccessMessage] = "Auto-sweep destination updated.";
             }
             catch (Exception ex)
@@ -448,8 +449,9 @@ public class ArkController(
         if (command == "toggle-subdust")
         {
             // Check if auto-sweep is enabled
-            var destination = await arkWalletService.GetWalletDestination(config.WalletId, cancellationToken);
-            
+            var toggleWallet = await walletStorage.GetWalletByIdAsync(config.WalletId, cancellationToken);
+            var destination = toggleWallet?.WalletDestination;
+
             // Prevent enabling sub-dust when auto-sweep is configured
             if (!config.AllowSubDustAmounts && !string.IsNullOrEmpty(destination))
             {
@@ -502,33 +504,42 @@ public class ArkController(
             }
         }
 
-        // Always load VTXOs and include all (spent and recoverable)
-        var (contracts, contractVtxos) = await arkWalletService.GetArkWalletContractsAsync(
-            config.WalletId, 
-            skip, 
-            count, 
-            searchText ?? "", 
+        // Get contracts with pagination
+        var contracts = await contractStorage.GetContractsWithPaginationAsync(
+            config.WalletId,
+            skip,
+            count,
+            searchText,
             activeFilter,
-            includeVtxos: true,
-            allowSpent: true,
-            allowNote: true,
+            includeSwaps: false,
             HttpContext.RequestAborted);
 
-        // Always load swaps
-        var contractSwaps = new Dictionary<string, ArkSwap[]>();
+        // Get VTXOs for the contracts (include spent and recoverable for full history)
+        var contractVtxos = new Dictionary<string, Data.Entities.VTXO[]>();
         if (contracts.Any())
         {
-            await using var dbContext = dbContextFactory.CreateContext();
-            var contractScripts = contracts.Select(c => c.Script).ToHashSet();
-            
-            var swaps = await dbContext.Swaps
-                .Where(s => s.WalletId == config.WalletId && contractScripts.Contains(s.ContractScript))
-                .OrderByDescending(s => s.CreatedAt)
-                .ToArrayAsync(HttpContext.RequestAborted);
-            
-            contractSwaps = swaps
-                .GroupBy(s => s.ContractScript)
+            var contractScripts = contracts.Select(c => c.Script).ToList();
+            var vtxos = await vtxoStorage.GetVtxosByScriptsAndOutpointsAsync(
+                contractScripts,
+                vtxoOutpoints: null,
+                includeSpent: true,
+                includeRecoverable: true,
+                HttpContext.RequestAborted);
+
+            contractVtxos = vtxos
+                .GroupBy(v => v.Script)
                 .ToDictionary(g => g.Key, g => g.ToArray());
+        }
+
+        // Always load swaps
+        var contractSwaps = new Dictionary<string, Data.Entities.ArkSwap[]>();
+        if (contracts.Any())
+        {
+            var contractScripts = contracts.Select(c => c.Script);
+            contractSwaps = await swapStorage.GetSwapsByContractScriptsAsync(
+                config.WalletId,
+                contractScripts,
+                HttpContext.RequestAborted);
         }
 
         var model = new StoreContractsViewModel
@@ -606,11 +617,11 @@ public class ArkController(
             }
         }
 
-        var swaps = await arkWalletService.GetArkWalletSwapsAsync(
+        var swaps = await swapStorage.GetSwapsWithPaginationAsync(
             config.WalletId,
             skip,
             count,
-            searchText ?? "",
+            searchText,
             statusFilter,
             typeFilter,
             HttpContext.RequestAborted);
@@ -650,11 +661,8 @@ public class ArkController(
                 return RedirectToAction(nameof(Swaps), new { storeId });
             }
 
-            // Fetch the swap from DB
-            await using var dbContext = dbContextFactory.CreateContext();
-            var swap = await dbContext.Swaps
-                .FirstOrDefaultAsync(s => s.SwapId == swapId && s.WalletId == config.WalletId, HttpContext.RequestAborted);
-
+            // Fetch the swap from storage
+            var swap = await swapStorage.GetSwapByIdAsync(config.WalletId, swapId, HttpContext.RequestAborted);
             if (swap == null)
             {
                 TempData[WellKnownTempData.ErrorMessage] = $"Swap {swapId} not found.";
@@ -667,9 +675,7 @@ public class ArkController(
 
             if (swap.Status != newStatus)
             {
-                swap.Status = newStatus;
-                swap.UpdatedAt = DateTimeOffset.UtcNow;
-                await dbContext.SaveChangesAsync(HttpContext.RequestAborted);
+                await swapStorage.UpdateSwapStatusAsync(config.WalletId, swapId, newStatus, HttpContext.RequestAborted);
                 TempData[WellKnownTempData.SuccessMessage] = $"Swap {swapId} polled successfully. Status updated to: {newStatus}";
             }
             else
@@ -685,15 +691,15 @@ public class ArkController(
         return RedirectToAction("Swaps", new { storeId });
     }
 
-    private static ArkSwapStatus MapBoltzStatus(string status)
+    private static PluginArkSwapStatus MapBoltzStatus(string status)
     {
         return status switch
         {
-            "swap.created" or "invoice.set" => ArkSwapStatus.Pending,
-            "invoice.failedToPay" or "invoice.expired" or "swap.expired" or "transaction.failed" or "transaction.refunded" => ArkSwapStatus.Failed,
-            "transaction.mempool" => ArkSwapStatus.Pending,
-            "transaction.confirmed" or "invoice.settled" or "transaction.claimed" => ArkSwapStatus.Settled,
-            _ => ArkSwapStatus.Unknown
+            "swap.created" or "invoice.set" => PluginArkSwapStatus.Pending,
+            "invoice.failedToPay" or "invoice.expired" or "swap.expired" or "transaction.failed" or "transaction.refunded" => PluginArkSwapStatus.Failed,
+            "transaction.mempool" => PluginArkSwapStatus.Pending,
+            "transaction.confirmed" or "invoice.settled" or "transaction.claimed" => PluginArkSwapStatus.Settled,
+            _ => PluginArkSwapStatus.Unknown
         };
     }
 
@@ -763,11 +769,13 @@ public class ArkController(
             search = new SearchString(searchTerm);
         }
 
-        var vtxos = await arkWalletService.GetArkWalletVtxosAsync(
-            config.WalletId,
+        // Get contract scripts for the wallet and fetch VTXOs
+        var vtxoContractScripts = await contractStorage.GetContractScriptsAsync(config.WalletId, HttpContext.RequestAborted);
+        var vtxos = await vtxoStorage.GetVtxosWithPaginationAsync(
+            vtxoContractScripts,
             skip,
             count,
-            searchText ?? "",
+            searchText,
             includeSpent,
             includeRecoverable,
             HttpContext.RequestAborted);
@@ -847,11 +855,11 @@ public class ArkController(
             }
         }
 
-        var intents = await arkWalletService.GetArkWalletIntentsAsync(
+        var intents = await efCoreIntentStorage.GetIntentsWithPaginationAsync(
             config.WalletId,
             skip,
             count,
-            searchText ?? "",
+            searchText,
             stateFilter,
             HttpContext.RequestAborted);
 
@@ -859,17 +867,10 @@ public class ArkController(
         var intentVtxos = new Dictionary<int, ArkIntentVtxo[]>();
         if (intents.Any())
         {
-            await using var dbContext = dbContextFactory.CreateContext();
-            var intentIds = intents.Select(i => i.InternalId).ToHashSet();
-            
-            var vtxos = await dbContext.IntentVtxos
-                .Include(iv => iv.Vtxo)
-                .Where(iv => intentIds.Contains(iv.InternalId))
-                .ToArrayAsync(HttpContext.RequestAborted);
-            
-            intentVtxos = vtxos
-                .GroupBy(iv => iv.InternalId)
-                .ToDictionary(g => g.Key, g => g.ToArray());
+            var intentIds = intents.Select(i => i.InternalId);
+            intentVtxos = await efCoreIntentStorage.GetIntentVtxosByIntentIdsAsync(
+                intentIds,
+                HttpContext.RequestAborted);
         }
 
         var model = new StoreIntentsViewModel
@@ -1001,15 +1002,15 @@ public class ArkController(
 
             // Get server info for destination address
             var serverInfo = await clientTransport.GetServerInfoAsync(cancellationToken);
-            var wallet = await arkWalletService.GetWallet(config.WalletId, cancellationToken);
-            if (wallet == null)
+            var refreshWallet = await walletStorage.GetWalletByIdAsync(config.WalletId, cancellationToken);
+            if (refreshWallet == null)
             {
                 TempData[WellKnownTempData.ErrorMessage] = "Wallet not found.";
                 return RedirectToAction(nameof(StoreOverview), new { storeId });
             }
 
-            // Get destination for refresh (back to same wallet)
-            var destination = await arkadeSpender.GetDestination(wallet, serverInfo);
+            // Get destination for refresh (back to same wallet) 
+            var destination = await arkadeSpender.GetDestination(refreshWallet);
             var totalAmount = coins.Sum(c => c.Coin.TxOut.Value);
 
             // Build signers dictionary
@@ -1033,7 +1034,7 @@ public class ArkController(
                 arkIntentSpec,
                 signers,
                 force: true,
-                cancellationToken);
+                cancellationToken);                                                            
 
             TempData[WellKnownTempData.SuccessMessage] = $"Refresh intent {intentId} created with {coins.Count} VTXOs. Intent will be submitted automatically.";
         }
@@ -1111,7 +1112,8 @@ public class ArkController(
 
         try
         {
-            await arkWalletService.UpdateBalances(config.WalletId, false, cancellationToken);
+            var scripts = await contractStorage.GetContractScriptsAsync(config.WalletId, cancellationToken);
+            await vtxoPollingService.PollScriptsForVtxos(scripts.ToHashSet(), cancellationToken);
             TempData[WellKnownTempData.SuccessMessage] = "Wallet synchronized successfully. All contracts and VTXOs have been updated.";
         }
         catch (Exception ex)
@@ -1137,17 +1139,15 @@ public class ArkController(
 
         try
         {
-            await using var dbContext = dbContextFactory.CreateContext();
-            var contract = await dbContext.WalletContracts
-                .FirstOrDefaultAsync(c => c.WalletId == config.WalletId && c.Script == script, cancellationToken);
-
-            if (contract == null)
+            var contractExists = await contractStorage.ContractExistsAsync(config.WalletId, script, cancellationToken);
+            if (!contractExists)
             {
                 TempData[WellKnownTempData.ErrorMessage] = "Contract not found.";
                 return RedirectToAction(nameof(Contracts), new { storeId });
             }
 
-            await arkWalletService.UpdateBalances(config.WalletId, false, cancellationToken);
+            var scripts = await contractStorage.GetContractScriptsAsync(config.WalletId, cancellationToken);
+            await vtxoPollingService.PollScriptsForVtxos(scripts.ToHashSet(), cancellationToken);
             TempData[WellKnownTempData.SuccessMessage] = "Contract VTXOs updated successfully.";
         }
         catch (Exception ex)
@@ -1180,29 +1180,15 @@ public class ArkController(
 
         try
         {
-            await using var dbContext = dbContextFactory.CreateContext();
-            var contract = await dbContext.WalletContracts
-                .Include(c => c.Swaps)
-                .FirstOrDefaultAsync(c => c.WalletId == config.WalletId && c.Script == script, cancellationToken);
-
+            var contract = await contractStorage.GetContractWithSwapsAsync(config.WalletId, script, cancellationToken);
             if (contract == null)
             {
                 TempData[WellKnownTempData.ErrorMessage] = "Contract not found.";
                 return RedirectToAction(nameof(Contracts), new { storeId });
             }
-            //
-            // // Check if contract has any unspent VTXOs
-            // var hasUnspentVtxos = await dbContext.Vtxos
-            //     .AnyAsync(v => v.Script == script && (v.SpentByTransactionId == null || v.SpentByTransactionId == ""), cancellationToken);
-            //
-            // if (hasUnspentVtxos)
-            // {
-            //     TempData[WellKnownTempData.ErrorMessage] = "Cannot delete contract: It has unspent VTXOs. Please spend them first.";
-            //     return RedirectToAction(nameof(Contracts), new { storeId });
-            // }
 
             // Check if contract has any pending swaps
-            var hasPendingSwaps = contract.Swaps?.Any(s => s.Status == ArkSwapStatus.Pending) ?? false;
+            var hasPendingSwaps = contract.Swaps?.Any(s => s.Status == PluginArkSwapStatus.Pending) ?? false;
             if (hasPendingSwaps)
             {
                 TempData[WellKnownTempData.ErrorMessage] = "Cannot delete contract: It has pending swaps.";
@@ -1210,8 +1196,7 @@ public class ArkController(
             }
 
             // Delete the contract (cascade will delete related swaps)
-            dbContext.WalletContracts.Remove(contract);
-            await dbContext.SaveChangesAsync(cancellationToken);
+            await contractStorage.DeleteContractAsync(config.WalletId, script, cancellationToken);
 
             TempData[WellKnownTempData.SuccessMessage] = "Contract deleted successfully.";
         }
@@ -1265,35 +1250,21 @@ public class ArkController(
             var script = arkContract.GetArkAddress().ScriptPubKey;
             var scriptHex = script.ToHex();
 
-            await using var dbContext = dbContextFactory.CreateContext();
-
             // Check if contract already exists
-            var existingContract = await dbContext.WalletContracts
-                .FirstOrDefaultAsync(c => c.WalletId == config.WalletId && c.Script == scriptHex, cancellationToken);
-
-            if (existingContract != null)
+            var contractExists = await contractStorage.ContractExistsAsync(config.WalletId, scriptHex, cancellationToken);
+            if (contractExists)
             {
                 TempData[WellKnownTempData.ErrorMessage] = "Contract already exists in this wallet.";
                 return RedirectToAction(nameof(Contracts), new { storeId });
             }
 
-            // Create the contract using ToEntity to get the contract data
+            // Create the contract using ToEntity and save via storage
             var contractEntity = arkContract.ToEntity(config.WalletId);
-            var newContract = new ArkWalletContract
-            {
-                Script = scriptHex,
-                WalletId = config.WalletId,
-                Type = arkContract.Type,
-                ContractData = contractEntity.AdditionalData,
-                Active = true,
-                CreatedAt = DateTimeOffset.UtcNow
-            };
-
-            dbContext.WalletContracts.Add(newContract);
-            await dbContext.SaveChangesAsync(cancellationToken);
+            await contractStorage.SaveContract(config.WalletId, contractEntity, cancellationToken);
 
             // Sync the wallet to detect any VTXOs for this contract
-            await arkWalletService.UpdateBalances(config.WalletId, false, cancellationToken);
+            var allScripts = await contractStorage.GetContractScriptsAsync(config.WalletId, cancellationToken);
+            await vtxoPollingService.PollScriptsForVtxos(allScripts.ToHashSet(), cancellationToken);
 
             TempData[WellKnownTempData.SuccessMessage] = $"Contract imported successfully: {arkContract.GetArkAddress().ToString(terms.Network.ChainName == ChainName.Mainnet)}";
         }
@@ -1341,7 +1312,8 @@ public class ArkController(
             { Length: 32 } potentialWalletBytes &&
             ECXOnlyPubKey.TryCreate(potentialWalletBytes, out _))
         {
-            if (!await arkWalletService.WalletExists(wallet, HttpContext.RequestAborted))
+            var existingWallet = await walletStorage.GetWalletByIdAsync(wallet, HttpContext.RequestAborted);
+            if (existingWallet == null)
                 throw new Exception("Unsupported value.");
 
             return new TemporaryWalletSettings(null, wallet, null, false);
@@ -1429,18 +1401,11 @@ public class ArkController(
 
     private async Task<ArkBalancesViewModel> GetArkBalances(string walletId, CancellationToken cancellationToken)
     {
-        await using var dbContext = dbContextFactory.CreateContext();
+        // Get all contract scripts for the wallet
+        var contractScripts = await contractStorage.GetContractScriptsAsync(walletId, cancellationToken);
 
-        // Get all VTXOs for the wallet
-        var contracts = await dbContext.WalletContracts
-            .Where(c => c.WalletId == walletId)
-            .Select(c => c.Script)
-            .ToListAsync(cancellationToken);
-
-        var vtxos = await dbContext.Vtxos
-            .Where(vtxo => contracts.Contains(vtxo.Script))
-            .Where(vtxo => (vtxo.SpentByTransactionId == null || vtxo.SpentByTransactionId == ""))
-            .ToListAsync(cancellationToken);
+        // Get unspent VTXOs for those contracts
+        var vtxos = await vtxoStorage.GetUnspentVtxosByContractScriptsAsync(contractScripts, cancellationToken);
 
         // Get actually spendable coins using ArkadeSpender logic
         var spendableCoins = await arkadeSpender.GetSpendableCoins([walletId], false, cancellationToken);
@@ -1468,19 +1433,12 @@ public class ArkController(
             .Sum(vtxo => vtxo.Amount);
 
         // Locked: VTXOs that are linked to pending intents
-        var intentVtxoScripts = await dbContext.IntentVtxos
-            .Include(iv => iv.Intent)
-            .Include(iv => iv.Vtxo)
-            .Where(iv => iv.Intent.WalletId == walletId &&
-                        (iv.Intent.State == PluginArkIntentState.WaitingToSubmit ||
-                         iv.Intent.State == PluginArkIntentState.WaitingForBatch))
-            .Select(iv => new { iv.Vtxo!.TransactionId, iv.Vtxo.TransactionOutputIndex })
-            .ToListAsync(cancellationToken);
+        var lockedVtxoOutpoints = await efCoreIntentStorage.GetLockedVtxoOutpointsAsync(walletId, cancellationToken);
 
         var lockedBalance = vtxos
-            .Where(vtxo => intentVtxoScripts.Any(iv => 
-                iv.TransactionId == vtxo.TransactionId && 
-                iv.TransactionOutputIndex == vtxo.TransactionOutputIndex))
+            .Where(vtxo => lockedVtxoOutpoints.Any(iv =>
+                iv.TransactionId == vtxo.TransactionId &&
+                iv.OutputIndex == vtxo.TransactionOutputIndex))
             .Sum(vtxo => vtxo.Amount);
 
         // Unspendable: unspent VTXOs that don't pass contract conditions yet (e.g., HTLC timelock not reached)
@@ -1492,12 +1450,12 @@ public class ArkController(
             .ToHashSet();
 
         var unspendableBalance = vtxos
-            .Where(vtxo => 
+            .Where(vtxo =>
             {
                 var outpoint = new OutPoint(uint256.Parse(vtxo.TransactionId), (uint)vtxo.TransactionOutputIndex);
-                var isLocked = intentVtxoScripts.Any(iv => 
-                    iv.TransactionId == vtxo.TransactionId && 
-                    iv.TransactionOutputIndex == vtxo.TransactionOutputIndex);
+                var isLocked = lockedVtxoOutpoints.Any(iv =>
+                    iv.TransactionId == vtxo.TransactionId &&
+                    iv.OutputIndex == vtxo.TransactionOutputIndex);
                 return !allSpendableOutpoints.Contains(outpoint) && !isLocked;
             })
             .Sum(vtxo => vtxo.Amount);
@@ -1517,7 +1475,7 @@ public class ArkController(
     {
         try
         {
-            var (timestamp, height) = await bitcoinTimeChainProvider.Get(cancellationToken);
+            var (timestamp, height) = await bitcoinTimeChainProvider.GetChainTime(cancellationToken);
             return Json(new { timestamp, height });
         }
         catch (Exception ex)
@@ -1534,36 +1492,29 @@ public class ArkController(
             return NotFound();
 
         // Check if wallet exists
-        if (!await arkWalletService.WalletExists(walletId, cancellationToken))
+        var adminWallet = await walletStorage.GetWalletByIdAsync(walletId, cancellationToken);
+        if (adminWallet == null)
         {
             TempData[WellKnownTempData.ErrorMessage] = "Wallet not found.";
             return RedirectToAction("ListWallets");
         }
 
-        var destination = await arkWalletService.GetWalletDestination(walletId, cancellationToken);
+        var destination = adminWallet.WalletDestination;
         var balances = await GetArkBalances(walletId, cancellationToken);
-        var signerAvailable = await walletSignerProvider.GetSigner(walletId, cancellationToken) is not null;
-        var walletInfo = await arkWalletService.GetWalletInfo(walletId, true);
+        var signerAvailable = await arkadeMultiWalletSigner.CanHandle(walletId, cancellationToken);
         
         // Get the default/active contract address
         string? defaultAddress = null;
-        await using (var dbContext = dbContextFactory.CreateContext())
+        var adminActiveContract = await contractStorage.GetFirstActiveContractAsync(walletId, cancellationToken);
+        if (adminActiveContract != null)
         {
-            var activeContract = await dbContext.WalletContracts
-                .Where(c => c.WalletId == walletId && c.Active)
-                .OrderBy(c => c.CreatedAt)
-                .FirstOrDefaultAsync(cancellationToken);
-            
-            if (activeContract != null)
-            {
-                var terms = await clientTransport.GetServerInfoAsync(cancellationToken);
-                var script = Script.FromHex(activeContract.Script);
-                var serverKey = OutputDescriptorHelpers.Extract(terms.SignerKey).XOnlyPubKey;
-                var address = ArkAddress.FromScriptPubKey(script, serverKey);
-                defaultAddress = address.ToString(terms.Network.ChainName == ChainName.Mainnet);
-            }
+            var terms = await clientTransport.GetServerInfoAsync(cancellationToken);
+            var script = Script.FromHex(adminActiveContract.Script);
+            var serverKey = OutputDescriptorHelpers.Extract(terms.SignerKey).XOnlyPubKey;
+            var address = ArkAddress.FromScriptPubKey(script, serverKey);
+            defaultAddress = address.ToString(terms.Network.ChainName == ChainName.Mainnet);
         }
-        
+
         // Check Ark Operator connection
         string? arkOperatorUrl = arkConfiguration.ArkUri;
         bool arkOperatorConnected = false;
@@ -1603,7 +1554,7 @@ public class ArkController(
             WalletId = walletId,
             Destination = destination,
             SignerAvailable = signerAvailable,
-            Wallet = walletInfo?.Wallet,
+            Wallet = adminWallet.Wallet,
             DefaultAddress = defaultAddress,
             ArkOperatorUrl = arkOperatorUrl,
             ArkOperatorConnected = arkOperatorConnected,
@@ -1618,13 +1569,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyServerSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> ListWallets(CancellationToken cancellationToken)
     {
-        await using var dbContext = dbContextFactory.CreateContext();
-        
-        var wallets = await dbContext.Wallets
-            .Include(wallet => wallet.Contracts)
-            .Include(wallet => wallet.Swaps)
-            .ToListAsync(cancellationToken);
-
+        var wallets = await walletStorage.GetWalletsWithDetailsAsync(cancellationToken);
         return View(wallets);
     }
 
@@ -1637,28 +1582,16 @@ public class ArkController(
 
         try
         {
-            await using var dbContext = dbContextFactory.CreateContext();
-            
-            var wallet = await dbContext.Wallets
-                .Include(w => w.Contracts)
-                .Include(w => w.Swaps)
-                .FirstOrDefaultAsync(w => w.Id == walletId, cancellationToken);
-
+            // Check if wallet exists
+            var wallet = await walletStorage.GetWalletWithDetailsAsync(walletId, cancellationToken);
             if (wallet == null)
             {
                 TempData[WellKnownTempData.ErrorMessage] = "Wallet not found.";
                 return RedirectToAction(nameof(ListWallets));
             }
 
-            // Check if wallet has any unspent VTXOs
-            var contractScripts = wallet.Contracts.Select(c => c.Script).ToList();
-            var hasUnspentVtxos = await dbContext.Vtxos
-                .AnyAsync(v => contractScripts.Contains(v.Script) && 
-                              (v.SpentByTransactionId == null || v.SpentByTransactionId == ""), 
-                         cancellationToken);
-            
             // Check if wallet has any pending swaps
-            var hasPendingSwaps = wallet.Swaps?.Any(s => s.Status == ArkSwapStatus.Pending) ?? false;
+            var hasPendingSwaps = await walletStorage.HasPendingSwapsAsync(walletId, cancellationToken);
             if (hasPendingSwaps)
             {
                 TempData[WellKnownTempData.ErrorMessage] = "Cannot delete wallet: It has pending swaps.";
@@ -1666,35 +1599,15 @@ public class ArkController(
             }
 
             // Check if wallet has any pending intents
-            var hasPendingIntents = await dbContext.Intents
-                .AnyAsync(i => i.WalletId == walletId &&
-                              (i.State == PluginArkIntentState.WaitingToSubmit ||
-                               i.State == PluginArkIntentState.WaitingForBatch),
-                         cancellationToken);
-
+            var hasPendingIntents = await walletStorage.HasPendingIntentsAsync(walletId, cancellationToken);
             if (hasPendingIntents)
             {
                 TempData[WellKnownTempData.ErrorMessage] = "Cannot delete wallet: It has pending intents.";
                 return RedirectToAction(nameof(AdminWalletOverview), new { walletId });
             }
 
-            // Delete all VTXOs associated with the wallet's contracts
-            var vtxos = await dbContext.Vtxos
-                .Where(v => contractScripts.Contains(v.Script))
-                .ToListAsync(cancellationToken);
-            dbContext.Vtxos.RemoveRange(vtxos);
-
-            // Delete all intents and their associated data
-            var intents = await dbContext.Intents
-                .Include(i => i.IntentVtxos)
-                .Where(i => i.WalletId == walletId)
-                .ToListAsync(cancellationToken);
-            dbContext.Intents.RemoveRange(intents);
-
-            // Delete the wallet (cascade will delete contracts and swaps)
-            dbContext.Wallets.Remove(wallet);
-            
-            await dbContext.SaveChangesAsync(cancellationToken);
+            // Delete the wallet and all associated data
+            await walletStorage.DeleteWalletAsync(walletId, cancellationToken);
 
             TempData[WellKnownTempData.SuccessMessage] = $"Wallet {walletId} and all associated data deleted successfully.";
         }

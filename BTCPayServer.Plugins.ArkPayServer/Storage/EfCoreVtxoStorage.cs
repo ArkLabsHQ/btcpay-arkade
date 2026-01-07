@@ -127,4 +127,125 @@ public class EfCoreVtxoStorage : IVtxoStorage
             ExpiresAtHeight: null // Plugin doesn't track height-based expiry
         );
     }
+
+    #region Plugin-specific methods (wallet-guarded)
+
+    /// <summary>
+    /// Gets unspent VTXOs for a wallet's contracts.
+    /// </summary>
+    public async Task<IReadOnlyList<VTXO>> GetUnspentVtxosByContractScriptsAsync(
+        IEnumerable<string> contractScripts,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        var scriptSet = contractScripts.ToHashSet();
+        return await db.Vtxos
+            .Where(v => scriptSet.Contains(v.Script))
+            .Where(v => v.SpentByTransactionId == null || v.SpentByTransactionId == "")
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Sums the balance of unspent, non-recoverable VTXOs for a wallet's contracts.
+    /// </summary>
+    public async Task<long> SumUnspentBalanceByContractScriptsAsync(
+        IEnumerable<string> contractScripts,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        var scriptSet = contractScripts.ToHashSet();
+        return await db.Vtxos
+            .Where(v => scriptSet.Contains(v.Script))
+            .Where(v => (v.SpentByTransactionId == null || v.SpentByTransactionId == "") && !v.Recoverable)
+            .SumAsync(v => v.Amount, cancellationToken);
+    }
+
+    /// <summary>
+    /// Gets VTXOs with pagination and filtering by contract scripts.
+    /// </summary>
+    public async Task<IReadOnlyList<VTXO>> GetVtxosWithPaginationAsync(
+        IEnumerable<string> contractScripts,
+        int skip = 0,
+        int count = 10,
+        string? searchText = null,
+        bool includeSpent = false,
+        bool includeRecoverable = false,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        var scriptSet = contractScripts.ToHashSet();
+        var query = db.Vtxos.Where(v => scriptSet.Contains(v.Script));
+
+        if (!string.IsNullOrEmpty(searchText))
+        {
+            query = query.Where(v =>
+                v.TransactionId.Contains(searchText) ||
+                v.Script.Contains(searchText));
+        }
+
+        if (!includeSpent)
+        {
+            query = query.Where(v =>
+                v.SpentByTransactionId == null && v.SettledByTransactionId == null);
+        }
+
+        if (!includeRecoverable)
+        {
+            query = query.Where(v => !v.Recoverable);
+        }
+
+        return await query
+            .OrderByDescending(v => v.SeenAt)
+            .Skip(skip)
+            .Take(count)
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Gets VTXOs by contract scripts with optional outpoint filtering.
+    /// </summary>
+    public async Task<IReadOnlyList<VTXO>> GetVtxosByScriptsAndOutpointsAsync(
+        IEnumerable<string> contractScripts,
+        HashSet<OutPoint>? vtxoOutpoints = null,
+        bool includeSpent = false,
+        bool includeRecoverable = false,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        var scriptSet = contractScripts.ToHashSet();
+        var query = db.Vtxos.Where(v => scriptSet.Contains(v.Script));
+
+        if (!includeSpent)
+        {
+            query = query.Where(v =>
+                v.SpentByTransactionId == null && v.SettledByTransactionId == null);
+        }
+
+        if (!includeRecoverable)
+        {
+            query = query.Where(v => !v.Recoverable);
+        }
+
+        // Filter by specific VTXO outpoints if provided
+        if (vtxoOutpoints != null && vtxoOutpoints.Count > 0)
+        {
+            // Convert outpoints to a format we can query
+            var outpointPairs = vtxoOutpoints
+                .Select(op => $"{op.Hash}{op.N}")
+                .ToHashSet();
+
+            query = query.Where(vtxo => outpointPairs.Contains(vtxo.TransactionId + vtxo.TransactionOutputIndex));
+        }
+
+        return await query
+            .OrderByDescending(v => v.SeenAt)
+            .ToListAsync(cancellationToken);
+    }
+
+    #endregion
 }

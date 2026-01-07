@@ -79,7 +79,6 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         serviceCollection.AddSingleton<ArkPluginDbContextFactory>();
         serviceCollection.AddSingleton<AsyncKeyedLocker>();
         
-        serviceCollection.AddSingleton<ArkadeWalletSignerProvider>();
         serviceCollection.AddDbContext<ArkPluginDbContext>((provider, o) =>
         {
             var factory = provider.GetRequiredService<ArkPluginDbContextFactory>();
@@ -108,7 +107,6 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         // Register NNark core abstractions (plugin-specific implementations)
         serviceCollection.AddSingleton<ISafetyService, NArk.Safety.AsyncKeyedLock.AsyncSafetyService>();
         serviceCollection.AddSingleton<IWallet, Wallet.PluginWalletAdapter>();
-        serviceCollection.AddSingleton<IChainTimeProvider>(provider => provider.GetRequiredService<BitcoinTimeChainProvider>());
 
         // Register NNark core services using the hosting extension
         serviceCollection.AddArkCoreServices();
@@ -126,17 +124,16 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
         // Plugin-specific services
         serviceCollection.AddSingleton<VtxoPollingService>();
-        serviceCollection.AddSingleton<ArkWalletService>();
-        serviceCollection.AddSingleton<ArkadeSpender>();
+        // serviceCollection.AddSingleton<WalletSignerService>();
         serviceCollection.AddSingleton<ArkadeCheckoutModelExtension>();
         serviceCollection.AddSingleton<ArkadeCheckoutCheatModeExtension>();
         serviceCollection.AddSingleton<ICheckoutModelExtension>(provider => provider.GetRequiredService<ArkadeCheckoutModelExtension>());
         serviceCollection.AddSingleton<ICheckoutCheatModeExtension>(provider => provider.GetRequiredService<ArkadeCheckoutCheatModeExtension>());
-        serviceCollection.AddSingleton<IArkadeMultiWalletSigner>(provider => provider.GetRequiredService<ArkWalletService>());
+        // serviceCollection.AddSingleton<IArkadeMultiWalletSigner>(provider => provider.GetRequiredService<WalletSignerService>());
         serviceCollection.AddSingleton<ArkContractInvoiceListener>();
         serviceCollection.AddSingleton<ChainTimeProvider>();
         serviceCollection.AddSingleton<IChainTimeProvider>(provider => provider.GetRequiredService<ChainTimeProvider>());
-        serviceCollection.AddHostedService<ArkWalletService>(provider => provider.GetRequiredService<ArkWalletService>());
+        // serviceCollection.AddHostedService<WalletSignerService>(provider => provider.GetRequiredService<WalletSignerService>());
         serviceCollection.AddHostedService<ArkContractInvoiceListener>(provider => provider.GetRequiredService<ArkContractInvoiceListener>());
 
         serviceCollection.AddSingleton<ArkadeSpendingService>();

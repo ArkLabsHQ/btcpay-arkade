@@ -1,5 +1,6 @@
 using System.Text;
 using BTCPayServer.Plugins.ArkPayServer.Data;
+using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using Microsoft.EntityFrameworkCore;
 using NArk.Abstractions.Wallets;
@@ -15,6 +16,16 @@ namespace BTCPayServer.Plugins.ArkPayServer.Storage;
 public class EfCoreWalletStorage : IWalletStorage
 {
     private readonly IDbContextFactory<ArkPluginDbContext> _dbContextFactory;
+
+    /// <summary>
+    /// Fired when a wallet is saved (created or updated).
+    /// </summary>
+    public event EventHandler<PluginArkWallet>? WalletSaved;
+
+    /// <summary>
+    /// Fired when a wallet is deleted.
+    /// </summary>
+    public event EventHandler<string>? WalletDeleted;
 
     public EfCoreWalletStorage(IDbContextFactory<ArkPluginDbContext> dbContextFactory)
     {
@@ -117,4 +128,212 @@ public class EfCoreWalletStorage : IWalletStorage
         // For legacy wallets, use the wallet ID (which is the pubkey hex)
         return entity.Id;
     }
+
+    #region Plugin-specific methods
+
+    /// <summary>
+    /// Gets all wallets with their contracts and swaps included. Used for admin listing.
+    /// </summary>
+    public async Task<IReadOnlyList<PluginArkWallet>> GetWalletsWithDetailsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        return await db.Wallets
+            .Include(w => w.Contracts)
+            .Include(w => w.Swaps)
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Gets a wallet with its contracts and swaps included.
+    /// </summary>
+    public async Task<PluginArkWallet?> GetWalletWithDetailsAsync(
+        string walletId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        return await db.Wallets
+            .Include(w => w.Contracts)
+            .Include(w => w.Swaps)
+            .FirstOrDefaultAsync(w => w.Id == walletId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Checks if a wallet has pending swaps.
+    /// </summary>
+    public async Task<bool> HasPendingSwapsAsync(
+        string walletId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        return await db.Swaps
+            .AnyAsync(s => s.WalletId == walletId && s.Status == Data.Entities.ArkSwapStatus.Pending, cancellationToken);
+    }
+
+    /// <summary>
+    /// Checks if a wallet has pending intents.
+    /// </summary>
+    public async Task<bool> HasPendingIntentsAsync(
+        string walletId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        return await db.Intents
+            .AnyAsync(i => i.WalletId == walletId &&
+                          (i.State == Data.ArkIntentState.WaitingToSubmit ||
+                           i.State == Data.ArkIntentState.WaitingForBatch), cancellationToken);
+    }
+
+    /// <summary>
+    /// Deletes a wallet and all its associated data.
+    /// </summary>
+    public async Task<bool> DeleteWalletAsync(
+        string walletId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        var wallet = await db.Wallets
+            .Include(w => w.Contracts)
+            .FirstOrDefaultAsync(w => w.Id == walletId, cancellationToken);
+
+        if (wallet == null)
+            return false;
+
+        // Get contract scripts for VTXO cleanup
+        var contractScripts = wallet.Contracts.Select(c => c.Script).ToList();
+
+        // Delete all VTXOs associated with the wallet's contracts
+        var vtxos = await db.Vtxos
+            .Where(v => contractScripts.Contains(v.Script))
+            .ToListAsync(cancellationToken);
+        db.Vtxos.RemoveRange(vtxos);
+
+        // Delete all intents and their associated data
+        var intents = await db.Intents
+            .Include(i => i.IntentVtxos)
+            .Where(i => i.WalletId == walletId)
+            .ToListAsync(cancellationToken);
+        db.Intents.RemoveRange(intents);
+
+        // Delete the wallet (cascade will delete contracts and swaps)
+        db.Wallets.Remove(wallet);
+
+        await db.SaveChangesAsync(cancellationToken);
+
+        WalletDeleted?.Invoke(this, walletId);
+
+        return true;
+    }
+
+    /// <summary>
+    /// Gets multiple wallets by their IDs.
+    /// </summary>
+    public async Task<IReadOnlyList<PluginArkWallet>> GetWalletsByIdsAsync(
+        IEnumerable<string> walletIds,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        var idSet = walletIds.ToHashSet();
+        return await db.Wallets
+            .Where(w => idSet.Contains(w.Id))
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Gets a wallet by ID.
+    /// </summary>
+    public async Task<PluginArkWallet?> GetWalletByIdAsync(
+        string walletId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        return await db.Wallets.FindAsync([walletId], cancellationToken);
+    }
+
+    /// <summary>
+    /// Updates wallet destination.
+    /// </summary>
+    public async Task UpdateWalletDestinationAsync(
+        string walletId,
+        string? destination,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        var wallet = await db.Wallets.FindAsync([walletId], cancellationToken);
+        if (wallet == null)
+            throw new InvalidOperationException($"Wallet {walletId} not found.");
+
+        wallet.WalletDestination = destination;
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Gets all wallets with their secrets for signer loading.
+    /// Returns wallet ID, secret (nsec or mnemonic), and wallet type.
+    /// </summary>
+    public async Task<IReadOnlyList<PluginArkWallet>> GetSignableWalletsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        return await db.Wallets
+            .Where(w => !string.IsNullOrEmpty(w.Wallet))
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Upserts a wallet. Returns true if inserted, false if updated.
+    /// Fires WalletSaved event on success.
+    /// </summary>
+    public async Task<bool> UpsertWalletAsync(
+        PluginArkWallet wallet,
+        bool updateIfExists = true,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        var commandBuilder = db.Wallets.Upsert(wallet);
+
+        if (!updateIfExists)
+        {
+            commandBuilder = commandBuilder.NoUpdate();
+        }
+
+        var result = await commandBuilder.RunAsync(cancellationToken) > 0;
+
+        if (result)
+        {
+            WalletSaved?.Invoke(this, wallet);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Updates wallet last used index.
+    /// </summary>
+    public async Task UpdateWalletLastUsedIndexAsync(
+        string walletId,
+        int lastUsedIndex,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        var wallet = await db.Wallets.FindAsync([walletId], cancellationToken);
+        if (wallet != null)
+        {
+            wallet.LastUsedIndex = lastUsedIndex;
+            await db.SaveChangesAsync(cancellationToken);
+        }
+    }
+
+    #endregion
 }

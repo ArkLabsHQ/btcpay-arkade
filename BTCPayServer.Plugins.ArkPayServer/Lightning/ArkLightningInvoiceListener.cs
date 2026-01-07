@@ -1,7 +1,6 @@
 using System.Threading.Channels;
 using BTCPayServer.Lightning;
-using BTCPayServer.Plugins.ArkPayServer.Data;
-using Microsoft.EntityFrameworkCore;
+using BTCPayServer.Plugins.ArkPayServer.Storage;
 using Microsoft.Extensions.Logging;
 using NArk.Swaps.Abstractions;
 using NArk.Swaps.Models;
@@ -16,15 +15,14 @@ public class ArkLightningInvoiceListener : ILightningInvoiceListener
     private readonly Network _network;
     private readonly CancellationToken _cancellationToken;
     private readonly ISwapStorage _swapStorage;
-    private readonly IDbContextFactory<ArkPluginDbContext> _dbContextFactory;
+    private readonly EfCoreSwapStorage _efCoreSwapStorage;
 
     private readonly Channel<LightningInvoice> _paidInvoicesChannel = Channel.CreateUnbounded<LightningInvoice>();
 
     public ArkLightningInvoiceListener(
         string walletId,
         ILogger<ArkLightningInvoiceListener> logger,
-        ISwapStorage swapStorage,
-        IDbContextFactory<ArkPluginDbContext> dbContextFactory,
+        EfCoreSwapStorage efCoreSwapStorage,
         Network network,
         CancellationToken cancellationToken)
     {
@@ -32,8 +30,8 @@ public class ArkLightningInvoiceListener : ILightningInvoiceListener
         _logger = logger;
         _network = network;
         _cancellationToken = cancellationToken;
-        _swapStorage = swapStorage;
-        _dbContextFactory = dbContextFactory;
+        _efCoreSwapStorage = efCoreSwapStorage;
+        _swapStorage = efCoreSwapStorage; // EfCoreSwapStorage implements ISwapStorage
 
         // Subscribe to NNark's swap storage events directly
         _swapStorage.SwapsChanged += OnSwapChanged;
@@ -54,10 +52,7 @@ public class ArkLightningInvoiceListener : ILightningInvoiceListener
                 return;
 
             // Fetch the full entity from DB to get contract data for mapping
-            await using var db = await _dbContextFactory.CreateDbContextAsync(_cancellationToken);
-            var entity = await db.Swaps
-                .Include(s => s.Contract)
-                .FirstOrDefaultAsync(s => s.SwapId == swap.SwapId, _cancellationToken);
+            var entity = await _efCoreSwapStorage.GetSwapWithContractAsync(_walletId, swap.SwapId, _cancellationToken);
 
             if (entity == null)
                 return;

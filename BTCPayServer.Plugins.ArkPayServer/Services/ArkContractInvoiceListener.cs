@@ -21,6 +21,7 @@ using NArk.Transport;
 using NBitcoin;
 using NBXplorer;
 using Newtonsoft.Json.Linq;
+using BTCPayServer.Plugins.ArkPayServer.Storage;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
 
@@ -30,7 +31,7 @@ public class ArkContractInvoiceListener(
     ArkadePaymentMethodHandler arkadePaymentMethodHandler,
     IClientTransport clientTransport,
     EventAggregator eventAggregator,
-    ArkWalletService arkWalletService,
+    EfCoreContractStorage contractStorage,
     PaymentService paymentService,
     IVtxoStorage vtxoStorage,
     ISwapStorage swapStorage,
@@ -61,7 +62,7 @@ public class ArkContractInvoiceListener(
                 return;
 
             var active = swap.Status == NArk.Swaps.Models.ArkSwapStatus.Pending;
-            await arkWalletService.ToggleContract(swap.WalletId, swap.ContractScript, active);
+            await contractStorage.ToggleContractAsync(swap.WalletId, swap.ContractScript, active);
         }
         catch (Exception ex)
         {
@@ -179,8 +180,8 @@ public class ArkContractInvoiceListener(
             return;
         }
 
-        await arkWalletService.ToggleContract(listenedContract.Details.WalletId, contract,
-            active);
+        var script = contract.GetArkAddress().ScriptPubKey.ToHex();
+        await contractStorage.ToggleContractAsync(listenedContract.Details.WalletId, script, active);
     }
 
     private ArkadeListenedContract? GetListenedArkadeInvoice(InvoiceEntity invoice)
