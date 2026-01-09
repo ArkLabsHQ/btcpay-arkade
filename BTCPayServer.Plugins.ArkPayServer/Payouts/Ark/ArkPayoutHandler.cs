@@ -21,6 +21,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using NArk;
+using NArk.Abstractions;
 using NArk.Abstractions.VTXOs;
 using NArk.Transport;
 using NArk.Swaps.Helpers;

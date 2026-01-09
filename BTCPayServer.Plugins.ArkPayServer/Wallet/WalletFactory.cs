@@ -1,10 +1,7 @@
-using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using NArk;
-using NArk.Abstractions.Wallets;
+using NArk.Abstractions;
 using NArk.Swaps.Helpers;
-using NArk.Wallets;
 using NBitcoin;
-using NBitcoin.Scripting;
 using ArkWallet = BTCPayServer.Plugins.ArkPayServer.Data.Entities.ArkWallet;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Wallet;
@@ -76,7 +73,7 @@ public static class WalletFactory
     public static void ValidateDestination(string destination, ArkServerInfo serverInfo)
     {
         var addr = ArkAddress.Parse(destination);
-        var serverKey = OutputDescriptorHelpers.Extract(serverInfo.SignerKey).XOnlyPubKey;
+        var serverKey = serverInfo.SignerKey.Extract().XOnlyPubKey;
         if (!serverKey.ToBytes().SequenceEqual(addr.ServerKey.ToBytes()))
         {
             throw new InvalidOperationException("Invalid destination server key.");
@@ -89,8 +86,7 @@ public static class WalletFactory
         ArkServerInfo serverInfo,
         CancellationToken cancellationToken)
     {
-        var signingEntity = SingleKeySigningEntity.FromNsec(nsec, serverInfo.Network);
-        var publicKey = (await signingEntity.GetPublicKey(cancellationToken)).ToXOnlyPubKey();
+        var publicKey = await NSecAddressProvider.FromNsec(nsec, serverInfo.Network).GetPublicKey(cancellationToken);
         var walletId = Convert.ToHexString(publicKey.ToBytes()).ToLowerInvariant();
 
         var wallet = new ArkWallet

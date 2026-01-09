@@ -22,6 +22,7 @@ using NBitcoin;
 using NBXplorer;
 using Newtonsoft.Json.Linq;
 using BTCPayServer.Plugins.ArkPayServer.Storage;
+using NArk.Abstractions;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
 

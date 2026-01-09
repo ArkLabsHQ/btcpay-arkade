@@ -143,7 +143,7 @@
                         <td class="align-middle">@vtxo.TransactionOutputIndex</td>
                         <td class="align-middle">@Money.Satoshis(vtxo.Amount).ToDecimal(MoneyUnit.BTC) BTC</td>
                         <td class="align-middle">
-                            @if (vtxo.SpentByTransactionId != null || vtxo.SettledByTransactionId != null)
+                            @if (!string.IsNullOrWhiteSpace(vtxo.SpentByTransactionId) || !string.IsNullOrWhiteSpace(vtxo.SettledByTransactionId))
                             {
                                 <span class="badge text-bg-secondary">Spent</span>
                             }
@@ -157,7 +157,7 @@
                             }
                         </td>
                         <td class="align-middle">
-                            @if (vtxo.SpentByTransactionId != null || vtxo.SettledByTransactionId != null)
+                            @if (!string.IsNullOrWhiteSpace(vtxo.SpentByTransactionId) || !string.IsNullOrWhiteSpace(vtxo.SettledByTransactionId))
                             {
                                 <span class="text-muted">-</span>
                             }

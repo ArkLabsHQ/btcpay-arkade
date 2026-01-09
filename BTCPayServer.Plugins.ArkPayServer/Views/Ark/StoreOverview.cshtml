@@ -62,16 +62,16 @@ else
                             </a>
                         </div>
                     }
-                    @* <div class="col-6"> *@
-                    @*     <a asp-action="Intents" asp-route-storeId="@storeId" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center"> *@
-                    @*         View Intents *@
-                    @*     </a> *@
-                    @* </div> *@
-                    @* <div class="col-6"> *@
-                    @*     <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#forceRefreshModal"> *@
-                    @*         Force Batch *@
-                    @*     </button> *@
-                    @* </div> *@
+                     <div class="col-6">
+                         <a asp-action="Intents" asp-route-storeId="@storeId" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center"> 
+                             View Intents 
+                         </a> 
+                     </div>
+                     <div class="col-6"> 
+                         <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#forceRefreshModal"> 
+                             Force Batch 
+                         </button> 
+                     </div> 
                     @if (Model.SignerAvailable && !string.IsNullOrEmpty(Model.Wallet))
                     {
                         <div class="col-6">

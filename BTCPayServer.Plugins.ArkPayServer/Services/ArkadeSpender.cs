@@ -196,7 +196,7 @@
 //
 //         foreach (var contractData in group)
 //         {
-//             var contract = ArkContract.Parse(contractData.Key.Type, contractData.Key.ContractData, serverInfo.Network);
+//             var contract = ArkContractParser.Parse(contractData.Key.Type, contractData.Key.ContractData, serverInfo.Network);
 //             if (contract is null)
 //                 continue;
 //             var walletId = contractData.Key.WalletId;

@@ -1,5 +1,6 @@
 #nullable enable
 using NArk;
+using NArk.Abstractions;
 using NBitcoin;
 using NBitcoin.Payment;
 

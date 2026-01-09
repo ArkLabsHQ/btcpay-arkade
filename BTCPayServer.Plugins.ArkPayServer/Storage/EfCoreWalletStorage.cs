@@ -5,7 +5,6 @@ using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using Microsoft.EntityFrameworkCore;
 using NArk.Abstractions.Wallets;
 using PluginArkWallet = BTCPayServer.Plugins.ArkPayServer.Data.Entities.ArkWallet;
-using NNarkArkWallet = NArk.Abstractions.Wallets.ArkWallet;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Storage;
 
@@ -13,7 +12,7 @@ namespace BTCPayServer.Plugins.ArkPayServer.Storage;
 /// EF Core implementation of NNark's IWalletStorage interface.
 /// Maps between plugin's ArkWallet entity and NNark's ArkWallet record.
 /// </summary>
-public class EfCoreWalletStorage : IWalletStorage
+public class EfCoreWalletStorage
 {
     private readonly IDbContextFactory<ArkPluginDbContext> _dbContextFactory;
 
@@ -32,15 +31,15 @@ public class EfCoreWalletStorage : IWalletStorage
         _dbContextFactory = dbContextFactory;
     }
 
-    public async Task<IReadOnlySet<NNarkArkWallet>> LoadAllWallets(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlySet<PluginArkWallet>> LoadAllWallets(CancellationToken cancellationToken = default)
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
         var entities = await db.Wallets.ToListAsync(cancellationToken);
-        return entities.Select(MapToNNarkWallet).ToHashSet();
+        return entities.ToHashSet();
     }
 
-    public async Task<NNarkArkWallet> LoadWallet(string walletIdentifierOrFingerprint, CancellationToken cancellationToken = default)
+    public async Task<PluginArkWallet> LoadWallet(string walletIdentifierOrFingerprint, CancellationToken cancellationToken = default)
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
@@ -61,10 +60,10 @@ public class EfCoreWalletStorage : IWalletStorage
             throw new KeyNotFoundException($"Wallet {walletIdentifierOrFingerprint} not found");
         }
 
-        return MapToNNarkWallet(entity);
+        return entity;
     }
-
-    public async Task SaveWallet(string walletId, NNarkArkWallet arkWallet, string? walletFingerprint = null,
+    
+    public async Task SaveWallet(string walletId, PluginArkWallet entity, string? walletDescriptor = null,
         CancellationToken cancellationToken = default)
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
@@ -74,41 +73,21 @@ public class EfCoreWalletStorage : IWalletStorage
         if (existing != null)
         {
             // Update existing wallet
-            existing.Wallet = Encoding.UTF8.GetString(arkWallet.WalletPrivateBytes);
-            existing.LastUsedIndex = arkWallet.LastAddressIndex;
+            existing.Wallet = entity.Wallet;
+            existing.LastUsedIndex = entity.LastUsedIndex;
             // Store fingerprint in AccountDescriptor for HD wallets
-            if (!string.IsNullOrEmpty(walletFingerprint))
+            if (!string.IsNullOrEmpty(walletDescriptor))
             {
                 // If HD wallet, store full descriptor; if just fingerprint, store that
-                existing.AccountDescriptor ??= walletFingerprint;
+                existing.AccountDescriptor ??= walletDescriptor;
             }
         }
         else
         {
-            // Create new wallet
-            var entity = new PluginArkWallet
-            {
-                Id = walletId,
-                Wallet = Encoding.UTF8.GetString(arkWallet.WalletPrivateBytes),
-                WalletType = arkWallet.GetWalletType(),
-                LastUsedIndex = arkWallet.LastAddressIndex,
-                AccountDescriptor = walletFingerprint
-            };
             db.Wallets.Add(entity);
         }
 
         await db.SaveChangesAsync(cancellationToken);
-    }
-
-    private static NNarkArkWallet MapToNNarkWallet(PluginArkWallet entity)
-    {
-        var fingerprint = GetFingerprint(entity);
-        return new NNarkArkWallet(
-            WalletIdentifier: entity.Id,
-            WalletFingerprint: fingerprint,
-            WalletPrivateBytes: Encoding.UTF8.GetBytes(entity.Wallet),
-            LastAddressIndex: entity.LastUsedIndex
-        );
     }
 
     private static string GetFingerprint(PluginArkWallet entity)

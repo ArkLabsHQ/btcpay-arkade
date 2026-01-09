@@ -173,7 +173,7 @@
             <tbody>
                 @foreach (var contract in Model.Contracts)
                 {
-                    var arkContract = ArkContract.Parse(contract.Type, contract.ContractData, network);
+                    var arkContract = ArkContractParser.Parse(contract.Type, contract.ContractData, network);
                     if (arkContract is null) continue;
                     var link = ArkadeLinkHelper.GetIndexerLinkForContract(ArkConfiguration.ArkUri, arkContract);
                     var detailsId = $"contract_details_{contract.Script.GetHashCode()}";
