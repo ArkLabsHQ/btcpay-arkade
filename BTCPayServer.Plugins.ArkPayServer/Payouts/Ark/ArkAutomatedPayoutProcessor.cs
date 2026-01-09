@@ -36,7 +36,7 @@ public class ArkAutomatedPayoutProcessor: BaseAutomatedPayoutProcessor<ArkAutoma
         ArkadeSpendingService arkSpendingService,
         PayoutMethodHandlerDictionary payoutMethodHandlers,
         BTCPayNetworkJsonSerializerSettings jsonSerializerSettings,
-        IWallet arkadeMultiWalletSigner
+        IWalletProvider walletProvider
     ) 
         : base(ArkadePlugin.ArkadePaymentMethodId, logger, storeRepository, payoutProcessorSettings, applicationDbContextFactory, paymentHandlers, pluginHookService, eventAggregator)
     {

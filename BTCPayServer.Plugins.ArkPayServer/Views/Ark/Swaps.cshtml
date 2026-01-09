@@ -182,7 +182,7 @@
             <tbody>
                 @foreach (var swap in Model.Swaps)
                 {
-                    var arkContract = swap.Contract != null ? ArkContract.Parse(swap.Contract.Type, swap.Contract.ContractData, network) : null;
+                    var arkContract = swap.Contract != null ? ArkContractParser.Parse(swap.Contract.Type, swap.Contract.ContractData, network) : null;
                     var link = arkContract != null ? ArkadeLinkHelper.GetIndexerLinkForContract(ArkConfiguration.ArkUri, arkContract) : "#";
                     var boltzSwapLink = ArkadeLinkHelper.GetBoltzSwapLink(ArkConfiguration.BoltzUri, swap.SwapId);
 

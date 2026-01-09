@@ -1,6 +1,7 @@
 using BTCPayServer.Data;
 
 using NArk;
+using NArk.Abstractions;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Payouts.Ark
 {

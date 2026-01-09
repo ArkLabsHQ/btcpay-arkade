@@ -1,3 +1,4 @@
+using NArk.Abstractions.Contracts;
 using NArk.Contracts;
 using NBitcoin;
 

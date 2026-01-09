@@ -85,8 +85,8 @@ public class EfCoreVtxoStorage : IVtxoStorage
         if (!allowSpent)
         {
             query = query.Where(v =>
-                v.SpentByTransactionId == null &&
-                v.SettledByTransactionId == null);
+                (v.SpentByTransactionId ?? "").Length == 0 &&
+                (v.SettledByTransactionId ?? "").Length == 0);
         }
 
         var entities = await query.ToListAsync(cancellationToken);
@@ -98,7 +98,9 @@ public class EfCoreVtxoStorage : IVtxoStorage
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
         var entities = await db.Vtxos
-            .Where(v => v.SpentByTransactionId == null && v.SettledByTransactionId == null)
+            .Where(v =>
+                (v.SpentByTransactionId ?? "").Length == 0 &&
+                (v.SettledByTransactionId ?? "").Length == 0)
             .ToListAsync(cancellationToken);
 
         return entities.Select(MapToArkVtxo).ToList();
@@ -189,7 +191,8 @@ public class EfCoreVtxoStorage : IVtxoStorage
         if (!includeSpent)
         {
             query = query.Where(v =>
-                v.SpentByTransactionId == null && v.SettledByTransactionId == null);
+                (v.SpentByTransactionId ?? "").Length == 0 &&
+                (v.SettledByTransactionId ?? "").Length == 0);
         }
 
         if (!includeRecoverable)

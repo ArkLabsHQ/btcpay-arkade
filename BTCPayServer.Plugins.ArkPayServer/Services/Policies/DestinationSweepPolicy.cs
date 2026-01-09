@@ -1,6 +1,8 @@
+/*
 using BTCPayServer.Plugins.ArkPayServer.Storage;
 using Microsoft.Extensions.Logging;
 using NArk;
+using NArk.Abstractions;
 using NArk.Abstractions.Wallets;
 using NArk.Contracts;
 using NArk.Sweeper;
@@ -18,10 +20,10 @@ public class DestinationSweepPolicy(
     EfCoreWalletStorage walletStorage,
     ILogger<DestinationSweepPolicy> logger) : ISweepPolicy
 {
-    public bool CanSweep(IEnumerable<ArkUnspendableCoin> coins) =>
+    public bool CanSweep(IEnumerable<ArkCoin> coins) =>
         coins.Any(c => c.Contract is ArkPaymentContract or HashLockedArkPaymentContract);
 
-    public async IAsyncEnumerable<ArkCoin> SweepAsync(IEnumerable<ArkUnspendableCoin> coins)
+    public async IAsyncEnumerable<ArkCoin> SweepAsync(IEnumerable<ArkCoin> coins)
     {
         // Filter to spendable contract types (not VHTLCContract - those are handled by SwapSweepPolicy)
         var spendableCoins = coins
@@ -118,3 +120,4 @@ public class DestinationSweepPolicy(
         }
     }
 }
+*/

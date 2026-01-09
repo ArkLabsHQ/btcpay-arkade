@@ -13,7 +13,6 @@ using BTCPayServer.Plugins.ArkPayServer.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
 using BTCPayServer.Plugins.ArkPayServer.Services;
-using BTCPayServer.Plugins.ArkPayServer.Services.Policies;
 using BTCPayServer.Plugins.ArkPayServer.Storage;
 using Grpc.Net.ClientFactory;
 using Microsoft.AspNetCore.Builder;
@@ -37,6 +36,7 @@ using NBitcoin;
 using System.Reflection;
 using System.Text.Json;
 using NArk.Blockchain.NBXplorer;
+using NBXplorer;
 
 namespace BTCPayServer.Plugins.ArkPayServer;
 
@@ -102,18 +102,16 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         serviceCollection.AddSingleton<EfCoreSwapStorage>();
         serviceCollection.AddSingleton<ISwapStorage>(sp => sp.GetRequiredService<EfCoreSwapStorage>());
         serviceCollection.AddSingleton<EfCoreWalletStorage>();
-        serviceCollection.AddSingleton<IWalletStorage>(sp => sp.GetRequiredService<EfCoreWalletStorage>());
 
         // Register NNark core abstractions (plugin-specific implementations)
         serviceCollection.AddSingleton<ISafetyService, NArk.Safety.AsyncKeyedLock.AsyncSafetyService>();
-        serviceCollection.AddSingleton<IWallet, Wallet.PluginWalletAdapter>();
+        serviceCollection.AddSingleton<IWalletProvider, Wallet.PluginWalletAdapter>();
 
         // Register NNark core services using the hosting extension
         serviceCollection.AddArkCoreServices();
 
         // Register plugin-specific sweep policies for automatic VTXO consolidation
-        serviceCollection.AddSingleton<ISweepPolicy, HashlockPaymentSweepPolicy>();
-        serviceCollection.AddSingleton<ISweepPolicy, DestinationSweepPolicy>();
+        //serviceCollection.AddSingleton<ISweepPolicy, DestinationSweepPolicy>();
 
         // Configure NNark SimpleIntentScheduler for automatic VTXO refresh
         serviceCollection.Configure<NArk.Models.Options.SimpleIntentSchedulerOptions>(options =>
@@ -131,7 +129,19 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         serviceCollection.AddSingleton<ICheckoutCheatModeExtension>(provider => provider.GetRequiredService<ArkadeCheckoutCheatModeExtension>());
         // serviceCollection.AddSingleton<IArkadeMultiWalletSigner>(provider => provider.GetRequiredService<WalletSignerService>());
         serviceCollection.AddSingleton<ArkContractInvoiceListener>();
-        serviceCollection.AddSingleton<ChainTimeProvider>();
+        
+        var networkType = 
+            DefaultConfiguration.GetNetworkType(
+                pluginServiceCollection
+                    .BootstrapServices
+                    .GetRequiredService<IConfiguration>()
+            );
+        
+        serviceCollection.AddSingleton<ChainTimeProvider>(provider =>
+        {
+            var explorerClientProvider = provider.GetRequiredService<ExplorerClientProvider>();
+            return new ChainTimeProvider(explorerClientProvider.GetExplorerClient("BTC"));
+        });
         serviceCollection.AddSingleton<IChainTimeProvider>(provider => provider.GetRequiredService<ChainTimeProvider>());
         // serviceCollection.AddHostedService<WalletSignerService>(provider => provider.GetRequiredService<WalletSignerService>());
         serviceCollection.AddHostedService<ArkContractInvoiceListener>(provider => provider.GetRequiredService<ArkContractInvoiceListener>());

@@ -37,10 +37,10 @@ using NArk.Swaps.Boltz.Client;
 using NArk.Swaps.Helpers;
 using NArk.Contracts;
 using NArk.Services;
-using NArk.Transactions;
 using NArk.Transport;
 using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using NArk.Abstractions.Blockchain;
+using NArk.Abstractions.Wallets;
 using PluginArkIntentState = BTCPayServer.Plugins.ArkPayServer.Data.ArkIntentState;
 using PluginArkSwapStatus = BTCPayServer.Plugins.ArkPayServer.Data.Entities.ArkSwapStatus;
 using NBitcoin;
@@ -67,8 +67,9 @@ public class ArkController(
     EventAggregator eventAggregator,
     IIntentGenerationService intentGenerationService,
     IIntentStorage intentStorage,
-    IArkadeMultiWalletSigner arkadeMultiWalletSigner,
+    IWalletProvider walletProvider,
     ISpendingService arkadeSpender,
+    IContractService contractService,
     IChainTimeProvider bitcoinTimeChainProvider,
     VtxoPollingService vtxoPollingService,
     EfCoreContractStorage contractStorage,
@@ -202,7 +203,8 @@ public class ArkController(
             TempData[WellKnownTempData.ErrorMessage] = $"Unable to fetch balances: {ex.Message}";
         }
 
-        var signerAvailable = await arkadeMultiWalletSigner.CanHandle(config.WalletId, cancellationToken);
+        var signerAvailable =
+            await walletProvider.GetAddressProviderAsync(config.WalletId, cancellationToken) != null;
         var includeData = config.GeneratedByStore ||
                           (await authorizationService.AuthorizeAsync(User, null,
                               new PolicyRequirement(Policies.CanModifyServerSettings))).Succeeded;
@@ -781,10 +783,9 @@ public class ArkController(
             HttpContext.RequestAborted);
 
         // Get spendable coins to determine which VTXOs are actually spendable
-        var spendableCoins = await arkadeSpender.GetSpendableCoins([config.WalletId], true, HttpContext.RequestAborted);
+        var spendableCoins = await arkadeSpender.GetAvailableCoins(config.WalletId, HttpContext.RequestAborted);
         var spendableOutpoints = spendableCoins
-            .SelectMany(kvp => kvp.Value)
-            .Select(coin => coin.Coin.Outpoint)
+            .Select(coin => coin.Outpoint)
             .ToHashSet();
 
         // Apply spendable filter if specified
@@ -992,9 +993,9 @@ public class ArkController(
         try
         {
             // Get all spendable coins including recoverable ones
-            var coinSets = await arkadeSpender.GetSpendableCoins([config.WalletId], true, cancellationToken);
+            var coins = await arkadeSpender.GetAvailableCoins(config.WalletId, cancellationToken);
             
-            if (!coinSets.TryGetValue(config.WalletId, out var coins) || coins.Count == 0)
+            if (coins.Count == 0)
             {
                 TempData[WellKnownTempData.ErrorMessage] = "No VTXOs available to refresh.";
                 return RedirectToAction(nameof(StoreOverview), new { storeId });
@@ -1010,20 +1011,14 @@ public class ArkController(
             }
 
             // Get destination for refresh (back to same wallet) 
-            var destination = await arkadeSpender.GetDestination(refreshWallet);
-            var totalAmount = coins.Sum(c => c.Coin.TxOut.Value);
+            var destination = await contractService.DerivePaymentContract(refreshWallet.Id, cancellationToken);
+            var totalAmount = coins.Sum(c => c.TxOut.Value);
 
-            // Build signers dictionary
-            var signers = new Dictionary<ArkCoinLite, ArkPsbtSigner>();
-            foreach (var coin in coins)
-            {
-                signers[coin.Coin.ToLite()] = coin;
-            }
 
             // Build ArkIntentSpec for refresh (send back to wallet)
             var arkIntentSpec = new ArkIntentSpec(
-                signers.Keys.ToArray(),
-                [new ArkTxOut(ArkTxOutType.Vtxo, totalAmount, destination.ScriptPubKey.GetDestination()!)],
+                [.. coins],
+                [new ArkTxOut(ArkTxOutType.Vtxo, totalAmount, destination.GetArkAddress())],
                 DateTimeOffset.UtcNow,
                 DateTimeOffset.UtcNow.AddMinutes(5)
             );
@@ -1032,7 +1027,6 @@ public class ArkController(
             var intentId = await intentGenerationService.GenerateManualIntent(
                 config.WalletId,
                 arkIntentSpec,
-                signers,
                 force: true,
                 cancellationToken);                                                            
 
@@ -1240,7 +1234,7 @@ public class ArkController(
 
             // Parse the contract string to extract type and data
             // Try to parse the contract to validate it
-            var arkContract = ArkContract.Parse(contractString, terms.Network);
+            var arkContract = ArkContractParser.Parse(contractString, terms.Network);
             if (arkContract == null)
             {
                 TempData[WellKnownTempData.ErrorMessage] = "Failed to parse contract. Invalid contract type or data.";
@@ -1407,21 +1401,12 @@ public class ArkController(
         // Get unspent VTXOs for those contracts
         var vtxos = await vtxoStorage.GetUnspentVtxosByContractScriptsAsync(contractScripts, cancellationToken);
 
-        // Get actually spendable coins using ArkadeSpender logic
-        var spendableCoins = await arkadeSpender.GetSpendableCoins([walletId], false, cancellationToken);
-        var spendableOutpoints = spendableCoins
-            .SelectMany(kvp => kvp.Value)
-            .Select(coin => coin.Coin.Outpoint)
-            .ToHashSet();
+        var allCoins = await arkadeSpender.GetAvailableCoins(walletId, cancellationToken);
 
-        // Get spendable coins including recoverable
-        var spendableCoinsWithRecoverable = await arkadeSpender.GetSpendableCoins([walletId], true, cancellationToken);
-        var recoverableOutpoints = spendableCoinsWithRecoverable
-            .SelectMany(kvp => kvp.Value)
-            .Where(coin => coin.Coin.Recoverable)
-            .Select(coin => coin.Coin.Outpoint)
-            .ToHashSet();
-
+        var coinsByRecoverableStatus = allCoins.ToLookup(coin => coin.Recoverable);
+        var spendableOutpoints = coinsByRecoverableStatus[false].Select(coin => coin.Outpoint).ToHashSet();
+        var recoverableOutpoints = coinsByRecoverableStatus[true].Select(coin => coin.Outpoint).ToHashSet();
+        
         // Available: actually spendable right now (not recoverable, passes contract conditions)
         var availableBalance = vtxos
             .Where(vtxo => spendableOutpoints.Contains(new OutPoint(uint256.Parse(vtxo.TransactionId), (uint)vtxo.TransactionOutputIndex)))
@@ -1443,10 +1428,8 @@ public class ArkController(
 
         // Unspendable: unspent VTXOs that don't pass contract conditions yet (e.g., HTLC timelock not reached)
         // These are not recoverable, not locked, but also not spendable
-        var allSpendableOutpoints = spendableCoins
-            .SelectMany(kvp => kvp.Value)
-            .Select(coin => coin.Coin.Outpoint)
-            .Concat(recoverableOutpoints)
+        var allSpendableOutpoints = allCoins
+            .Select(coin => coin.Outpoint)
             .ToHashSet();
 
         var unspendableBalance = vtxos
@@ -1501,7 +1484,8 @@ public class ArkController(
 
         var destination = adminWallet.WalletDestination;
         var balances = await GetArkBalances(walletId, cancellationToken);
-        var signerAvailable = await arkadeMultiWalletSigner.CanHandle(walletId, cancellationToken);
+        var signerAvailable =
+            await walletProvider.GetAddressProviderAsync(walletId, cancellationToken) != null;
         
         // Get the default/active contract address
         string? defaultAddress = null;
