@@ -24,13 +24,13 @@ public class ArkWallet
     /// The type of wallet (Legacy nsec or HD mnemonic).
     /// Defaults to Legacy for backwards compatibility.
     /// </summary>
-    public WalletType WalletType { get; set; } = WalletType.Legacy;
+    public WalletType WalletType { get; set; } = WalletType.SingleKey;
 
     /// <summary>
     /// For HD wallets: the account descriptor (e.g., tr([fingerprint/86'/0'/0']xpub...)).
-    /// For legacy wallets: null or the simple tr(pubkey) descriptor.
+    /// For legacy wallets: the simple tr(pubkey) descriptor.
     /// </summary>
-    public string? AccountDescriptor { get; set; }
+    public string AccountDescriptor { get; set; }
 
     /// <summary>
     /// For HD wallets: the last used derivation index.
@@ -45,7 +45,8 @@ public class ArkWallet
         var entity = builder.Entity<ArkWallet>();
         entity.HasKey(w => w.Id);
         entity.HasIndex(w => w.Wallet).IsUnique();
-        entity.Property(w => w.WalletType).HasDefaultValue(WalletType.Legacy);
+        entity.Property(w => w.WalletType).HasDefaultValue(WalletType.SingleKey);
+        entity.Property(w => w.AccountDescriptor).HasDefaultValue("TODO_MIGRATION");
         entity.Property(w => w.LastUsedIndex).HasDefaultValue(0);
         entity.HasMany(w => w.Contracts)
             .WithOne(contract => contract.Wallet)

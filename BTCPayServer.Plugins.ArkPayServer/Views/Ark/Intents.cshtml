@@ -6,10 +6,11 @@
 @using NArk.Transport
 @using NBitcoin
 @using Microsoft.AspNetCore.Mvc.ViewFeatures
+@using NArk.Abstractions.Intents
 @model BTCPayServer.Plugins.ArkPayServer.Models.StoreIntentsViewModel
 @inject IScopeProvider ScopeProvider
 @inject IClientTransport Terms
-@inject ArkConfiguration ArkConfiguration
+@inject ArkNetworkConfig ArkNetworkConfig
 
 @{
     ViewData.SetActivePage(category: "Ark", activePage: "Intents", title: "Ark - Intents");

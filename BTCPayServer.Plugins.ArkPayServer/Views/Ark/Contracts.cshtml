@@ -9,7 +9,7 @@
 @model BTCPayServer.Plugins.ArkPayServer.Models.StoreContractsViewModel
 @inject IScopeProvider ScopeProvider
 @inject IClientTransport Terms
-@inject ArkConfiguration ArkConfiguration
+@inject ArkNetworkConfig ArkNetworkConfig
 @{
     Layout = "_Layout";
     ViewData.SetActivePage(category: "Ark", activePage: "Contracts", title: "Ark - Contracts");
@@ -175,7 +175,7 @@
                 {
                     var arkContract = ArkContractParser.Parse(contract.Type, contract.ContractData, network);
                     if (arkContract is null) continue;
-                    var link = ArkadeLinkHelper.GetIndexerLinkForContract(ArkConfiguration.ArkUri, arkContract);
+                    var link = ArkadeLinkHelper.GetIndexerLinkForContract(ArkNetworkConfig.ArkUri, arkContract);
                     var detailsId = $"contract_details_{contract.Script.GetHashCode()}";
 
                     BTCPayServer.Plugins.ArkPayServer.Data.Entities.VTXO[]? vtxos = [];

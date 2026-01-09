@@ -8,7 +8,7 @@
 @model BTCPayServer.Plugins.ArkPayServer.Models.StoreVtxosViewModel
 @inject IScopeProvider ScopeProvider
 @inject IClientTransport Terms
-@inject ArkConfiguration ArkConfiguration
+@inject ArkNetworkConfig ArkNetworkConfig
 
 @{
     ViewData.SetActivePage(category: "Ark", activePage: "VTXOs", title: "Ark - VTXOs");
@@ -131,7 +131,7 @@
                 @foreach (var vtxo in Model.Vtxos)
                 {
                     var outpoint = ArkadeLinkHelper.FormatOutpoint(vtxo.TransactionId, (uint)vtxo.TransactionOutputIndex);
-                    var link = ArkadeLinkHelper.GetIndexerLinkForVtxo(ArkConfiguration.ArkUri, vtxo.TransactionId, (uint)vtxo.TransactionOutputIndex);
+                    var link = ArkadeLinkHelper.GetIndexerLinkForVtxo(ArkNetworkConfig.ArkUri, vtxo.TransactionId, (uint)vtxo.TransactionOutputIndex);
                     var vtxoOutpoint = new OutPoint(uint256.Parse(vtxo.TransactionId), (uint)vtxo.TransactionOutputIndex);
                     var isSpendable = Model.SpendableOutpoints.Contains(vtxoOutpoint);
 

@@ -2,6 +2,7 @@ using BTCPayServer.Plugins.ArkPayServer.Storage;
 using NArk.Abstractions.Safety;
 using NArk.Abstractions.Wallets;
 using NArk.Transport;
+using NBitcoin.Scripting;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Wallet;
 
@@ -23,7 +24,7 @@ public class PluginWalletAdapter(
             return wallet.WalletType switch
             {
                 WalletType.HD => new HierarchicalDeterministicWalletSigner(wallet),
-                WalletType.Legacy => NSecWalletSigner.FromNsec(wallet.Wallet),
+                WalletType.SingleKey => NSecWalletSigner.FromNsec(wallet.Wallet),
                 _ => throw new ArgumentOutOfRangeException(nameof(wallet.WalletType))
             };
         }
@@ -42,8 +43,8 @@ public class PluginWalletAdapter(
             var wallet = await walletStorage.LoadWallet(identifier, cancellationToken);
             return wallet.WalletType switch
             {
-                WalletType.HD => new HierarchicalDeterministicAddressProvider(safetyService, walletStorage, wallet, network),
-                WalletType.Legacy => NSecAddressProvider.FromNsec(wallet.Wallet, network),
+                WalletType.HD => new HierarchicalDeterministicAddressProvider(clientTransport,safetyService, walletStorage, wallet, network),
+                WalletType.SingleKey => new SingleKeyAddressProvider(clientTransport,OutputDescriptor.Parse(wallet.AccountDescriptor, network)),
                 _ => throw new ArgumentOutOfRangeException(nameof(wallet.WalletType))
             };
         }

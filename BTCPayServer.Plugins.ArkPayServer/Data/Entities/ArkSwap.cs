@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using NArk.Swaps.Models;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 

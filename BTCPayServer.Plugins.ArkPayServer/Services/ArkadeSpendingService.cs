@@ -4,6 +4,7 @@ using BTCPayServer.Lightning;
 using BTCPayServer.Payments;
 using BTCPayServer.Payments.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.Exceptions;
+using BTCPayServer.Plugins.ArkPayServer.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Storage;
 using BTCPayServer.Services.Invoices;
@@ -58,15 +59,16 @@ public class ArkadeSpendingService(
             }
 
             var lnClient = paymentMethodHandlerDictionary.GetLightningHandler("BTC").CreateLightningClient(lnConfig);
-            var resp = await lnClient.Pay(bolt11.ToString(), cancellationToken);
-            if (resp.Result == PayResult.Ok)
+            if (lnClient is not ArkLightningClient)
             {
-                return null;
+                throw new IncompleteArkadeSetupException("lightning compatibility is not enabled");
             }
-
-            throw new ArkadePaymentFailedException($"Payment failed: {resp?.ErrorDetail}");
+            
+            var resp = await lnClient.Pay(bolt11.ToString(), cancellationToken);
+            return resp.Result == PayResult.Ok ? null : throw new ArkadePaymentFailedException($"Payment failed: {resp?.ErrorDetail}");
         }
-        else if (Uri.TryCreate(destination, UriKind.Absolute, out var uri) && uri.Scheme.Equals("bitcoin", StringComparison.InvariantCultureIgnoreCase))
+
+        if (Uri.TryCreate(destination, UriKind.Absolute, out var uri) && uri.Scheme.Equals("bitcoin", StringComparison.InvariantCultureIgnoreCase))
         {
             var host = uri.AbsoluteUri[(uri.Scheme.Length + 1)..].Split('?')[0]; // uri.Host is empty so we must parse it ourselves
 

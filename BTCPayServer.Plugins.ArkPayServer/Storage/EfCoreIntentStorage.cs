@@ -3,9 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using NArk.Abstractions.Intents;
 using NBitcoin;
 using PluginArkIntent = BTCPayServer.Plugins.ArkPayServer.Data.ArkIntent;
-using PluginArkIntentState = BTCPayServer.Plugins.ArkPayServer.Data.ArkIntentState;
 using NNarkArkIntent = NArk.Abstractions.Intents.ArkIntent;
-using NNarkArkIntentState = NArk.Abstractions.Intents.ArkIntentState;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Storage;
 
@@ -39,7 +37,7 @@ public class EfCoreIntentStorage : IIntentStorage
             // Update existing
             existing.IntentId = intent.IntentId;
             existing.WalletId = intent.WalletId;
-            existing.State = MapState(intent.State);
+            existing.State = intent.State;
             existing.ValidFrom = intent.ValidFrom;
             existing.ValidUntil = intent.ValidUntil;
             existing.UpdatedAt = intent.UpdatedAt;
@@ -58,7 +56,7 @@ public class EfCoreIntentStorage : IIntentStorage
             {
                 IntentId = intent.IntentId,
                 WalletId = intent.WalletId,
-                State = MapState(intent.State),
+                State = intent.State,
                 ValidFrom = intent.ValidFrom,
                 ValidUntil = intent.ValidUntil,
                 CreatedAt = intent.CreatedAt,
@@ -147,9 +145,9 @@ public class EfCoreIntentStorage : IIntentStorage
         if (pendingOnly)
         {
             query = query.Where(i =>
-                i.State == PluginArkIntentState.WaitingToSubmit ||
-                i.State == PluginArkIntentState.WaitingForBatch ||
-                i.State == PluginArkIntentState.BatchInProgress);
+                i.State == ArkIntentState.WaitingToSubmit ||
+                i.State == ArkIntentState.WaitingForBatch ||
+                i.State == ArkIntentState.BatchInProgress);
         }
 
         var entities = await query.ToListAsync(cancellationToken);
@@ -170,7 +168,7 @@ public class EfCoreIntentStorage : IIntentStorage
 
         var query = db.Intents
             .Include(i => i.IntentVtxos)
-            .Where(i => i.State == PluginArkIntentState.WaitingToSubmit);
+            .Where(i => i.State == ArkIntentState.WaitingToSubmit);
 
         if (validAt.HasValue)
         {
@@ -190,9 +188,9 @@ public class EfCoreIntentStorage : IIntentStorage
         var entities = await db.Intents
             .Include(i => i.IntentVtxos)
             .Where(i =>
-                i.State == PluginArkIntentState.WaitingToSubmit ||
-                i.State == PluginArkIntentState.WaitingForBatch ||
-                i.State == PluginArkIntentState.BatchInProgress)
+                i.State == ArkIntentState.WaitingToSubmit ||
+                i.State == ArkIntentState.WaitingForBatch ||
+                i.State == ArkIntentState.BatchInProgress)
             .ToListAsync(cancellationToken);
 
         return entities.Select(MapToNNarkIntent).ToList();
@@ -204,7 +202,7 @@ public class EfCoreIntentStorage : IIntentStorage
             InternalId: IntToGuid(entity.InternalId),
             IntentId: entity.IntentId,
             WalletId: entity.WalletId,
-            State: MapState(entity.State),
+            State: entity.State,
             ValidFrom: entity.ValidFrom,
             ValidUntil: entity.ValidUntil,
             CreatedAt: entity.CreatedAt,
@@ -223,27 +221,6 @@ public class EfCoreIntentStorage : IIntentStorage
         );
     }
 
-    private static NNarkArkIntentState MapState(PluginArkIntentState state) => state switch
-    {
-        PluginArkIntentState.WaitingToSubmit => NNarkArkIntentState.WaitingToSubmit,
-        PluginArkIntentState.WaitingForBatch => NNarkArkIntentState.WaitingForBatch,
-        PluginArkIntentState.BatchInProgress => NNarkArkIntentState.BatchInProgress,
-        PluginArkIntentState.BatchFailed => NNarkArkIntentState.BatchFailed,
-        PluginArkIntentState.BatchSucceeded => NNarkArkIntentState.BatchSucceeded,
-        PluginArkIntentState.Cancelled => NNarkArkIntentState.Cancelled,
-        _ => throw new ArgumentOutOfRangeException(nameof(state))
-    };
-
-    private static PluginArkIntentState MapState(NNarkArkIntentState state) => state switch
-    {
-        NNarkArkIntentState.WaitingToSubmit => PluginArkIntentState.WaitingToSubmit,
-        NNarkArkIntentState.WaitingForBatch => PluginArkIntentState.WaitingForBatch,
-        NNarkArkIntentState.BatchInProgress => PluginArkIntentState.BatchInProgress,
-        NNarkArkIntentState.BatchFailed => PluginArkIntentState.BatchFailed,
-        NNarkArkIntentState.BatchSucceeded => PluginArkIntentState.BatchSucceeded,
-        NNarkArkIntentState.Cancelled => PluginArkIntentState.Cancelled,
-        _ => throw new ArgumentOutOfRangeException(nameof(state))
-    };
 
     /// <summary>
     /// Convert int InternalId to Guid for NNark compatibility.
@@ -300,8 +277,8 @@ public class EfCoreIntentStorage : IIntentStorage
             .Include(iv => iv.Intent)
             .Include(iv => iv.Vtxo)
             .Where(iv => iv.Intent.WalletId == walletId &&
-                        (iv.Intent.State == PluginArkIntentState.WaitingToSubmit ||
-                         iv.Intent.State == PluginArkIntentState.WaitingForBatch))
+                        (iv.Intent.State == ArkIntentState.WaitingToSubmit ||
+                         iv.Intent.State == ArkIntentState.WaitingForBatch))
             .Select(iv => new ValueTuple<string, int>(iv.Vtxo!.TransactionId, iv.Vtxo.TransactionOutputIndex))
             .ToListAsync(cancellationToken);
     }
@@ -314,7 +291,7 @@ public class EfCoreIntentStorage : IIntentStorage
         int skip = 0,
         int count = 10,
         string? searchText = null,
-        PluginArkIntentState? state = null,
+        ArkIntentState? state = null,
         CancellationToken cancellationToken = default)
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);

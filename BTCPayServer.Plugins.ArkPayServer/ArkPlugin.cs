@@ -1,4 +1,3 @@
-using Ark.V1;
 using AsyncKeyedLock;
 using BTCPayServer.Abstractions.Contracts;
 using BTCPayServer.Abstractions.Extensions;
@@ -14,8 +13,6 @@ using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
 using BTCPayServer.Plugins.ArkPayServer.Services;
 using BTCPayServer.Plugins.ArkPayServer.Storage;
-using Grpc.Net.ClientFactory;
-using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using NArk.Abstractions.Blockchain;
@@ -24,296 +21,249 @@ using NArk.Abstractions.Intents;
 using NArk.Abstractions.Safety;
 using NArk.Abstractions.VTXOs;
 using NArk.Abstractions.Wallets;
+using NArk.Blockchain.NBXplorer;
 using NArk.Hosting;
+using NArk.Models.Options;
 using NArk.Services;
-using NArk.Sweeper;
 using NArk.Swaps.Abstractions;
 using NArk.Swaps.Boltz.Client;
 using NArk.Swaps.Services;
-using NArk.Transport;
-using NArk.Transport.GrpcClient;
 using NBitcoin;
 using System.Reflection;
 using System.Text.Json;
-using NArk.Blockchain.NBXplorer;
-using NBXplorer;
+using BTCPayServer.Plugins.ArkPayServer.Services.Policies;
+using NArk.Sweeper;
 
 namespace BTCPayServer.Plugins.ArkPayServer;
 
 public class ArkadePlugin : BaseBTCPayServerPlugin
 {
-    internal const string PluginNavKey = nameof(ArkadePlugin) + "Nav";
-    internal const string ArkadeDisplayName = "Arkade";
     internal const string CheckoutBodyComponentName = "arkadeCheckoutBody";
 
-    internal static readonly PaymentMethodId ArkadePaymentMethodId = new PaymentMethodId("ARKADE");
-    
-    internal static readonly PayoutMethodId ArkadePayoutMethodId = Create();
+    internal static readonly PaymentMethodId ArkadePaymentMethodId = new("ARKADE");
+    internal static readonly PayoutMethodId ArkadePayoutMethodId = CreatePayoutMethodId();
 
-    private static PayoutMethodId Create()
+    private static PayoutMethodId CreatePayoutMethodId()
     {
-        //use reflection to access ctor of PayoutMethodId and create it
-        var constructor = typeof(PayoutMethodId).GetConstructor(BindingFlags.NonPublic | BindingFlags.Instance, new[] { typeof(string) })!;
-        return (PayoutMethodId) constructor.Invoke(["ARKADE"])!;
+        var constructor = typeof(PayoutMethodId).GetConstructor(
+            BindingFlags.NonPublic | BindingFlags.Instance, [typeof(string)])!;
+        return (PayoutMethodId)constructor.Invoke(["ARKADE"])!;
     }
-    
+
     public override IBTCPayServerPlugin.PluginDependency[] Dependencies { get; } =
     [
-        new () { Identifier = nameof(BTCPayServer), Condition = ">=2.1.0" }
+        new() { Identifier = nameof(BTCPayServer), Condition = ">=2.1.0" }
     ];
 
-    public override void Execute(IServiceCollection serviceCollection)
+    public override void Execute(IServiceCollection services)
     {
-        var pluginServiceCollection = (PluginServiceCollection) serviceCollection;
-        
-        var (arkUri, boltzUri, arkadeWalletUri) = GetServiceUris(pluginServiceCollection);
-        
-        if (arkUri is null) return;
+        var pluginServices = (PluginServiceCollection)services;
+        var networkConfig = GetNetworkConfig(pluginServices);
 
-        var config = new ArkConfiguration(arkUri,  arkadeWalletUri, boltzUri);
-        
-        SetupBtcPayPluginServices(serviceCollection);
-        
-        serviceCollection.AddSingleton(config);
-        serviceCollection.AddSingleton<ArkadePaymentMethodHandler>();
-        serviceCollection.AddSingleton<ArkPluginDbContextFactory>();
-        serviceCollection.AddSingleton<AsyncKeyedLocker>();
-        
-        serviceCollection.AddDbContext<ArkPluginDbContext>((provider, o) =>
-        {
-            var factory = provider.GetRequiredService<ArkPluginDbContextFactory>();
-            factory.ConfigureBuilder(o);
-        });
-        serviceCollection.AddDbContextFactory<ArkPluginDbContext>((provider, o) =>
-        {
-            var factory = provider.GetRequiredService<ArkPluginDbContextFactory>();
-            factory.ConfigureBuilder(o);
-        });
-        serviceCollection.AddStartupTask<ArkPluginMigrationRunner>();
+        if (networkConfig is null) return;
 
-        // Register NNark storage adapters (plugin-specific EF Core implementations)
-        // Register concrete types first, then expose as interfaces
-        serviceCollection.AddSingleton<EfCoreVtxoStorage>();
-        serviceCollection.AddSingleton<IVtxoStorage>(sp => sp.GetRequiredService<EfCoreVtxoStorage>());
-        serviceCollection.AddSingleton<EfCoreContractStorage>();
-        serviceCollection.AddSingleton<IContractStorage>(sp => sp.GetRequiredService<EfCoreContractStorage>());
-        serviceCollection.AddSingleton<EfCoreIntentStorage>();
-        serviceCollection.AddSingleton<IIntentStorage>(sp => sp.GetRequiredService<EfCoreIntentStorage>());
-        serviceCollection.AddSingleton<EfCoreSwapStorage>();
-        serviceCollection.AddSingleton<ISwapStorage>(sp => sp.GetRequiredService<EfCoreSwapStorage>());
-        serviceCollection.AddSingleton<EfCoreWalletStorage>();
+        // BTCPay plugin services
+        RegisterBtcPayServices(services);
 
-        // Register NNark core abstractions (plugin-specific implementations)
-        serviceCollection.AddSingleton<ISafetyService, NArk.Safety.AsyncKeyedLock.AsyncSafetyService>();
-        serviceCollection.AddSingleton<IWalletProvider, Wallet.PluginWalletAdapter>();
+        // Database
+        RegisterDatabase(services);
 
-        // Register NNark core services using the hosting extension
-        serviceCollection.AddArkCoreServices();
+        // NArk storage implementations
+        RegisterNArkStorage(services);
 
-        // Register plugin-specific sweep policies for automatic VTXO consolidation
-        //serviceCollection.AddSingleton<ISweepPolicy, DestinationSweepPolicy>();
-
-        // Configure NNark SimpleIntentScheduler for automatic VTXO refresh
-        serviceCollection.Configure<NArk.Models.Options.SimpleIntentSchedulerOptions>(options =>
-        {
-            options.Threshold = TimeSpan.FromDays(1); // Refresh VTXOs expiring within 1 day
-        });
-        serviceCollection.AddSingleton<IIntentScheduler, SimpleIntentScheduler>();
+        // NArk core services
+        RegisterNArkCore(services, networkConfig);
 
         // Plugin-specific services
-        serviceCollection.AddSingleton<VtxoPollingService>();
-        // serviceCollection.AddSingleton<WalletSignerService>();
-        serviceCollection.AddSingleton<ArkadeCheckoutModelExtension>();
-        serviceCollection.AddSingleton<ArkadeCheckoutCheatModeExtension>();
-        serviceCollection.AddSingleton<ICheckoutModelExtension>(provider => provider.GetRequiredService<ArkadeCheckoutModelExtension>());
-        serviceCollection.AddSingleton<ICheckoutCheatModeExtension>(provider => provider.GetRequiredService<ArkadeCheckoutCheatModeExtension>());
-        // serviceCollection.AddSingleton<IArkadeMultiWalletSigner>(provider => provider.GetRequiredService<WalletSignerService>());
-        serviceCollection.AddSingleton<ArkContractInvoiceListener>();
-        
-        var networkType = 
-            DefaultConfiguration.GetNetworkType(
-                pluginServiceCollection
-                    .BootstrapServices
-                    .GetRequiredService<IConfiguration>()
-            );
-        
-        serviceCollection.AddSingleton<ChainTimeProvider>(provider =>
+        RegisterPluginServices(services);
+
+        // UI extensions
+        RegisterUIExtensions(services);
+
+        // Boltz swap services (optional)
+        RegisterBoltzServices(services, networkConfig);
+    }
+
+    #region Service Registration
+
+    private static void RegisterBtcPayServices(IServiceCollection services)
+    {
+        services.AddSingleton<ILightningConnectionStringHandler, ArkLightningConnectionStringHandler>();
+        services.AddSingleton<ArkadeLightningLimitsService>();
+
+        services.AddSingleton<ArkadePaymentMethodHandler>();
+        services.AddSingleton<IPaymentMethodHandler>(sp => sp.GetRequiredService<ArkadePaymentMethodHandler>());
+
+        services.AddSingleton<ArkadePaymentLinkExtension>();
+        services.AddSingleton<IPaymentLinkExtension>(sp => sp.GetRequiredService<ArkadePaymentLinkExtension>());
+
+        services.AddSingleton<ArkPayoutHandler>();
+        services.AddSingleton<IPayoutHandler>(sp => sp.GetRequiredService<ArkPayoutHandler>());
+
+        services.AddSingleton<ArkAutomatedPayoutSenderFactory>();
+        services.AddSingleton<IPayoutProcessorFactory>(sp => sp.GetRequiredService<ArkAutomatedPayoutSenderFactory>());
+
+        services.AddDefaultPrettyName(ArkadePaymentMethodId, "Arkade");
+    }
+
+    private static void RegisterDatabase(IServiceCollection services)
+    {
+        services.AddSingleton<ArkPluginDbContextFactory>();
+        services.AddSingleton<AsyncKeyedLocker>();
+
+        services.AddDbContext<ArkPluginDbContext>((provider, o) =>
+        {
+            var factory = provider.GetRequiredService<ArkPluginDbContextFactory>();
+            factory.ConfigureBuilder(o);
+        });
+
+        services.AddDbContextFactory<ArkPluginDbContext>((provider, o) =>
+        {
+            var factory = provider.GetRequiredService<ArkPluginDbContextFactory>();
+            factory.ConfigureBuilder(o);
+        });
+
+        services.AddStartupTask<ArkPluginMigrationRunner>();
+    }
+
+    private static void RegisterNArkStorage(IServiceCollection services)
+    {
+        services.AddSingleton<EfCoreVtxoStorage>();
+        services.AddSingleton<IVtxoStorage>(sp => sp.GetRequiredService<EfCoreVtxoStorage>());
+
+        services.AddSingleton<EfCoreContractStorage>();
+        services.AddSingleton<IContractStorage>(sp => sp.GetRequiredService<EfCoreContractStorage>());
+
+        services.AddSingleton<EfCoreIntentStorage>();
+        services.AddSingleton<IIntentStorage>(sp => sp.GetRequiredService<EfCoreIntentStorage>());
+
+        services.AddSingleton<EfCoreSwapStorage>();
+        services.AddSingleton<ISwapStorage>(sp => sp.GetRequiredService<EfCoreSwapStorage>());
+
+        services.AddSingleton<EfCoreWalletStorage>();
+    }
+
+    private static void RegisterNArkCore(IServiceCollection services, ArkNetworkConfig networkConfig)
+    {
+        // Safety service
+        services.AddSingleton<ISafetyService, NArk.Safety.AsyncKeyedLock.AsyncSafetyService>();
+
+        // Wallet provider
+        services.AddSingleton<IWalletProvider, Wallet.PluginWalletAdapter>();
+
+        // Chain time provider (needs NBXplorer)
+        services.AddSingleton<ChainTimeProvider>(provider =>
         {
             var explorerClientProvider = provider.GetRequiredService<ExplorerClientProvider>();
             return new ChainTimeProvider(explorerClientProvider.GetExplorerClient("BTC"));
         });
-        serviceCollection.AddSingleton<IChainTimeProvider>(provider => provider.GetRequiredService<ChainTimeProvider>());
-        // serviceCollection.AddHostedService<WalletSignerService>(provider => provider.GetRequiredService<WalletSignerService>());
-        serviceCollection.AddHostedService<ArkContractInvoiceListener>(provider => provider.GetRequiredService<ArkContractInvoiceListener>());
+        services.AddSingleton<IChainTimeProvider>(sp => sp.GetRequiredService<ChainTimeProvider>());
 
-        serviceCollection.AddSingleton<ArkadeSpendingService>();
+        // Intent scheduler
+        services.Configure<SimpleIntentSchedulerOptions>(options =>
+            options.Threshold = TimeSpan.FromDays(1));
+        services.AddSingleton<IIntentScheduler, SimpleIntentScheduler>();
 
-        // Register Arkade checkout view
-        serviceCollection.AddUIExtension("checkout-end", "Arkade/ArkadeMethodCheckout");
-        serviceCollection.AddUIExtension("dashboard-setup-guide-payment", "/Views/Ark/DashboardSetupGuidePayment.cshtml");
-        serviceCollection.AddUIExtension("store-invoices-payments", "/Views/Ark/ArkPaymentData.cshtml");
-        // Display Ark as a wallet type in navigation sidebar
-        serviceCollection.AddUIExtension("store-wallets-nav", "/Views/Ark/ArkWalletNav.cshtml");
+        // Core services and network config
+        services.AddArkCoreServices();
+        services.AddArkNetwork(networkConfig, configureBoltz: !string.IsNullOrWhiteSpace(networkConfig.BoltzUri));
+    }
+
+    private static void RegisterPluginServices(IServiceCollection services)
+    {
+        services.AddSingleton<VtxoPollingService>();
+        services.AddSingleton<ArkadeSpendingService>();
         
-        // Display ARK instructions in the Lightning setup screen
-        serviceCollection.AddUIExtension(
-            location: "ln-payment-method-setup-tab",
-            partialViewName: "/Views/Lightning/LNPaymentMethodSetupTab.cshtml");
-        
-       
-        serviceCollection.AddGrpcClient<ArkService.ArkServiceClient>(options =>
+        services.AddSingleton<ISweepPolicy, DestinationSweepPolicy>();
+
+        services.AddSingleton<ArkadeCheckoutModelExtension>();
+        services.AddSingleton<ICheckoutModelExtension>(sp => sp.GetRequiredService<ArkadeCheckoutModelExtension>());
+
+        services.AddSingleton<ArkadeCheckoutCheatModeExtension>();
+        services.AddSingleton<ICheckoutCheatModeExtension>(sp => sp.GetRequiredService<ArkadeCheckoutCheatModeExtension>());
+
+        services.AddSingleton<ArkContractInvoiceListener>();
+        services.AddHostedService(sp => sp.GetRequiredService<ArkContractInvoiceListener>());
+    }
+
+    private static void RegisterUIExtensions(IServiceCollection services)
+    {
+        services.AddUIExtension("checkout-end", "Arkade/ArkadeMethodCheckout");
+        services.AddUIExtension("dashboard-setup-guide-payment", "/Views/Ark/DashboardSetupGuidePayment.cshtml");
+        services.AddUIExtension("store-invoices-payments", "/Views/Ark/ArkPaymentData.cshtml");
+        services.AddUIExtension("store-wallets-nav", "/Views/Ark/ArkWalletNav.cshtml");
+        services.AddUIExtension("ln-payment-method-setup-tab", "/Views/Lightning/LNPaymentMethodSetupTab.cshtml");
+    }
+
+    private static void RegisterBoltzServices(IServiceCollection services, ArkNetworkConfig networkConfig)
+    {
+        if (!string.IsNullOrWhiteSpace(networkConfig.BoltzUri))
         {
-            options.Address = new Uri(config.ArkUri);
-            options.InterceptorRegistrations.Add(new InterceptorRegistration(InterceptorScope.Client, provider => new DeadlineInterceptor(TimeSpan.FromSeconds(10))));
-            
-        });
-        
-        serviceCollection.AddGrpcClient<IndexerService.IndexerServiceClient>(options =>
-        {
-            options.Address = new Uri(config.ArkUri);
-            options.InterceptorRegistrations.Add(new InterceptorRegistration(InterceptorScope.Client, provider => new DeadlineInterceptor(TimeSpan.FromSeconds(10))));
+            services.AddHttpClient<BoltzClient>();
+            services.AddArkSwapServices();
+            services.AddSingleton<BoltzLimitsService>();
 
-        });
+            services.AddUIExtension("ln-payment-method-setup-tabhead", "/Views/Ark/ArkLNSetupTabhead.cshtml");
 
-        // Register Ark transport service (replaces old IOperatorTermsService)
-        // IClientTransport is used to get server info via GetServerInfoAsync()
-        serviceCollection.AddSingleton<IClientTransport>(provider =>
-            new GrpcClientTransport(config.ArkUri));
-
-        // Register Boltz services only if BoltzUri is configured
-        if (!string.IsNullOrWhiteSpace(config.BoltzUri))
-        {
-            // Configure BoltzClient options
-            serviceCollection.Configure<NArk.Swaps.Boltz.Models.BoltzClientOptions>(options =>
-            {
-                options.BoltzUrl = config.BoltzUri;
-                options.WebsocketUrl = config.BoltzUri;
-            });
-
-            serviceCollection.AddHttpClient<BoltzClient>();
-
-            // Register NNark swap services (SwapsManagementService + SwapSweepPolicy)
-            serviceCollection.AddArkSwapServices();
-
-            // Register plugin-specific Boltz limits service
-            serviceCollection.AddSingleton<BoltzLimitsService>();
-
-            serviceCollection.AddUIExtension("ln-payment-method-setup-tabhead", "/Views/Ark/ArkLNSetupTabhead.cshtml");
-
-            // Register LNURL filter to apply Boltz limits
-            serviceCollection.AddSingleton<ArkadeLNURLPayRequestFilter>();
-            serviceCollection.AddSingleton<IPluginHookFilter>(provider => provider.GetRequiredService<ArkadeLNURLPayRequestFilter>());
+            services.AddSingleton<ArkadeLNURLPayRequestFilter>();
+            services.AddSingleton<IPluginHookFilter>(sp => sp.GetRequiredService<ArkadeLNURLPayRequestFilter>());
         }
         else
         {
-            // Register null implementations so DI can inject null for optional dependencies
-            serviceCollection.AddSingleton<BoltzClient>(provider => null!);
-            serviceCollection.AddSingleton<SwapsManagementService>(provider => null!);
-            serviceCollection.AddSingleton<BoltzLimitsService>(provider => null!);
+            // Null implementations for optional dependencies
+            services.AddSingleton<BoltzClient>(_ => null!);
+            services.AddSingleton<SwapsManagementService>(_ => null!);
+            services.AddSingleton<BoltzLimitsService>(_ => null!);
         }
     }
 
-    
-    private static (string? ArkUri, string? BoltzUri, string? ArkadeWalletUri) GetServiceUris(PluginServiceCollection pluginServiceCollection)
+    #endregion
+
+    #region Network Configuration
+
+    private static ArkNetworkConfig? GetNetworkConfig(PluginServiceCollection pluginServices)
     {
-        var networkType = 
-            DefaultConfiguration.GetNetworkType(
-                pluginServiceCollection
-                    .BootstrapServices
-                    .GetRequiredService<IConfiguration>()
-            );
-        
-        var arkUri = GetArkServiceUri(networkType);
-        var boltzUri = GetBoltzServiceUri(networkType);
-        var arkadeWalletUri = GetArkadeWalletServiceUri(networkType);
-        
-        var configurationServices =
-            pluginServiceCollection
-                .BootstrapServices
-                .GetRequiredService<IConfiguration>();
-        
-        var arkadeFilePath =
-            Path.Combine(new DataDirectories().Configure(configurationServices).DataDir, "ark.json");
-        
-        if (File.Exists(arkadeFilePath))
-        {
-            var json = File.ReadAllText(arkadeFilePath);
-            var config = JsonSerializer.Deserialize<ArkConfiguration>(json);
+        var configuration = pluginServices.BootstrapServices.GetRequiredService<IConfiguration>();
+        var networkType = DefaultConfiguration.GetNetworkType(configuration);
 
-            if(!string.IsNullOrEmpty(config?.BoltzUri))
-            {
-                boltzUri = config.BoltzUri;
-            }
-            
-            if(!string.IsNullOrEmpty(config?.ArkUri))
-            {
-                arkUri = config.ArkUri;
-            }  
-            if(!string.IsNullOrEmpty(config?.ArkadeWalletUri))
-            {
-                arkadeWalletUri = config.ArkadeWalletUri;
-            }
-            
-            
-            
-        }
+        // Start with preset for the network
+        var preset = GetNetworkPreset(networkType);
+        if (preset is null) return null;
 
+        // Check for config file override
+        var dataDir = new DataDirectories().Configure(configuration).DataDir;
+        var configPath = Path.Combine(dataDir, "ark.json");
 
-        return (arkUri, boltzUri, arkadeWalletUri);
+        if (!File.Exists(configPath))
+            return preset;
+
+        // Merge file config with preset (file values override preset)
+        var json = File.ReadAllText(configPath);
+        var fileConfig = JsonSerializer.Deserialize<ArkNetworkConfig>(json);
+
+        return new ArkNetworkConfig(
+            ArkUri: !string.IsNullOrEmpty(fileConfig?.ArkUri) ? fileConfig.ArkUri : preset.ArkUri,
+            ArkadeWalletUri: !string.IsNullOrEmpty(fileConfig?.ArkadeWalletUri) ? fileConfig.ArkadeWalletUri : preset.ArkadeWalletUri,
+            BoltzUri: !string.IsNullOrEmpty(fileConfig?.BoltzUri) ? fileConfig.BoltzUri : preset.BoltzUri
+        );
     }
-    
-    private static string? GetArkadeWalletServiceUri(ChainName networkType)
+
+    private static ArkNetworkConfig? GetNetworkPreset(ChainName networkType)
     {
         if (networkType == NBitcoin.Bitcoin.Instance.Mainnet.ChainName)
-            return "https://arkade.money";
+            return ArkNetworkConfig.Mainnet;
         if (networkType == NBitcoin.Bitcoin.Instance.Mutinynet.ChainName)
-            return "https://mutinynet.arkade.money";
+            return ArkNetworkConfig.Mutinynet;
+        if (networkType == ChainName.Regtest)
+            return ArkNetworkConfig.Regtest;
         if (networkType == NBitcoin.Bitcoin.Instance.Signet.ChainName)
-            return "https://signet.arkade.money";
-        if (networkType == ChainName.Regtest)
-            return "http://localhost:3002";
+            return new ArkNetworkConfig(
+                ArkUri: "https://signet.arkade.sh",
+                ArkadeWalletUri: "https://signet.arkade.money",
+                BoltzUri: null);
+
         return null;
     }
 
-    private static string? GetArkServiceUri(ChainName networkType)
-    {
-        if (networkType == NBitcoin.Bitcoin.Instance.Mainnet.ChainName)
-            return "https://arkade.computer";
-        if (networkType == NBitcoin.Bitcoin.Instance.Mutinynet.ChainName)
-            return "https://mutinynet.arkade.sh";
-        if (networkType == NBitcoin.Bitcoin.Instance.Signet.ChainName)
-            return "https://signet.arkade.sh";
-        if (networkType == ChainName.Regtest)
-            return "http://localhost:7070";
-        return null;
-    }
-    
-    private static string? GetBoltzServiceUri(ChainName networkType)
-    {
-        if (networkType == NBitcoin.Bitcoin.Instance.Mainnet.ChainName)
-        
-            return "https://api.ark.boltz.exchange/";
-        
-        if (networkType == NBitcoin.Bitcoin.Instance.Mutinynet.ChainName)
-            return "https://api.boltz.mutinynet.arkade.sh/";
-        if (networkType == ChainName.Regtest)
-            return "http://localhost:9001/";
-        return null;
-    }
-
-    private static void SetupBtcPayPluginServices(IServiceCollection serviceCollection)
-    {
-        // Register ArkConnectionStringHandler so LightningClientFactoryService can create the client
-        serviceCollection.AddSingleton<ILightningConnectionStringHandler, ArkLightningConnectionStringHandler>();
-        serviceCollection.AddSingleton<ArkadeLightningLimitsService>();
-        serviceCollection.AddSingleton<ArkadePaymentLinkExtension>();
-        serviceCollection.AddSingleton<IPaymentLinkExtension>(provider => provider.GetRequiredService<ArkadePaymentLinkExtension>());
-        serviceCollection.AddSingleton<IPaymentMethodHandler>(provider => provider.GetRequiredService<ArkadePaymentMethodHandler>());
-        serviceCollection.AddSingleton<ArkPayoutHandler>();
-        serviceCollection.AddSingleton<IPayoutHandler>(provider => provider.GetRequiredService<ArkPayoutHandler>());
-        serviceCollection.AddSingleton<ArkAutomatedPayoutSenderFactory>();
-        serviceCollection.AddSingleton<IPayoutProcessorFactory>(provider => provider.GetRequiredService<ArkAutomatedPayoutSenderFactory>());
-        
-        serviceCollection.AddDefaultPrettyName(ArkadePaymentMethodId, "Arkade");
-    }
+    #endregion
 }

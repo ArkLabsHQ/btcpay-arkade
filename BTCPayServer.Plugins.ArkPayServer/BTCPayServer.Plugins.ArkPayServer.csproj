@@ -68,7 +68,6 @@
         <!-- Additional packages -->
         <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
         <PackageReference Include="Grpc.Net.ClientFactory" Version="2.66.0" />
-        <PackageReference Include="FlexLabs.EntityFrameworkCore.Upsert" Version="8.1.2" />
         <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.14.0" />
         <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.16"/>
         <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.11" />

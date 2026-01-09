@@ -8,7 +8,7 @@
 @using NArk.Services
 @model BTCPayServer.Plugins.ArkPayServer.Models.StoreOverviewViewModel
 @inject IScopeProvider ScopeProvider
-@inject ArkConfiguration ArkConfiguration
+@inject ArkNetworkConfig ArkNetworkConfig
 
 @{
     ViewData.SetActivePage(category: "Ark", activePage: "StoreOverview", title: "Ark - Overview");
@@ -54,10 +54,10 @@ else
                             View VTXOs
                         </a>
                     </div>
-                    @if(ArkConfiguration.ArkadeWalletUri is not null)
+                    @if(ArkNetworkConfig.ArkadeWalletUri is not null)
                     {
                         <div class="col-6">
-                            <a  href="@ArkConfiguration.ArkadeWalletUri" target="_blank" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center">
+                            <a  href="@ArkNetworkConfig.ArkadeWalletUri" target="_blank" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center">
                                 Arkade Wallet
                             </a>
                         </div>
@@ -162,7 +162,7 @@ else
         <vc:icon symbol="warning" /> Beta Notice: Arkade Wallet Companion required
     </h5>
     <p>
-        During the beta phase, you must use the <strong>same private key</strong> in <a href="@ArkConfiguration.ArkadeWalletUri" target="_blank" class="alert-link">Arkade Wallet</a> to properly handle batch operations for finality and expiry management. 
+        During the beta phase, you must use the <strong>same private key</strong> in <a href="@ArkNetworkConfig.ArkadeWalletUri" target="_blank" class="alert-link">Arkade Wallet</a> to properly handle batch operations for finality and expiry management. 
         Ensure your Arkade wallet is configured with the private key shown in this BTCPay store and routinely open to join Batches. This will (soon) become built into the plugin and require no action from you. 
     </p>
 </div>

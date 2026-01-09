@@ -3,7 +3,7 @@
 @using BTCPayServer.Plugins.ArkPayServer
 @using BTCPayServer.Plugins.ArkPayServer.Helpers
 @using NBitcoin
-@inject ArkConfiguration ArkConfiguration
+@inject ArkNetworkConfig ArkNetworkConfig
 @model IEnumerable<BTCPayServer.Plugins.ArkPayServer.Data.Entities.VTXO>
 
 @if (Model.Any())
@@ -22,7 +22,7 @@
                 @foreach (var vtxo in Model)
                 {
                     var outpoint = ArkadeLinkHelper.FormatOutpoint(vtxo.TransactionId, (uint)vtxo.TransactionOutputIndex);
-                    var link = ArkadeLinkHelper.GetIndexerLinkForVtxo(ArkConfiguration.ArkUri, vtxo.TransactionId, (uint)vtxo.TransactionOutputIndex);
+                    var link = ArkadeLinkHelper.GetIndexerLinkForVtxo(ArkNetworkConfig.ArkUri, vtxo.TransactionId, (uint)vtxo.TransactionOutputIndex);
                     var showLink = ViewData["ShowLinks"] as bool? ?? true;
                     
                     <tr>

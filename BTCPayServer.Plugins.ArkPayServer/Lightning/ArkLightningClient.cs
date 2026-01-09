@@ -1,13 +1,14 @@
 using System.ComponentModel.DataAnnotations;
 using BTCPayServer.Lightning;
 using BTCPayServer.Payments.Lightning;
-using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using BTCPayServer.Plugins.ArkPayServer.Storage;
 using Microsoft.Extensions.Logging;
 using NArk.Contracts;
+using NArk.Swaps.Models;
 using NArk.Swaps.Services;
 using NArk.Transport;
 using NBitcoin;
+using ArkSwap = BTCPayServer.Plugins.ArkPayServer.Data.Entities.ArkSwap;
 using NodeInfo = BTCPayServer.Lightning.NodeInfo;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Lightning;

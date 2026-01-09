@@ -36,13 +36,13 @@ using NArk.Abstractions.Intents;
 using NArk.Swaps.Boltz.Client;
 using NArk.Swaps.Helpers;
 using NArk.Contracts;
+using NArk.Hosting;
 using NArk.Services;
 using NArk.Transport;
 using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using NArk.Abstractions.Blockchain;
 using NArk.Abstractions.Wallets;
-using PluginArkIntentState = BTCPayServer.Plugins.ArkPayServer.Data.ArkIntentState;
-using PluginArkSwapStatus = BTCPayServer.Plugins.ArkPayServer.Data.Entities.ArkSwapStatus;
+using NArk.Swaps.Models;
 using NBitcoin;
 using NBitcoin.DataEncoders;
 using NBitcoin.Secp256k1;
@@ -54,7 +54,7 @@ namespace BTCPayServer.Plugins.ArkPayServer.Controllers;
 public class ArkController(
     BoltzLimitsService? boltzLimitsService,
     BoltzClient? boltzClient,
-    ArkConfiguration arkConfiguration,
+    ArkNetworkConfig arkNetworkConfig,
     IAuthorizationService authorizationService,
     ArkPayoutHandler arkPayoutHandler,
     StoreRepository storeRepository,
@@ -222,7 +222,7 @@ public class ArkController(
         }
 
         // Check Ark Operator connection
-        string? arkOperatorUrl = arkConfiguration.ArkUri;
+        string? arkOperatorUrl = arkNetworkConfig.ArkUri;
         bool arkOperatorConnected = false;
         string? arkOperatorError = null;
         try
@@ -236,7 +236,7 @@ public class ArkController(
         }
         
         // Check Boltz connection and get cached limits
-        string? boltzUrl = arkConfiguration.BoltzUri;
+        string? boltzUrl = arkNetworkConfig.BoltzUri;
         bool boltzConnected = false;
         string? boltzError = null;
         long? boltzReverseMinAmount = null;
@@ -693,15 +693,15 @@ public class ArkController(
         return RedirectToAction("Swaps", new { storeId });
     }
 
-    private static PluginArkSwapStatus MapBoltzStatus(string status)
+    private static ArkSwapStatus MapBoltzStatus(string status)
     {
         return status switch
         {
-            "swap.created" or "invoice.set" => PluginArkSwapStatus.Pending,
-            "invoice.failedToPay" or "invoice.expired" or "swap.expired" or "transaction.failed" or "transaction.refunded" => PluginArkSwapStatus.Failed,
-            "transaction.mempool" => PluginArkSwapStatus.Pending,
-            "transaction.confirmed" or "invoice.settled" or "transaction.claimed" => PluginArkSwapStatus.Settled,
-            _ => PluginArkSwapStatus.Unknown
+            "swap.created" or "invoice.set" => ArkSwapStatus.Pending,
+            "invoice.failedToPay" or "invoice.expired" or "swap.expired" or "transaction.failed" or "transaction.refunded" => ArkSwapStatus.Failed,
+            "transaction.mempool" => ArkSwapStatus.Pending,
+            "transaction.confirmed" or "invoice.settled" or "transaction.claimed" => ArkSwapStatus.Settled,
+            _ => ArkSwapStatus.Unknown
         };
     }
 
@@ -838,7 +838,7 @@ public class ArkController(
             return View(new StoreIntentsViewModel { StoreId = storeId });
 
         // Get state filter
-        PluginArkIntentState? stateFilter = null;
+        ArkIntentState? stateFilter = null;
         if (new SearchString(searchTerm).ContainsFilter("state"))
         {
             var stateFilters = new SearchString(searchTerm).GetFilterArray("state");
@@ -846,11 +846,11 @@ public class ArkController(
             {
                 stateFilter = stateFilters[0] switch
                 {
-                    "waiting-submit" => PluginArkIntentState.WaitingToSubmit,
-                    "waiting-batch" => PluginArkIntentState.WaitingForBatch,
-                    "batch-succeeded" => PluginArkIntentState.BatchSucceeded,
-                    "batch-failed" => PluginArkIntentState.BatchFailed,
-                    "cancelled" => PluginArkIntentState.Cancelled,
+                    "waiting-submit" => ArkIntentState.WaitingToSubmit,
+                    "waiting-batch" => ArkIntentState.WaitingForBatch,
+                    "batch-succeeded" => ArkIntentState.BatchSucceeded,
+                    "batch-failed" => ArkIntentState.BatchFailed,
+                    "cancelled" => ArkIntentState.Cancelled,
                     _ => null
                 };
             }
@@ -1182,7 +1182,7 @@ public class ArkController(
             }
 
             // Check if contract has any pending swaps
-            var hasPendingSwaps = contract.Swaps?.Any(s => s.Status == PluginArkSwapStatus.Pending) ?? false;
+            var hasPendingSwaps = contract.Swaps?.Any(s => s.Status == ArkSwapStatus.Pending) ?? false;
             if (hasPendingSwaps)
             {
                 TempData[WellKnownTempData.ErrorMessage] = "Cannot delete contract: It has pending swaps.";
@@ -1500,7 +1500,7 @@ public class ArkController(
         }
 
         // Check Ark Operator connection
-        string? arkOperatorUrl = arkConfiguration.ArkUri;
+        string? arkOperatorUrl = arkNetworkConfig.ArkUri;
         bool arkOperatorConnected = false;
         string? arkOperatorError = null;
         try
@@ -1514,7 +1514,7 @@ public class ArkController(
         }
         
         // Check Boltz connection
-        string? boltzUrl = arkConfiguration.BoltzUri;
+        string? boltzUrl = arkNetworkConfig.BoltzUri;
         bool boltzConnected = false;
         string? boltzError = null;
         try

@@ -1,14 +1,9 @@
 using BTCPayServer.Plugins.ArkPayServer.Data;
-using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 using NArk.Swaps.Abstractions;
 using NArk.Swaps.Models;
-using PluginArkSwap = BTCPayServer.Plugins.ArkPayServer.Data.Entities.ArkSwap;
-using PluginArkSwapStatus = BTCPayServer.Plugins.ArkPayServer.Data.Entities.ArkSwapStatus;
-using PluginArkSwapType = BTCPayServer.Plugins.ArkPayServer.Data.Entities.ArkSwapType;
+using ArkSwap = BTCPayServer.Plugins.ArkPayServer.Data.Entities.ArkSwap;
 using NNarkArkSwap = NArk.Swaps.Models.ArkSwap;
-using NNarkArkSwapStatus = NArk.Swaps.Models.ArkSwapStatus;
-using NNarkArkSwapType = NArk.Swaps.Models.ArkSwapType;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Storage;
 
@@ -38,20 +33,20 @@ public class EfCoreSwapStorage : ISwapStorage
         if (existing != null)
         {
             // Update existing
-            existing.Status = MapStatus(swap.Status);
+            existing.Status = swap.Status;
             existing.UpdatedAt = swap.UpdatedAt;
         }
         else
         {
-            var entity = new PluginArkSwap
+            var entity = new ArkSwap
             {
                 SwapId = swap.SwapId,
                 WalletId = walletId,
-                SwapType = MapType(swap.SwapType),
+                SwapType = swap.SwapType,
                 Invoice = swap.Invoice,
                 ExpectedAmount = swap.ExpectedAmount,
                 ContractScript = swap.ContractScript,
-                Status = MapStatus(swap.Status),
+                Status = swap.Status,
                 Hash = swap.Hash,
                 CreatedAt = swap.CreatedAt,
                 UpdatedAt = swap.UpdatedAt
@@ -84,7 +79,7 @@ public class EfCoreSwapStorage : ISwapStorage
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
-        var query = db.Swaps.Where(s => s.Status == PluginArkSwapStatus.Pending);
+        var query = db.Swaps.Where(s => s.Status == ArkSwapStatus.Pending);
 
         if (walletId != null)
         {
@@ -95,17 +90,17 @@ public class EfCoreSwapStorage : ISwapStorage
         return entities.Select(MapToNNarkSwap).ToList();
     }
 
-    private static NNarkArkSwap MapToNNarkSwap(PluginArkSwap entity)
+    private static NNarkArkSwap MapToNNarkSwap(ArkSwap entity)
     {
         return new NNarkArkSwap(
             SwapId: entity.SwapId,
             WalletId: entity.WalletId,
-            SwapType: MapType(entity.SwapType),
+            SwapType: entity.SwapType,
             Invoice: entity.Invoice,
             ExpectedAmount: entity.ExpectedAmount,
             ContractScript: entity.ContractScript,
             Address: entity.Address ?? "",
-            Status: MapStatus(entity.Status),
+            Status: entity.Status,
             FailReason: entity.FailReason,
             CreatedAt: entity.CreatedAt,
             UpdatedAt: entity.UpdatedAt,
@@ -113,46 +108,13 @@ public class EfCoreSwapStorage : ISwapStorage
         );
     }
 
-    private static NNarkArkSwapStatus MapStatus(PluginArkSwapStatus status) => status switch
-    {
-        PluginArkSwapStatus.Pending => NNarkArkSwapStatus.Pending,
-        PluginArkSwapStatus.Settled => NNarkArkSwapStatus.Settled,
-        PluginArkSwapStatus.Failed => NNarkArkSwapStatus.Failed,
-        PluginArkSwapStatus.Refunded => NNarkArkSwapStatus.Refunded,
-        PluginArkSwapStatus.Unknown => NNarkArkSwapStatus.Unknown,
-        _ => NNarkArkSwapStatus.Unknown
-    };
-
-    private static PluginArkSwapStatus MapStatus(NNarkArkSwapStatus status) => status switch
-    {
-        NNarkArkSwapStatus.Pending => PluginArkSwapStatus.Pending,
-        NNarkArkSwapStatus.Settled => PluginArkSwapStatus.Settled,
-        NNarkArkSwapStatus.Failed => PluginArkSwapStatus.Failed,
-        NNarkArkSwapStatus.Refunded => PluginArkSwapStatus.Refunded,
-        NNarkArkSwapStatus.Unknown => PluginArkSwapStatus.Unknown,
-        _ => PluginArkSwapStatus.Unknown
-    };
-
-    private static NNarkArkSwapType MapType(PluginArkSwapType type) => type switch
-    {
-        PluginArkSwapType.ReverseSubmarine => NNarkArkSwapType.ReverseSubmarine,
-        PluginArkSwapType.Submarine => NNarkArkSwapType.Submarine,
-        _ => throw new ArgumentOutOfRangeException(nameof(type))
-    };
-
-    private static PluginArkSwapType MapType(NNarkArkSwapType type) => type switch
-    {
-        NNarkArkSwapType.ReverseSubmarine => PluginArkSwapType.ReverseSubmarine,
-        NNarkArkSwapType.Submarine => PluginArkSwapType.Submarine,
-        _ => throw new ArgumentOutOfRangeException(nameof(type))
-    };
 
     #region Plugin-specific methods (wallet-guarded)
 
     /// <summary>
     /// Gets swaps grouped by contract script. Wallet ID guards ownership.
     /// </summary>
-    public async Task<Dictionary<string, PluginArkSwap[]>> GetSwapsByContractScriptsAsync(
+    public async Task<Dictionary<string, ArkSwap[]>> GetSwapsByContractScriptsAsync(
         string walletId,
         IEnumerable<string> contractScripts,
         CancellationToken cancellationToken = default)
@@ -173,7 +135,7 @@ public class EfCoreSwapStorage : ISwapStorage
     /// <summary>
     /// Gets a swap by ID with wallet ownership guard.
     /// </summary>
-    public async Task<PluginArkSwap?> GetSwapByIdAsync(
+    public async Task<ArkSwap?> GetSwapByIdAsync(
         string walletId,
         string swapId,
         CancellationToken cancellationToken = default)
@@ -190,7 +152,7 @@ public class EfCoreSwapStorage : ISwapStorage
     public async Task<bool> UpdateSwapStatusAsync(
         string walletId,
         string swapId,
-        PluginArkSwapStatus status,
+        ArkSwapStatus status,
         CancellationToken cancellationToken = default)
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
@@ -210,7 +172,7 @@ public class EfCoreSwapStorage : ISwapStorage
     /// <summary>
     /// Gets a swap by ID with its contract included. Wallet ID guards ownership.
     /// </summary>
-    public async Task<PluginArkSwap?> GetSwapWithContractAsync(
+    public async Task<ArkSwap?> GetSwapWithContractAsync(
         string walletId,
         string swapId,
         CancellationToken cancellationToken = default)
@@ -225,10 +187,10 @@ public class EfCoreSwapStorage : ISwapStorage
     /// <summary>
     /// Gets a swap by payment hash with its contract included. Wallet ID guards ownership.
     /// </summary>
-    public async Task<PluginArkSwap?> GetSwapByHashWithContractAsync(
+    public async Task<ArkSwap?> GetSwapByHashWithContractAsync(
         string walletId,
         string paymentHash,
-        PluginArkSwapType? swapType = null,
+        ArkSwapType? swapType = null,
         CancellationToken cancellationToken = default)
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
@@ -248,7 +210,7 @@ public class EfCoreSwapStorage : ISwapStorage
     /// <summary>
     /// Gets a swap by invoice with its contract included. Wallet ID guards ownership.
     /// </summary>
-    public async Task<PluginArkSwap?> GetSwapByInvoiceWithContractAsync(
+    public async Task<ArkSwap?> GetSwapByInvoiceWithContractAsync(
         string walletId,
         string invoice,
         CancellationToken cancellationToken = default)
@@ -263,7 +225,7 @@ public class EfCoreSwapStorage : ISwapStorage
     /// <summary>
     /// Lists reverse submarine swaps (invoices) with their contracts. Wallet ID guards ownership.
     /// </summary>
-    public async Task<IReadOnlyList<PluginArkSwap>> ListReverseSwapsWithContractAsync(
+    public async Task<IReadOnlyList<ArkSwap>> ListReverseSwapsWithContractAsync(
         string walletId,
         bool? pendingOnly = null,
         int skip = 0,
@@ -273,11 +235,11 @@ public class EfCoreSwapStorage : ISwapStorage
 
         var query = db.Swaps
             .Include(s => s.Contract)
-            .Where(s => s.SwapType == PluginArkSwapType.ReverseSubmarine && s.WalletId == walletId);
+            .Where(s => s.SwapType == ArkSwapType.ReverseSubmarine && s.WalletId == walletId);
 
         if (pendingOnly == true)
         {
-            query = query.Where(s => s.Status == PluginArkSwapStatus.Pending);
+            query = query.Where(s => s.Status == ArkSwapStatus.Pending);
         }
 
         return await query
@@ -289,7 +251,7 @@ public class EfCoreSwapStorage : ISwapStorage
     /// <summary>
     /// Lists submarine swaps (payments) with their contracts. Wallet ID guards ownership.
     /// </summary>
-    public async Task<IReadOnlyList<PluginArkSwap>> ListSubmarineSwapsWithContractAsync(
+    public async Task<IReadOnlyList<ArkSwap>> ListSubmarineSwapsWithContractAsync(
         string walletId,
         int skip = 0,
         CancellationToken cancellationToken = default)
@@ -298,7 +260,7 @@ public class EfCoreSwapStorage : ISwapStorage
 
         return await db.Swaps
             .Include(s => s.Contract)
-            .Where(s => s.SwapType == PluginArkSwapType.Submarine && s.WalletId == walletId)
+            .Where(s => s.SwapType == ArkSwapType.Submarine && s.WalletId == walletId)
             .Skip(skip)
             .ToListAsync(cancellationToken);
     }
@@ -306,13 +268,13 @@ public class EfCoreSwapStorage : ISwapStorage
     /// <summary>
     /// Gets swaps with pagination and optional filtering.
     /// </summary>
-    public async Task<IReadOnlyList<PluginArkSwap>> GetSwapsWithPaginationAsync(
+    public async Task<IReadOnlyList<ArkSwap>> GetSwapsWithPaginationAsync(
         string walletId,
         int skip = 0,
         int count = 10,
         string? searchText = null,
-        PluginArkSwapStatus? status = null,
-        PluginArkSwapType? swapType = null,
+        ArkSwapStatus? status = null,
+        ArkSwapType? swapType = null,
         CancellationToken cancellationToken = default)
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);

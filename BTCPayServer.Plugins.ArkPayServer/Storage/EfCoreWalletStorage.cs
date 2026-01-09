@@ -1,9 +1,8 @@
-using System.Text;
 using BTCPayServer.Plugins.ArkPayServer.Data;
-using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using Microsoft.EntityFrameworkCore;
-using NArk.Abstractions.Wallets;
+using NArk.Abstractions.Intents;
+using NArk.Swaps.Models;
 using PluginArkWallet = BTCPayServer.Plugins.ArkPayServer.Data.Entities.ArkWallet;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Storage;
@@ -149,7 +148,7 @@ public class EfCoreWalletStorage
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
         return await db.Swaps
-            .AnyAsync(s => s.WalletId == walletId && s.Status == Data.Entities.ArkSwapStatus.Pending, cancellationToken);
+            .AnyAsync(s => s.WalletId == walletId && s.Status == ArkSwapStatus.Pending, cancellationToken);
     }
 
     /// <summary>
@@ -163,8 +162,8 @@ public class EfCoreWalletStorage
 
         return await db.Intents
             .AnyAsync(i => i.WalletId == walletId &&
-                          (i.State == Data.ArkIntentState.WaitingToSubmit ||
-                           i.State == Data.ArkIntentState.WaitingForBatch), cancellationToken);
+                          (i.State == ArkIntentState.WaitingToSubmit ||
+                           i.State == ArkIntentState.WaitingForBatch), cancellationToken);
     }
 
     /// <summary>

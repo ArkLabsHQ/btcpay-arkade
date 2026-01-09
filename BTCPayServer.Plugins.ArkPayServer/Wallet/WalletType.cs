@@ -9,7 +9,7 @@ public enum WalletType
     /// Legacy wallet using a single nsec (Nostr-style) private key.
     /// Provides backwards compatibility with existing wallets.
     /// </summary>
-    Legacy = 0,
+    SingleKey = 0,
 
     /// <summary>
     /// HD wallet using BIP-39 mnemonic and BIP-32/BIP-86 derivation.

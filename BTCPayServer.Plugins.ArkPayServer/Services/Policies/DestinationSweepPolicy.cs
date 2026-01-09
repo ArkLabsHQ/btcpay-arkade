@@ -1,13 +1,9 @@
-/*
+
 using BTCPayServer.Plugins.ArkPayServer.Storage;
-using Microsoft.Extensions.Logging;
-using NArk;
+using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using NArk.Abstractions;
-using NArk.Abstractions.Wallets;
 using NArk.Contracts;
 using NArk.Sweeper;
-using NArk.Swaps.Helpers;
-using NBitcoin;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services.Policies;
 
@@ -16,14 +12,11 @@ namespace BTCPayServer.Plugins.ArkPayServer.Services.Policies;
 /// This applies to both legacy and HD wallets that have an explicit WalletDestination set.
 /// </summary>
 public class DestinationSweepPolicy(
-    IWallet wallet,
-    EfCoreWalletStorage walletStorage,
-    ILogger<DestinationSweepPolicy> logger) : ISweepPolicy
+    EfCoreWalletStorage walletStorage) : ISweepPolicy
 {
-    public bool CanSweep(IEnumerable<ArkCoin> coins) =>
-        coins.Any(c => c.Contract is ArkPaymentContract or HashLockedArkPaymentContract);
 
-    public async IAsyncEnumerable<ArkCoin> SweepAsync(IEnumerable<ArkCoin> coins)
+    public async IAsyncEnumerable<ArkCoin> SweepAsync(IEnumerable<ArkCoin> coins,
+        CancellationToken cancellationToken = default)
     {
         // Filter to spendable contract types (not VHTLCContract - those are handled by SwapSweepPolicy)
         var spendableCoins = coins
@@ -34,90 +27,38 @@ public class DestinationSweepPolicy(
             yield break;
 
         // Group by wallet
-        var walletIds = spendableCoins.Select(c => c.WalletIdentifier).Distinct().ToArray();
+        var walletIds = spendableCoins.Select(c => c.WalletIdentifier).ToHashSet();
 
+        //if the wallet if Legacy, always sweep
+        //if the wallet is HD, sweep if the wallet has a destination set
+        
+        
+        
+        
         // Load wallets via storage, filter for those with destinations set
-        var wallets = await walletStorage.GetWalletsByIdsAsync(walletIds, CancellationToken.None);
-        var walletsWithDestination = wallets
-            .Where(w => !string.IsNullOrEmpty(w.WalletDestination))
-            .ToDictionary(w => w.Id, w => w.WalletDestination!);
+        var wallets = await walletStorage.GetWalletsByIdsAsync(walletIds, cancellationToken);
+        
+        var eligibleWallets = wallets
+            .Where(w => !string.IsNullOrEmpty(w.WalletDestination) || w.WalletType == WalletType.SingleKey)
+            .ToDictionary(w => w.Id, w => w.WalletDestination);
 
-        foreach (var coin in spendableCoins)
+        
+        
+        foreach (var coin in spendableCoins.Where(c => eligibleWallets.ContainsKey(c.WalletIdentifier)).GroupBy(c => c.WalletIdentifier))
         {
-            if (!walletsWithDestination.TryGetValue(coin.WalletIdentifier, out var destinationStr))
-                continue;
-
-            // Parse destination address
-            ArkAddress destination;
-            try
+            var walletCoins = coin.ToList();
+            if (!string.IsNullOrEmpty(eligibleWallets[coin.Key]))
             {
-                destination = ArkAddress.Parse(destinationStr);
-            }
-            catch
-            {
-                logger.LogWarning("Invalid destination address for wallet {WalletId}: {Destination}",
-                    coin.WalletIdentifier, destinationStr);
-                continue;
+                walletCoins = walletCoins.Where(c => c.TxOut.ScriptPubKey != ArkAddress.Parse(eligibleWallets[coin.Key]).ScriptPubKey).ToList();
             }
 
-            // Skip coins already at destination to avoid infinite loops
-            if (coin.TxOut.ScriptPubKey == destination.ScriptPubKey)
+            foreach (var walletCoin in walletCoins)
             {
-                logger.LogTrace("Skipping coin {Outpoint} - already at destination", coin.Outpoint);
-                continue;
+                yield return walletCoin;
             }
 
-            var fingerprint = await wallet.GetWalletFingerprint(coin.WalletIdentifier);
-
-            switch (coin.Contract)
-            {
-                case ArkPaymentContract paymentContract:
-                {
-                    var userFingerprint = paymentContract.User.Extract().WalletId;
-                    if (!fingerprint.Equals(userFingerprint, StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    yield return new ArkCoin(
-                        walletIdentifier: coin.WalletIdentifier,
-                        contract: paymentContract,
-                        birth: coin.Birth,
-                        expiresAt: coin.ExpiresAt,
-                        expiresAtHeight: coin.ExpiresAtHeight,
-                        outPoint: coin.Outpoint,
-                        txOut: coin.TxOut,
-                        signerDescriptor: paymentContract.User,
-                        spendingScriptBuilder: paymentContract.CollaborativePath(),
-                        spendingConditionWitness: null,
-                        lockTime: null,
-                        sequence: null,
-                        recoverable: coin.Recoverable);
-                    break;
-                }
-
-                case HashLockedArkPaymentContract hashlock when hashlock.User != null:
-                {
-                    var userFingerprint = hashlock.User.Extract().WalletId;
-                    if (!fingerprint.Equals(userFingerprint, StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    yield return new ArkCoin(
-                        walletIdentifier: coin.WalletIdentifier,
-                        contract: hashlock,
-                        birth: coin.Birth,
-                        expiresAt: coin.ExpiresAt,
-                        expiresAtHeight: coin.ExpiresAtHeight,
-                        outPoint: coin.Outpoint,
-                        txOut: coin.TxOut,
-                        signerDescriptor: hashlock.User,
-                        spendingScriptBuilder: hashlock.CreateClaimScript(),
-                        spendingConditionWitness: new WitScript(Op.GetPushOp(hashlock.Preimage)),
-                        lockTime: null,
-                        sequence: null,
-                        recoverable: coin.Recoverable);
-                    break;
-                }
             }
         }
     }
 }
-*/
+

@@ -23,6 +23,7 @@ using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using NArk;
 using NArk.Abstractions;
 using NArk.Abstractions.VTXOs;
+using NArk.Hosting;
 using NArk.Transport;
 using NArk.Swaps.Helpers;
 using NBitcoin;
@@ -44,7 +45,7 @@ public class ArkPayoutHandler : IPayoutHandler, IHasNetwork
     private readonly BTCPayNetworkJsonSerializerSettings _jsonSerializerSettings;
     private readonly BTCPayNetworkProvider _networkProvider;
     private readonly NotificationSender _notificationSender;
-    private readonly ArkConfiguration _arkConfiguration;
+    private readonly ArkNetworkConfig _arkNetworkConfig;
     private readonly IVtxoStorage _vtxoStorage;
 
     public ArkPayoutHandler(
@@ -56,7 +57,7 @@ public class ArkPayoutHandler : IPayoutHandler, IHasNetwork
         BTCPayNetworkJsonSerializerSettings jsonSerializerSettings,
         BTCPayNetworkProvider networkProvider,
         NotificationSender notificationSender,
-        ArkConfiguration arkConfiguration,
+        ArkNetworkConfig arkNetworkConfig,
         IVtxoStorage vtxoStorage)
     {
         _logger = logger;
@@ -67,7 +68,7 @@ public class ArkPayoutHandler : IPayoutHandler, IHasNetwork
         _jsonSerializerSettings = jsonSerializerSettings;
         _networkProvider = networkProvider;
         _notificationSender = notificationSender;
-        _arkConfiguration = arkConfiguration;
+        _arkNetworkConfig = arkNetworkConfig;
         _vtxoStorage = vtxoStorage;
 
         // Subscribe directly to NNark's VTXO storage events
@@ -143,7 +144,7 @@ public class ArkPayoutHandler : IPayoutHandler, IHasNetwork
                 JsonSerializer.Create(_jsonSerializerSettings.GetSerializer(payoutMethodId))
             )!;
 
-            res.Link = $"{_arkConfiguration.ArkUri}/v1/indexer/vtxos?scripts={ArkAddress.Parse(payout.DedupId).ScriptPubKey.ToHex()}";
+            res.Link = $"{_arkNetworkConfig.ArkUri}/v1/indexer/vtxos?scripts={ArkAddress.Parse(payout.DedupId).ScriptPubKey.ToHex()}";
             return res;
         }
 

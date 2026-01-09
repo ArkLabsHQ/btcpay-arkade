@@ -2,6 +2,9 @@ using NArk;
 using NArk.Abstractions;
 using NArk.Swaps.Helpers;
 using NBitcoin;
+using NBitcoin.DataEncoders;
+using NBitcoin.Scripting;
+using NBitcoin.Secp256k1;
 using ArkWallet = BTCPayServer.Plugins.ArkPayServer.Data.Entities.ArkWallet;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Wallet;
@@ -32,40 +35,11 @@ public static class WalletFactory
 
         if (walletSecret.StartsWith("nsec", StringComparison.OrdinalIgnoreCase))
         {
-            return await CreateNsecWallet(walletSecret, destination, serverInfo, cancellationToken);
+            return await CreateNsecWallet(walletSecret, destination);
         }
-        else
-        {
-            return CreateHdWallet(walletSecret, destination, serverInfo);
-        }
-    }
 
-    // /// <summary>
-    // /// Creates a signer from a wallet entity's stored secret.
-    // /// </summary>
-    // public static ISigningEntity? CreateSigner(ArkWallet wallet, Network network)
-    // {
-    //     if (string.IsNullOrEmpty(wallet.Wallet))
-    //         return null;
-    //
-    //     try
-    //     {
-    //         if (wallet.WalletType == WalletType.Legacy && wallet.Wallet.StartsWith("nsec", StringComparison.OrdinalIgnoreCase))
-    //         {
-    //             return SingleKeySigningEntity.FromNsec(wallet.Wallet, network);
-    //         }
-    //         else if (wallet.WalletType == WalletType.HD)
-    //         {
-    //             return SimpleSeedWallet.FromMnemonic(wallet.Wallet, network);
-    //         }
-    //     }
-    //     catch
-    //     {
-    //         // Failed to create signer - wallet may have invalid format
-    //     }
-    //
-    //     return null;
-    // }
+        return CreateHdWallet(walletSecret, destination, serverInfo);
+    }
 
     /// <summary>
     /// Validates a destination address against the server's key.
@@ -82,22 +56,35 @@ public static class WalletFactory
 
     private static async Task<ArkWallet> CreateNsecWallet(
         string nsec,
-        string? destination,
-        ArkServerInfo serverInfo,
-        CancellationToken cancellationToken)
+        string? destination)
     {
-        var publicKey = await NSecAddressProvider.FromNsec(nsec, serverInfo.Network).GetPublicKey(cancellationToken);
-        var walletId = Convert.ToHexString(publicKey.ToBytes()).ToLowerInvariant();
 
+ 
+        var outputDescriptor = GetOutputDescriptorFromNsec(nsec);
         var wallet = new ArkWallet
         {
-            Id = walletId,
+            Id = outputDescriptor,
             WalletDestination = destination,
             Wallet = nsec,
-            WalletType = WalletType.Legacy
+            WalletType = WalletType.SingleKey,
+            AccountDescriptor = outputDescriptor,
+            LastUsedIndex = 0
         };
 
-        return (wallet);
+        return wallet;
+    }
+
+    public static string GetOutputDescriptorFromNsec(string nsec)
+    {
+        var encoder2 = Bech32Encoder.ExtractEncoderFromString(nsec);
+        encoder2.StrictLength = false;
+        encoder2.SquashBytes = true;
+        var keyData2 = encoder2.DecodeDataRaw(nsec, out _);
+        var privKey = ECPrivKey.Create(keyData2);
+        
+        var xOnlyPubKey = privKey.CreatePubKey();
+        var outputDescriptor = $"tr({xOnlyPubKey})";
+        return outputDescriptor;
     }
 
     private static ArkWallet CreateHdWallet(
@@ -110,9 +97,6 @@ public static class WalletFactory
         var fingerprint = extKey.GetPublicKey().GetHDFingerPrint();
         var coinType = serverInfo.Network.ChainName == ChainName.Mainnet ? "0" : "1";
 
-        // Derive wallet ID from fingerprint
-        var walletId = fingerprint.ToString().ToLowerInvariant();
-
         // Create account descriptor
         var accountKeyPath = new KeyPath($"m/86'/{coinType}'/0'");
         var accountXpriv = extKey.Derive(accountKeyPath);
@@ -121,7 +105,7 @@ public static class WalletFactory
 
         var wallet = new ArkWallet
         {
-            Id = walletId,
+            Id = accountDescriptor,
             WalletDestination = destination,
             Wallet = mnemonic,
             WalletType = WalletType.HD,
