@@ -23,14 +23,6 @@ public class ArkWalletContract
 
     public List<ArkSwap> Swaps { get; set; }
 
-    /// <summary>
-    /// Gets the signing entity descriptor from ContractData["user"].
-    /// For HD wallets: full descriptor with derivation path (e.g., tr([fp/86'/0'/0']xpub/0/5))
-    /// For legacy wallets: simple tr(pubkey) descriptor
-    /// </summary>
-    public string? GetSigningEntityDescriptor() =>
-        ContractData?.TryGetValue("user", out var user) == true ? user : null;
-
     internal static void OnModelCreating(ModelBuilder builder)
     {
         var entity = builder.Entity<ArkWalletContract>();

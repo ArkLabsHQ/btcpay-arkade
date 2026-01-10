@@ -32,6 +32,7 @@ using NBitcoin;
 using System.Reflection;
 using System.Text.Json;
 using BTCPayServer.Plugins.ArkPayServer.Services.Policies;
+using NArk.Abstractions.Scripts;
 using NArk.Sweeper;
 
 namespace BTCPayServer.Plugins.ArkPayServer;
@@ -130,9 +131,11 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
     {
         services.AddSingleton<EfCoreVtxoStorage>();
         services.AddSingleton<IVtxoStorage>(sp => sp.GetRequiredService<EfCoreVtxoStorage>());
+        services.AddSingleton<IActiveScriptsProvider>(sp => sp.GetRequiredService<EfCoreVtxoStorage>());
 
         services.AddSingleton<EfCoreContractStorage>();
         services.AddSingleton<IContractStorage>(sp => sp.GetRequiredService<EfCoreContractStorage>());
+        services.AddSingleton<IActiveScriptsProvider>(sp => sp.GetRequiredService<EfCoreContractStorage>());
 
         services.AddSingleton<EfCoreIntentStorage>();
         services.AddSingleton<IIntentStorage>(sp => sp.GetRequiredService<EfCoreIntentStorage>());

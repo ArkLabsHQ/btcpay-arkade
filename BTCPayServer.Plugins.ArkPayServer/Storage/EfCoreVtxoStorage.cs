@@ -15,6 +15,7 @@ public class EfCoreVtxoStorage : IVtxoStorage
     private readonly IDbContextFactory<ArkPluginDbContext> _dbContextFactory;
 
     public event EventHandler<ArkVtxo>? VtxosChanged;
+    public event EventHandler? ActiveScriptsChanged;
 
     public EfCoreVtxoStorage(IDbContextFactory<ArkPluginDbContext> dbContextFactory)
     {
@@ -52,6 +53,7 @@ public class EfCoreVtxoStorage : IVtxoStorage
         {
             // Raise event for direct subscribers (e.g., ArkPayoutHandler, ArkContractInvoiceListener)
             VtxosChanged?.Invoke(this, vtxo);
+            ActiveScriptsChanged?.Invoke(this, EventArgs.Empty);
         }
 
 

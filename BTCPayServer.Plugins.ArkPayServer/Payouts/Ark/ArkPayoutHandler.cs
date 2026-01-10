@@ -1,5 +1,4 @@
 using AsyncKeyedLock;
-using BTCPayServer.Abstractions.Constants;
 using BTCPayServer.Abstractions.Models;
 using BTCPayServer.Client;
 using BTCPayServer.Client.Models;
@@ -8,10 +7,7 @@ using BTCPayServer.Data;
 using BTCPayServer.HostedServices;
 using BTCPayServer.Payments.Bitcoin;
 using BTCPayServer.Payouts;
-using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
-using BTCPayServer.Plugins.ArkPayServer.Exceptions;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
-using BTCPayServer.Plugins.ArkPayServer.Services;
 using BTCPayServer.Services;
 using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Notifications;
@@ -19,9 +15,9 @@ using BTCPayServer.Services.Notifications.Blobs;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using BTCPayServer.Plugins.ArkPayServer.Wallet;
-using NArk;
 using NArk.Abstractions;
+using NArk.Abstractions.Contracts;
+using NArk.Abstractions.Scripts;
 using NArk.Abstractions.VTXOs;
 using NArk.Hosting;
 using NArk.Transport;
@@ -35,7 +31,7 @@ using StoreData = BTCPayServer.Data.StoreData;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
 
-public class ArkPayoutHandler : IPayoutHandler, IHasNetwork
+public class ArkPayoutHandler : IPayoutHandler, IHasNetwork, IActiveScriptsProvider
 {
     private readonly ILogger<ArkPayoutHandler> _logger;
     private readonly IClientTransport _clientTransport;
@@ -74,7 +70,7 @@ public class ArkPayoutHandler : IPayoutHandler, IHasNetwork
         // Subscribe directly to NNark's VTXO storage events
         _vtxoStorage.VtxosChanged += OnVtxoChanged;
     }
-    public AsyncKeyedLock.AsyncKeyedLocker<string> PayoutLocker = new AsyncKeyedLocker<string>();
+    public readonly AsyncKeyedLocker<string> PayoutLocker = new();
     
     public string Currency => "BTC";
     public PayoutMethodId PayoutMethodId => ArkadePlugin.ArkadePayoutMethodId;
@@ -177,12 +173,15 @@ public class ArkPayoutHandler : IPayoutHandler, IHasNetwork
 
     public void StartBackgroundCheck(Action<Type[]> subscribe)
     {
-        // We subscribe directly to IVtxoStorage.VtxosChanged in constructor
+        subscribe([typeof(PayoutEvent)]);
     }
 
     public Task BackgroundCheck(object o)
     {
-        // We handle VTXO changes via OnVtxoChanged event handler
+        if (o is PayoutEvent payoutEvent && payoutEvent.Payout.PayoutMethodId == PayoutMethodId.ToString())
+        {
+            ActiveScriptsChanged?.Invoke(this, EventArgs.Empty);
+        }
         return Task.CompletedTask;
     }
 
@@ -195,7 +194,7 @@ public class ArkPayoutHandler : IPayoutHandler, IHasNetwork
                 return;
 
             var terms = await _clientTransport.GetServerInfoAsync();
-            var serverKey = OutputDescriptorHelpers.Extract(terms.SignerKey).XOnlyPubKey;
+            var serverKey = terms.SignerKey.Extract().XOnlyPubKey;
             var address = ArkAddress.FromScriptPubKey(Script.FromHex(vtxo.Script), serverKey)
                 .ToString(terms.Network.ChainName == ChainName.Mainnet);
 
@@ -390,5 +389,22 @@ public class ArkPayoutHandler : IPayoutHandler, IHasNetwork
     {
         var serializer = JsonSerializer.Create(_jsonSerializerSettings.GetSerializer(PayoutMethodId));
         return JObject.FromObject(arkPayoutProof, serializer);
+    }
+
+    public event EventHandler? ActiveScriptsChanged;
+
+    public async Task<HashSet<string>> GetActiveScripts(CancellationToken cancellationToken = default)
+    {
+        //load all scripts of payouts with arkade payment method and are in AwaitingPayment or Processing state
+        await using var ctx = _dbContextFactory.CreateContext();
+        ctx.ChangeTracker.QueryTrackingBehavior = QueryTrackingBehavior.NoTracking;
+        var payouts = await ctx.Payouts
+            .Where(data => PayoutMethodId.ToString() == data.PayoutMethodId
+                           && (data.State == PayoutState.AwaitingPayment || data.State == PayoutState.InProgress) 
+                           && data.DedupId != null)
+            .Select(data => data.DedupId)
+            .Distinct().ToListAsync(cancellationToken);
+
+        return payouts.ToHashSet()!;
     }
 }

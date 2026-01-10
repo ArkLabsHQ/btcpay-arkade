@@ -14,6 +14,7 @@ public class EfCoreContractStorage : IContractStorage
     private readonly IDbContextFactory<ArkPluginDbContext> _dbContextFactory;
 
     public event EventHandler<ArkContractEntity>? ContractsChanged;
+    public event EventHandler? ActiveScriptsChanged;
 
     public EfCoreContractStorage(IDbContextFactory<ArkPluginDbContext> dbContextFactory)
     {
@@ -96,9 +97,12 @@ public class EfCoreContractStorage : IContractStorage
             db.WalletContracts.Add(entity);
         }
 
-        await db.SaveChangesAsync(cancellationToken);
+        if (await db.SaveChangesAsync(cancellationToken) > 0)
+        {
+            ContractsChanged?.Invoke(this, walletEntity);
+            ActiveScriptsChanged?.Invoke(this, EventArgs.Empty);
+        }
 
-        ContractsChanged?.Invoke(this, walletEntity);
     }
 
     private static ArkContractEntity MapToArkContractEntity(ArkWalletContract entity)
@@ -242,8 +246,21 @@ public class EfCoreContractStorage : IContractStorage
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
-        var result = await db.WalletContracts.Upsert(contract).RunAndReturnAsync();
-        return result.Count > 0;
+        var existing = await db.WalletContracts.FirstOrDefaultAsync(
+            c => c.Script == contract.Script && c.WalletId == contract.WalletId,
+            cancellationToken);
+
+        if (existing != null)
+        {
+            existing.Active = contract.Active;
+            existing.ContractData = contract.ContractData;
+        }
+        else
+        {
+            await db.WalletContracts.AddAsync(contract, cancellationToken);
+        }
+
+        return await db.SaveChangesAsync(cancellationToken) > 0;
     }
 
     /// <summary>
@@ -322,4 +339,5 @@ public class EfCoreContractStorage : IContractStorage
     }
 
     #endregion
+
 }

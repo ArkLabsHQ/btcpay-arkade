@@ -278,21 +278,28 @@ public class EfCoreWalletStorage
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
-        var commandBuilder = db.Wallets.Upsert(wallet);
+        var existing = await db.Wallets.FindAsync([wallet.Id], cancellationToken);
+        bool inserted;
 
-        if (!updateIfExists)
+        if (existing == null)
         {
-            commandBuilder = commandBuilder.NoUpdate();
+            db.Wallets.Add(wallet);
+            inserted = true;
+        }
+        else if (updateIfExists)
+        {
+            db.Entry(existing).CurrentValues.SetValues(wallet);
+            inserted = false;
+        }
+        else
+        {
+            return false;
         }
 
-        var result = await commandBuilder.RunAsync(cancellationToken) > 0;
+        await db.SaveChangesAsync(cancellationToken);
+        WalletSaved?.Invoke(this, wallet);
 
-        if (result)
-        {
-            WalletSaved?.Invoke(this, wallet);
-        }
-
-        return result;
+        return inserted;
     }
 
     /// <summary>
