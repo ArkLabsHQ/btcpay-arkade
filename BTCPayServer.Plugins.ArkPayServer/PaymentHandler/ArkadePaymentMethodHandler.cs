@@ -3,6 +3,7 @@ using BTCPayServer.Payments;
 using BTCPayServer.Plugins.ArkPayServer.Services;
 using BTCPayServer.Services;
 using NArk;
+using NArk.Abstractions.Wallets;
 using NArk.Services;
 using NArk.Transport;
 using NBitcoin;
@@ -44,7 +45,7 @@ public class ArkadePaymentMethodHandler(
             throw new PaymentMethodUnavailableException("Amount too small");
         }
 
-        var contract = await contractService.DerivePaymentContract(arkadePaymentMethodConfig.WalletId, CancellationToken.None);
+        var contract = await contractService.DeriveContract(arkadePaymentMethodConfig.WalletId, NextContractPurpose.Receive ,CancellationToken.None);
         var details = new ArkadePromptDetails(arkadePaymentMethodConfig.WalletId, contract);
         var address = contract.GetArkAddress();
 

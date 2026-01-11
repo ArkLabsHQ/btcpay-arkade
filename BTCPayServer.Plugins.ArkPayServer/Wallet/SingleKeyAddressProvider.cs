@@ -33,7 +33,7 @@ public class SingleKeyAddressProvider(
     public async Task<ArkContract> GetNextContract(string identifier, NextContractPurpose purpose, CancellationToken cancellationToken = default)
     {
         var info = await transport.GetServerInfoAsync(cancellationToken);
-        if (purpose == NextContractPurpose.Change && sweepingAddress is not null)
+        if (purpose == NextContractPurpose.SendToSelf && sweepingAddress is not null)
         {
             return new UnknownArkContract(sweepingAddress, info.SignerKey, info.Network.ChainName == ChainName.Mainnet);
         }

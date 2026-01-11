@@ -54,7 +54,7 @@ public class HierarchicalDeterministicAddressProvider(
     public async Task<ArkContract> GetNextContract(string identifier, NextContractPurpose purpose, CancellationToken cancellationToken = default)
     {
         var info = await transport.GetServerInfoAsync(cancellationToken);
-        if (purpose == NextContractPurpose.Change && sweepDestination is not null)
+        if (purpose == NextContractPurpose.SendToSelf && sweepDestination is not null)
         {
             return new UnknownArkContract(sweepDestination, info.SignerKey, info.Network.ChainName == ChainName.Mainnet);
         }
