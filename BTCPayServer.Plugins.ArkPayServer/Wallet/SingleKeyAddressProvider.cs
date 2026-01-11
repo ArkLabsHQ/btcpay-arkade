@@ -1,3 +1,4 @@
+using NArk.Abstractions;
 using NArk.Abstractions.Contracts;
 using NArk.Abstractions.Wallets;
 using NArk.Contracts;
@@ -11,7 +12,8 @@ namespace BTCPayServer.Plugins.ArkPayServer.Wallet;
 
 public class SingleKeyAddressProvider(
     IClientTransport transport,
-    OutputDescriptor outputDescriptor
+    OutputDescriptor outputDescriptor,
+    ArkAddress? sweepingAddress
 ) : IArkadeAddressProvider
 {
     public OutputDescriptor Descriptor { get; } = outputDescriptor;
@@ -28,9 +30,13 @@ public class SingleKeyAddressProvider(
         return Task.FromResult(Descriptor);
     }
 
-    public async Task<ArkContract> GetNextPaymentContract(string identifier, CancellationToken cancellationToken = default)
+    public async Task<ArkContract> GetNextContract(string identifier, NextContractPurpose purpose, CancellationToken cancellationToken = default)
     {
         var info = await transport.GetServerInfoAsync(cancellationToken);
+        if (purpose == NextContractPurpose.Change && sweepingAddress is not null)
+        {
+            return new UnknownArkContract(sweepingAddress, info.SignerKey, info.Network.ChainName == ChainName.Mainnet);
+        }
         var signingDescriptor = await GetNextSigningDescriptor(identifier, cancellationToken);
         //TODO: lets actually make use of the LastUsedIndex and derives bytes deterministically 
         var bytes = RandomUtils.GetBytes(32);

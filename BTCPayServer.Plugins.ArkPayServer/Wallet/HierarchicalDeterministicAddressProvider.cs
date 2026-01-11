@@ -1,5 +1,6 @@
 using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using BTCPayServer.Plugins.ArkPayServer.Storage;
+using NArk.Abstractions;
 using NArk.Abstractions.Contracts;
 using NArk.Abstractions.Safety;
 using NArk.Abstractions.Wallets;
@@ -16,7 +17,8 @@ public class HierarchicalDeterministicAddressProvider(
     ISafetyService safetyService,
     EfCoreWalletStorage walletStorage,
     ArkWallet wallet,
-    Network network)
+    Network network,
+    ArkAddress? sweepDestination)
     : IArkadeAddressProvider
 {
     public async Task<bool> IsOurs(OutputDescriptor descriptor, CancellationToken cancellationToken = default)
@@ -49,9 +51,14 @@ public class HierarchicalDeterministicAddressProvider(
         }
     }
 
-    public async Task<ArkContract> GetNextPaymentContract(string identifier, CancellationToken cancellationToken = default)
+    public async Task<ArkContract> GetNextContract(string identifier, NextContractPurpose purpose, CancellationToken cancellationToken = default)
     {
         var info = await transport.GetServerInfoAsync(cancellationToken);
+        if (purpose == NextContractPurpose.Change && sweepDestination is not null)
+        {
+            return new UnknownArkContract(sweepDestination, info.SignerKey, info.Network.ChainName == ChainName.Mainnet);
+        }
+        
         var signingDescriptor = await GetNextSigningDescriptor(identifier, cancellationToken);
         return new ArkPaymentContract(
             info.SignerKey,

@@ -40,13 +40,14 @@ public class EfCoreVtxoStorage : IVtxoStorage
         entity.Amount = (long)vtxo.Amount;
         entity.SpentByTransactionId = vtxo.SpentByTransactionId;
         entity.SettledByTransactionId = vtxo.SettledByTransactionId;
-        entity.Recoverable = vtxo.Recoverable;
+        // this is messy, and data in db is gonna be inconsistent (migration path), but the end result should be be safe. 
+        entity.Recoverable = vtxo.Swept;
         entity.SeenAt = vtxo.CreatedAt;
         entity.ExpiresAt = vtxo.ExpiresAt ?? DateTimeOffset.MaxValue;
 
         if (isNew)
         {
-            db.Vtxos.Add(entity);
+            await db.Vtxos.AddAsync(entity, cancellationToken);
         }
 
         if (await db.SaveChangesAsync(cancellationToken) > 0)
@@ -125,7 +126,7 @@ public class EfCoreVtxoStorage : IVtxoStorage
             Amount: (ulong)entity.Amount,
             SpentByTransactionId: entity.SpentByTransactionId,
             SettledByTransactionId: entity.SettledByTransactionId,
-            Recoverable: entity.Recoverable,
+            Swept: entity.Recoverable,
             CreatedAt: entity.SeenAt,
             ExpiresAt: entity.ExpiresAt == DateTimeOffset.MaxValue ? null : entity.ExpiresAt,
             ExpiresAtHeight: null // Plugin doesn't track height-based expiry

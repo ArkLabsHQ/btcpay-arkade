@@ -1,4 +1,5 @@
 using BTCPayServer.Plugins.ArkPayServer.Storage;
+using NArk.Abstractions;
 using NArk.Abstractions.Safety;
 using NArk.Abstractions.Wallets;
 using NArk.Transport;
@@ -41,10 +42,15 @@ public class PluginWalletAdapter(
         {
             var network = (await clientTransport.GetServerInfoAsync(cancellationToken)).Network;
             var wallet = await walletStorage.LoadWallet(identifier, cancellationToken);
+            ArkAddress? sweepDestination = null;
+            if(!string.IsNullOrEmpty(wallet.WalletDestination))
+            {
+                sweepDestination = ArkAddress.Parse(wallet.WalletDestination);
+            }
             return wallet.WalletType switch
             {
-                WalletType.HD => new HierarchicalDeterministicAddressProvider(clientTransport,safetyService, walletStorage, wallet, network),
-                WalletType.SingleKey => new SingleKeyAddressProvider(clientTransport,OutputDescriptor.Parse(wallet.AccountDescriptor, network)),
+                WalletType.HD => new HierarchicalDeterministicAddressProvider(clientTransport,safetyService, walletStorage, wallet, network, sweepDestination),
+                WalletType.SingleKey => new SingleKeyAddressProvider(clientTransport,OutputDescriptor.Parse(wallet.AccountDescriptor, network), sweepDestination),
                 _ => throw new ArgumentOutOfRangeException(nameof(wallet.WalletType))
             };
         }
