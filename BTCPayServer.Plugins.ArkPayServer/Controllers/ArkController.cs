@@ -1403,7 +1403,7 @@ public class ArkController(
 
         var allCoins = await arkadeSpender.GetAvailableCoins(walletId, cancellationToken);
 
-        var coinsByRecoverableStatus = allCoins.ToLookup(coin => coin.Recoverable);
+        var coinsByRecoverableStatus = allCoins.ToLookup(coin => coin.IsRecoverable());
         var spendableOutpoints = coinsByRecoverableStatus[false].Select(coin => coin.Outpoint).ToHashSet();
         var recoverableOutpoints = coinsByRecoverableStatus[true].Select(coin => coin.Outpoint).ToHashSet();
         
