@@ -830,8 +830,8 @@ public class ArkController(
                 return RedirectToAction(nameof(StoreOverview), new { storeId });
             }
 
-            // Get destination for refresh (back to same wallet) 
-            var destination = await contractService.DeriveContract(refreshWallet.Id,NextContractPurpose.SendToSelf, cancellationToken);
+            // Get destination for refresh (back to same wallet)
+            var destination = await contractService.DeriveContract(refreshWallet.Id, NextContractPurpose.SendToSelf, cancellationToken: cancellationToken);
             var totalAmount = coins.Sum(c => c.TxOut.Value);
 
 

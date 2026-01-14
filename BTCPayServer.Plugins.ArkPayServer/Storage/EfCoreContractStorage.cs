@@ -40,7 +40,7 @@ public class EfCoreContractStorage : IContractStorage
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
-        var query = db.WalletContracts.Where(c => c.Active);
+        var query = db.WalletContracts.Where(c => c.ActivityState != ContractActivityState.Inactive);
 
         if (walletIdentifiers != null && walletIdentifiers.Count > 0)
         {
@@ -78,7 +78,7 @@ public class EfCoreContractStorage : IContractStorage
 
         if (existing != null)
         {
-            existing.Active = walletEntity.Important;
+            existing.ActivityState = walletEntity.ActivityState;
             existing.Type = walletEntity.Type;
             existing.ContractData = walletEntity.AdditionalData;
         }
@@ -88,7 +88,7 @@ public class EfCoreContractStorage : IContractStorage
             {
                 Script = walletEntity.Script,
                 WalletId = walletEntity.WalletIdentifier,
-                Active = walletEntity.Important,
+                ActivityState = walletEntity.ActivityState,
                 Type = walletEntity.Type,
                 ContractData = walletEntity.AdditionalData,
                 CreatedAt = walletEntity.CreatedAt
@@ -108,7 +108,7 @@ public class EfCoreContractStorage : IContractStorage
     {
         return new ArkContractEntity(
             Script: entity.Script,
-            Important: entity.Active,
+            ActivityState: entity.ActivityState,
             Type: entity.Type,
             AdditionalData: entity.ContractData,
             WalletIdentifier: entity.WalletId,
@@ -128,7 +128,7 @@ public class EfCoreContractStorage : IContractStorage
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
         return await db.WalletContracts
-            .Where(c => c.WalletId == walletId && c.Active)
+            .Where(c => c.WalletId == walletId && c.ActivityState != ContractActivityState.Inactive)
             .OrderBy(c => c.CreatedAt)
             .FirstOrDefaultAsync(cancellationToken);
     }
@@ -208,30 +208,30 @@ public class EfCoreContractStorage : IContractStorage
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
         return await db.WalletContracts
-            .Where(c => c.WalletId == walletId && c.Active)
+            .Where(c => c.WalletId == walletId && c.ActivityState != ContractActivityState.Inactive)
             .Select(c => c.Script)
             .ToListAsync(cancellationToken);
     }
 
     /// <summary>
-    /// Toggles contract active status.
+    /// Sets contract activity state.
     /// </summary>
-    public async Task<bool> ToggleContractAsync(
+    public async Task<bool> SetContractActivityStateAsync(
         string walletId,
         string script,
-        bool active,
+        ContractActivityState activityState,
         CancellationToken cancellationToken = default)
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
         var contract = await db.WalletContracts.FirstOrDefaultAsync(
-            c => c.WalletId == walletId && c.Script == script && c.Active != active,
+            c => c.WalletId == walletId && c.Script == script && c.ActivityState != activityState,
             cancellationToken);
 
         if (contract == null)
             return false;
 
-        contract.Active = active;
+        contract.ActivityState = activityState;
         await db.SaveChangesAsync(cancellationToken);
         return true;
     }
@@ -251,7 +251,7 @@ public class EfCoreContractStorage : IContractStorage
 
         if (existing != null)
         {
-            existing.Active = contract.Active;
+            existing.ActivityState = contract.ActivityState;
             existing.ContractData = contract.ContractData;
         }
         else
@@ -265,12 +265,19 @@ public class EfCoreContractStorage : IContractStorage
     /// <summary>
     /// Gets contracts with pagination and optional filtering.
     /// </summary>
+    /// <param name="walletId">The wallet to get contracts for</param>
+    /// <param name="skip">Number of contracts to skip</param>
+    /// <param name="count">Number of contracts to return</param>
+    /// <param name="searchText">Optional search text to filter by script</param>
+    /// <param name="filterIsActive">If true, returns only active contracts (not Inactive); if false, returns only Inactive contracts; if null, returns all</param>
+    /// <param name="includeSwaps">Whether to include swaps in the result</param>
+    /// <param name="cancellationToken">Cancellation token</param>
     public async Task<IReadOnlyList<ArkWalletContract>> GetContractsWithPaginationAsync(
         string walletId,
         int skip = 0,
         int count = 10,
         string? searchText = null,
-        bool? active = null,
+        bool? filterIsActive = null,
         bool includeSwaps = false,
         CancellationToken cancellationToken = default)
     {
@@ -287,9 +294,12 @@ public class EfCoreContractStorage : IContractStorage
             query = query.Where(c => c.Script.Contains(searchText));
         }
 
-        if (active.HasValue)
+        if (filterIsActive.HasValue)
         {
-            query = query.Where(c => c.Active == active.Value);
+            // Active = not Inactive (includes Active and AwaitingFundsBeforeDeactivate)
+            query = filterIsActive.Value
+                ? query.Where(c => c.ActivityState != ContractActivityState.Inactive)
+                : query.Where(c => c.ActivityState == ContractActivityState.Inactive);
         }
 
         return await query
@@ -303,10 +313,15 @@ public class EfCoreContractStorage : IContractStorage
     /// <summary>
     /// Gets contracts for multiple wallets with optional filtering.
     /// </summary>
+    /// <param name="walletIds">Optional list of wallet IDs to filter by</param>
+    /// <param name="searchText">Optional search text to filter by script</param>
+    /// <param name="filterIsActive">If true, returns only active contracts; if false, returns only Inactive contracts; if null, returns all</param>
+    /// <param name="includeSwaps">Whether to include swaps in the result</param>
+    /// <param name="cancellationToken">Cancellation token</param>
     public async Task<IReadOnlyList<ArkWalletContract>> GetContractsForWalletsAsync(
         string[]? walletIds = null,
         string? searchText = null,
-        bool? active = null,
+        bool? filterIsActive = null,
         bool includeSwaps = false,
         CancellationToken cancellationToken = default)
     {
@@ -326,15 +341,50 @@ public class EfCoreContractStorage : IContractStorage
             query = query.Where(c => c.Script.Contains(searchText));
         }
 
-        if (active.HasValue)
+        if (filterIsActive.HasValue)
         {
-            query = query.Where(c => c.Active == active.Value);
+            query = filterIsActive.Value
+                ? query.Where(c => c.ActivityState != ContractActivityState.Inactive)
+                : query.Where(c => c.ActivityState == ContractActivityState.Inactive);
         }
 
         return await query
             .OrderByDescending(c => c.CreatedAt)
             .AsNoTracking()
             .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Deactivates all contracts with the given script that are in AwaitingFundsBeforeDeactivate state.
+    /// Called when a VTXO is received to auto-deactivate one-time-use contracts (like refund addresses).
+    /// </summary>
+    public async Task<int> DeactivateAwaitingContractsByScript(
+        string script,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        var contracts = await db.WalletContracts
+            .Where(c => c.Script == script && c.ActivityState == ContractActivityState.AwaitingFundsBeforeDeactivate)
+            .ToListAsync(cancellationToken);
+
+        if (contracts.Count == 0)
+            return 0;
+
+        foreach (var contract in contracts)
+        {
+            contract.ActivityState = ContractActivityState.Inactive;
+        }
+
+        var count = await db.SaveChangesAsync(cancellationToken);
+
+        // Raise events for each deactivated contract
+        foreach (var contract in contracts)
+        {
+            ActiveScriptsChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        return count;
     }
 
     #endregion

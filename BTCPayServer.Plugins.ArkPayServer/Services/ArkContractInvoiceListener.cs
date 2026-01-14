@@ -23,6 +23,7 @@ using NBXplorer;
 using Newtonsoft.Json.Linq;
 using BTCPayServer.Plugins.ArkPayServer.Storage;
 using NArk.Abstractions;
+using NArk.Abstractions.Contracts;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
 
@@ -62,8 +63,10 @@ public class ArkContractInvoiceListener(
             if (swap.SwapType != NArk.Swaps.Models.ArkSwapType.ReverseSubmarine)
                 return;
 
-            var active = swap.Status == NArk.Swaps.Models.ArkSwapStatus.Pending;
-            await contractStorage.ToggleContractAsync(swap.WalletId, swap.ContractScript, active);
+            var activityState = swap.Status == NArk.Swaps.Models.ArkSwapStatus.Pending
+                ? ContractActivityState.Active
+                : ContractActivityState.Inactive;
+            await contractStorage.SetContractActivityStateAsync(swap.WalletId, swap.ContractScript, activityState);
         }
         catch (Exception ex)
         {
@@ -81,6 +84,9 @@ public class ArkContractInvoiceListener(
     {
         try
         {
+            // Note: Auto-deactivation of AwaitingFundsBeforeDeactivate contracts is now handled
+            // by VtxoSynchronizationService in NNark library
+
             var terms = await clientTransport.GetServerInfoAsync();
             var serverKey = terms.SignerKey.Extract().XOnlyPubKey;
             var script = Script.FromHex(vtxo.Script);
@@ -166,7 +172,9 @@ public class ArkContractInvoiceListener(
 
     public async Task ToggleArkadeContract(InvoiceEntity invoice)
     {
-        var active = invoice.Status == InvoiceStatus.New;
+        var activityState = invoice.Status == InvoiceStatus.New
+            ? ContractActivityState.Active
+            : ContractActivityState.Inactive;
         var listenedContract = GetListenedArkadeInvoice(invoice);
         if (listenedContract is null)
         {
@@ -182,7 +190,7 @@ public class ArkContractInvoiceListener(
         }
 
         var script = contract.GetArkAddress().ScriptPubKey.ToHex();
-        await contractStorage.ToggleContractAsync(listenedContract.Details.WalletId, script, active);
+        await contractStorage.SetContractActivityStateAsync(listenedContract.Details.WalletId, script, activityState);
     }
 
     private ArkadeListenedContract? GetListenedArkadeInvoice(InvoiceEntity invoice)

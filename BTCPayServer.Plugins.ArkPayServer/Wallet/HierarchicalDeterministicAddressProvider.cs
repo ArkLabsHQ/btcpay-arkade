@@ -60,19 +60,22 @@ public class HierarchicalDeterministicAddressProvider(
         return OutputDescriptor.Parse(descriptor.Replace("/*", $"/{index}"), network);
     }
 
-    public async Task<ArkContract> GetNextContract(string identifier, NextContractPurpose purpose, CancellationToken cancellationToken = default)
+    public async Task<(ArkContract Contract, ContractActivityState? SuggestedActivityState)> GetNextContract(string identifier, NextContractPurpose purpose, CancellationToken cancellationToken = default)
     {
         var info = await transport.GetServerInfoAsync(cancellationToken);
         if (purpose == NextContractPurpose.SendToSelf && sweepDestination is not null)
         {
-            return new UnknownArkContract(sweepDestination, info.SignerKey, info.Network.ChainName == ChainName.Mainnet);
+            // Static sweeping address is reusable - always keep it Active
+            var contract = new UnknownArkContract(sweepDestination, info.SignerKey, info.Network.ChainName == ChainName.Mainnet);
+            return (contract, ContractActivityState.Active);
         }
-        
+
         var signingDescriptor = await GetNextSigningDescriptor(identifier, cancellationToken);
-        return new ArkPaymentContract(
+        var paymentContract = new ArkPaymentContract(
             info.SignerKey,
             info.UnilateralExit,
             signingDescriptor
         );
+        return (paymentContract, null);
     }
 }

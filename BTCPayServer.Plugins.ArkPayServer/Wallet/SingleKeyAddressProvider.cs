@@ -30,22 +30,25 @@ public class SingleKeyAddressProvider(
         return Task.FromResult(Descriptor);
     }
 
-    public async Task<ArkContract> GetNextContract(string identifier, NextContractPurpose purpose, CancellationToken cancellationToken = default)
+    public async Task<(ArkContract Contract, ContractActivityState? SuggestedActivityState)> GetNextContract(string identifier, NextContractPurpose purpose, CancellationToken cancellationToken = default)
     {
         var info = await transport.GetServerInfoAsync(cancellationToken);
         if (purpose == NextContractPurpose.SendToSelf && sweepingAddress is not null)
         {
-            return new UnknownArkContract(sweepingAddress, info.SignerKey, info.Network.ChainName == ChainName.Mainnet);
+            // Static sweeping address is reusable - always keep it Active
+            var contract = new UnknownArkContract(sweepingAddress, info.SignerKey, info.Network.ChainName == ChainName.Mainnet);
+            return (contract, ContractActivityState.Active);
         }
         var signingDescriptor = await GetNextSigningDescriptor(identifier, cancellationToken);
-        //TODO: lets actually make use of the LastUsedIndex and derives bytes deterministically 
+        //TODO: lets actually make use of the LastUsedIndex and derives bytes deterministically
         var bytes = RandomUtils.GetBytes(32);
-        return new HashLockedArkPaymentContract(
+        var hashLockedContract = new HashLockedArkPaymentContract(
             info.SignerKey,
             info.UnilateralExit,
             signingDescriptor,
             bytes,
             HashLockTypeOption.Hash160 //FIXME: i forgot which type we used before in master
         );
+        return (hashLockedContract, null);
     }
 }

@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using Microsoft.EntityFrameworkCore;
+using NArk.Abstractions.Contracts;
 using Newtonsoft.Json;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Data.Entities;
@@ -10,7 +11,7 @@ public class ArkWalletContract
     [Key]
     public string Script { get; set; }
 
-    public bool Active { get; set; }
+    public ContractActivityState ActivityState { get; set; } = ContractActivityState.Inactive;
     public string Type { get; set; }
 
     [Column(TypeName = "jsonb")]

@@ -209,8 +209,8 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
                     b.Property<string>("WalletId")
                         .HasColumnType("text");
 
-                    b.Property<bool>("Active")
-                        .HasColumnType("boolean");
+                    b.Property<int>("ActivityState")
+                        .HasColumnType("integer");
 
                     b.Property<string>("ContractData")
                         .IsRequired()

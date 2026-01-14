@@ -6,6 +6,7 @@
 @using NArk.Transport
 @using NBitcoin
 @using NArk.Contracts
+@using NArk.Abstractions.Contracts
 @using static BTCPayServer.Plugins.ArkPayServer.Helpers.ArkViewHelpers
 @model BTCPayServer.Plugins.ArkPayServer.Models.StoreContractsViewModel
 @inject IScopeProvider ScopeProvider
@@ -169,17 +170,21 @@
                             <vc:truncate-center text="@arkContract.ToString()" classes="truncate-center-id"/>
                         </td>
                         <td class="align-middle">
-                            @if (contract.Active)
+                            @switch (contract.ActivityState)
                             {
-                                <span class="badge text-bg-success">Active</span>
-                                @if (Model.Debug && Model.CachedContractScripts.Contains(contract.Script))
-                                {
-                                    <span class="badge text-bg-info ms-1" title="In tracked contracts cache">📌</span>
-                                }
-                            }
-                            else
-                            {
-                                <span class="badge text-bg-secondary">Inactive</span>
+                                case ContractActivityState.Active:
+                                    <span class="badge text-bg-success">Active</span>
+                                    @if (Model.Debug && Model.CachedContractScripts.Contains(contract.Script))
+                                    {
+                                        <span class="badge text-bg-info ms-1" title="In tracked contracts cache">📌</span>
+                                    }
+                                    break;
+                                case ContractActivityState.AwaitingFundsBeforeDeactivate:
+                                    <span class="badge text-bg-warning">Awaiting Funds</span>
+                                    break;
+                                default:
+                                    <span class="badge text-bg-secondary">Inactive</span>
+                                    break;
                             }
                         </td>
                         <td class="align-middle">
