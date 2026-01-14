@@ -52,8 +52,7 @@ public class EfCoreContractStorage : IContractStorage
         return entities.Select(MapToArkContractEntity).ToHashSet();
     }
 
-    public async Task<IReadOnlySet<ArkContractEntity>> LoadContractsByScripts(
-        string[] scripts,
+    public async Task<IReadOnlySet<ArkContractEntity>> LoadContractsByScripts(string[] scripts, IReadOnlyCollection<string>? walletIdentifiers = null,
         CancellationToken cancellationToken = default)
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
@@ -61,6 +60,7 @@ public class EfCoreContractStorage : IContractStorage
         var scriptSet = scripts.ToHashSet();
         var entities = await db.WalletContracts
             .Where(c => scriptSet.Contains(c.Script))
+            .Where(contract => walletIdentifiers == null || walletIdentifiers.Contains(contract.Script))
             .ToListAsync(cancellationToken);
 
         return entities.Select(MapToArkContractEntity).ToHashSet();
