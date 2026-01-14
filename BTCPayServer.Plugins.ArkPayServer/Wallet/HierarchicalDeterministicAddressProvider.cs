@@ -23,8 +23,14 @@ public class HierarchicalDeterministicAddressProvider(
 {
     public async Task<bool> IsOurs(OutputDescriptor descriptor, CancellationToken cancellationToken = default)
     {
-        var walletDescriptor = OutputDescriptor.Parse(wallet.AccountDescriptor ?? throw new Exception("Malformed HD Wallet"), network);
-        return walletDescriptor.Extract().WalletId == descriptor.Extract().WalletId;
+        OutputDescriptor.Parse(wallet.AccountDescriptor ?? throw new Exception("Malformed HD Wallet"), network);
+        var index = descriptor.Extract().DerivationPath?.Indexes.Last().ToString();
+        if (index is null)
+        {
+            return false;
+        }
+        var expected =    GetDescriptorFromIndex(network, wallet.AccountDescriptor, Convert.ToInt32(index));
+        return expected.Equals(descriptor);
     }
 
     public async Task<OutputDescriptor> GetNextSigningDescriptor(string identifier, CancellationToken cancellationToken = default)
@@ -38,17 +44,20 @@ public class HierarchicalDeterministicAddressProvider(
                 wallet.LastUsedIndex++
             );
         
-        if (identifier != descriptor.Extract().WalletId) 
+        if (identifier != wallet.AccountDescriptor) 
             throw new ArgumentException(nameof(identifier));
 
         await walletStorage.SaveWallet(wallet.Id, wallet, wallet.AccountDescriptor, cancellationToken);
         
         return descriptor;
 
-        static OutputDescriptor GetDescriptorFromIndex(Network network, string descriptor, int index)
-        {
-            return OutputDescriptor.Parse(descriptor.Replace("/*", $"/{index}"), network);
-        }
+      
+    }
+    
+    private static OutputDescriptor GetDescriptorFromIndex(Network network, string descriptor, int index)
+    {
+        //TODO: the checksum may need to be recomputed?
+        return OutputDescriptor.Parse(descriptor.Replace("/*", $"/{index}"), network);
     }
 
     public async Task<ArkContract> GetNextContract(string identifier, NextContractPurpose purpose, CancellationToken cancellationToken = default)

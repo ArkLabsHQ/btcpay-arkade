@@ -44,13 +44,14 @@
                 <form asp-action="InitialSetup" method="post" asp-route-storeId="@storeId" id="importExistingForm">
                     <div class="form-group mb-3">
                         <label asp-for="Wallet" class="form-label">Wallet Configuration</label>
-                        <input asp-for="Wallet" class="form-control" placeholder="nsec... / npub... / wallet-id" id="existingWalletInput" required data-testid="nsec-input"/>
+                        <input asp-for="Wallet" class="form-control" placeholder="seed phrase / nsec... / npub... / wallet-id" id="existingWalletInput" required data-testid="nsec-input"/>
                         <span asp-validation-for="Wallet" class="text-danger"></span>
                         <div class="form-text mt-2">
                             <strong>Options:</strong>
                             <ul class="mb-0">
-                                <li><strong>nsec private key:</strong> Use as a hot wallet</li>
-                                <li><strong>Ark address (npub):</strong> Create a transitory wallet that auto-sweeps</li>
+                                <li><strong>BIP-39 seed phrase:</strong> Import an HD wallet from 12 or 24-word mnemonic (recommended)</li>
+                                <li><strong>nsec private key:</strong> Use a legacy Nostr-style private key as a hot wallet</li>
+                                <li><strong>Ark address (npub):</strong> Create a transitory wallet that auto-sweeps to this address</li>
                                 <li><strong>Wallet ID:</strong> Use an existing wallet from this BTCPay instance</li>
                             </ul>
                         </div>

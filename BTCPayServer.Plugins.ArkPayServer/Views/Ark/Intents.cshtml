@@ -3,10 +3,12 @@
 @using BTCPayServer.Plugins.ArkPayServer
 @using BTCPayServer.Plugins.ArkPayServer.Data
 @using BTCPayServer.Plugins.ArkPayServer.Data.Entities
+@using BTCPayServer.Plugins.ArkPayServer.Helpers
 @using NArk.Transport
 @using NBitcoin
 @using Microsoft.AspNetCore.Mvc.ViewFeatures
 @using NArk.Abstractions.Intents
+@using static BTCPayServer.Plugins.ArkPayServer.Helpers.ArkViewHelpers
 @model BTCPayServer.Plugins.ArkPayServer.Models.StoreIntentsViewModel
 @inject IScopeProvider ScopeProvider
 @inject IClientTransport Terms
@@ -15,38 +17,12 @@
 @{
     ViewData.SetActivePage(category: "Ark", activePage: "Intents", title: "Ark - Intents");
     var storeId = ScopeProvider.GetCurrentStoreId();
-    
-    var stateFilterCount = Model.Search?.ContainsFilter("state") == true ? Model.Search.GetFilterArray("state").Length : 0;
-}
-
-@functions
-{
-    private bool HasArrayFilter(string type, string key = null) =>
-        Model.Search?.ContainsFilter(type) == true && (key is null || Model.Search.GetFilterArray(type).Contains(key));
+    var stateFilterCount = GetFilterCount(Model.Search, "state");
 }
 
 @section PageHeadContent
 {
-    <style>
-        .intent-details-row > td {
-            padding: 1.5rem 1rem 0 2.65rem;
-        }
-        .dropdown > .btn {
-            min-width: 7rem;
-            padding-left: 1rem;
-            text-align: left;
-        }
-        #SearchText {
-            flex-shrink: 0;
-            min-width: 200px;
-            max-width: 300px;
-        }
-        @@media (max-width: 568px) {
-            #SearchText {
-                width: 100%;
-            }
-        }
-    </style>
+    <link rel="stylesheet" href="~/plugins/ArkPayServer/css/ark-plugin.css" asp-append-version="true" />
 }
 
 <div class="sticky-header">
@@ -89,12 +65,12 @@
             }
         </button>
         <div class="dropdown-menu" aria-labelledby="StateOptionsToggle">
-            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "waiting-submit") ?? "")" class="dropdown-item @(HasArrayFilter("state", "waiting-submit") ? "custom-active" : "")" text-translate="true">Waiting to Submit</a>
-            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "waiting-batch") ?? "")" class="dropdown-item @(HasArrayFilter("state", "waiting-batch") ? "custom-active" : "")" text-translate="true">Waiting for Batch</a>
-            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "batch-in-progress") ?? "")" class="dropdown-item @(HasArrayFilter("state", "batch-in-progress") ? "custom-active" : "")" text-translate="true">Batch In Progress</a>
-            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "batch-succeeded") ?? "")" class="dropdown-item @(HasArrayFilter("state", "batch-succeeded") ? "custom-active" : "")" text-translate="true">Batch Succeeded</a>
-            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "batch-failed") ?? "")" class="dropdown-item @(HasArrayFilter("state", "batch-failed") ? "custom-active" : "")" text-translate="true">Batch Failed</a>
-            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "cancelled") ?? "")" class="dropdown-item @(HasArrayFilter("state", "cancelled") ? "custom-active" : "")" text-translate="true">Cancelled</a>
+            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "waiting-submit") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "state", "waiting-submit") ? "custom-active" : "")" text-translate="true">Waiting to Submit</a>
+            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "waiting-batch") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "state", "waiting-batch") ? "custom-active" : "")" text-translate="true">Waiting for Batch</a>
+            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "batch-in-progress") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "state", "batch-in-progress") ? "custom-active" : "")" text-translate="true">Batch In Progress</a>
+            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "batch-succeeded") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "state", "batch-succeeded") ? "custom-active" : "")" text-translate="true">Batch Succeeded</a>
+            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "batch-failed") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "state", "batch-failed") ? "custom-active" : "")" text-translate="true">Batch Failed</a>
+            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "cancelled") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "state", "cancelled") ? "custom-active" : "")" text-translate="true">Cancelled</a>
         </div>
     </div>
     

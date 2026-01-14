@@ -1,0 +1,51 @@
+/* Ark Plugin Shared Styles */
+
+/* Filter bar dropdown styling */
+.ark-filter-bar .dropdown > .btn {
+    min-width: 7rem;
+    padding-left: 1rem;
+    text-align: left;
+}
+
+/* Search text input */
+.ark-filter-bar #SearchText {
+    flex-shrink: 0;
+    min-width: 200px;
+    max-width: 300px;
+}
+
+@media (max-width: 568px) {
+    .ark-filter-bar #SearchText {
+        width: 100%;
+    }
+}
+
+/* HTLC countdown styling */
+.htlc-countdown {
+    font-size: 0.875rem;
+    color: #6c757d;
+}
+
+.htlc-countdown.expired {
+    color: #dc3545;
+    font-weight: 500;
+}
+
+.htlc-countdown.active {
+    color: #0d6efd;
+}
+
+/* VTXO details row */
+.vtxo-details-row > td {
+    padding: 1.5rem 1rem 0 2.65rem;
+}
+
+/* Contract details */
+.contract-details-row > td {
+    padding: 1.5rem 1rem 0 2.65rem;
+}
+
+/* Intent details */
+.intent-details-row > td {
+    padding: 1.5rem 1rem 0 2.65rem;
+}

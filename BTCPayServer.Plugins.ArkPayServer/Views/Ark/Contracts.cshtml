@@ -6,6 +6,7 @@
 @using NArk.Transport
 @using NBitcoin
 @using NArk.Contracts
+@using static BTCPayServer.Plugins.ArkPayServer.Helpers.ArkViewHelpers
 @model BTCPayServer.Plugins.ArkPayServer.Models.StoreContractsViewModel
 @inject IScopeProvider ScopeProvider
 @inject IClientTransport Terms
@@ -25,49 +26,13 @@
     catch (Exception ex)
     {
     }
-    
-    var statusFilterCount = Model.Search?.ContainsFilter("status") == true ? Model.Search.GetFilterArray("status").Length : 0;
-}
 
-@functions
-{
-    private bool HasArrayFilter(string type, string key = null) =>
-        Model.Search?.ContainsFilter(type) == true && (key is null || Model.Search.GetFilterArray(type).Contains(key));
+    var statusFilterCount = GetFilterCount(Model.Search, "status");
 }
 
 @section PageHeadContent
 {
-    <style>
-        .contract-details-row > td {
-            padding: 1.5rem 1rem 0 2.65rem;
-        }
-        .dropdown > .btn {
-            min-width: 7rem;
-            padding-left: 1rem;
-            text-align: left;
-        }
-        #SearchText {
-            flex-shrink: 0;
-            min-width: 200px;
-            max-width: 300px;
-        }
-        @@media (max-width: 568px) {
-            #SearchText {
-                width: 100%;
-            }
-        }
-        .htlc-countdown {
-            font-size: 0.875rem;
-            color: #6c757d;
-        }
-        .htlc-countdown.expired {
-            color: #dc3545;
-            font-weight: 500;
-        }
-        .htlc-countdown.active {
-            color: #0d6efd;
-        }
-    </style>
+    <link rel="stylesheet" href="~/plugins/ArkPayServer/css/ark-plugin.css" asp-append-version="true" />
 }
 
 <div class="sticky-header">
@@ -130,8 +95,8 @@
             }
         </button>
         <div class="dropdown-menu" aria-labelledby="StatusOptionsToggle">
-            <a asp-action="Contracts" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "active") ?? "")" class="dropdown-item @(HasArrayFilter("status", "active") ? "custom-active" : "")" text-translate="true">Active</a>
-            <a asp-action="Contracts" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "inactive") ?? "")" class="dropdown-item @(HasArrayFilter("status", "inactive") ? "custom-active" : "")" text-translate="true">Inactive</a>
+            <a asp-action="Contracts" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "active") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "status", "active") ? "custom-active" : "")" text-translate="true">Active</a>
+            <a asp-action="Contracts" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "inactive") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "status", "inactive") ? "custom-active" : "")" text-translate="true">Inactive</a>
         </div>
     </div>
     

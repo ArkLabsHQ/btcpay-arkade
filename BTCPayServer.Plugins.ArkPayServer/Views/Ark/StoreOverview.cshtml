@@ -3,6 +3,7 @@
 @using BTCPayServer.Abstractions.Extensions
 @using BTCPayServer.Plugins.ArkPayServer
 @using BTCPayServer.Plugins.ArkPayServer.Services
+@using BTCPayServer.Plugins.ArkPayServer.Wallet
 @using NArk.Transport
 @using NArk.Contracts
 @using NArk.Services
@@ -37,11 +38,14 @@ else
             </div>
             <div class="card-body">
                 <div class="row g-2">
-                    <div class="col-6">
-                        <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#transferModal" data-testid="send-btn">
-                            Transfer Funds
-                        </button>
-                    </div>
+                    @if (Model.CanManagePrivateKeys)
+                    {
+                        <div class="col-6">
+                            <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#transferModal" data-testid="send-btn">
+                                Transfer Funds
+                            </button>
+                        </div>
+                    }
                     <div class="col-6">
                         <form asp-action="SyncWallet" method="post" asp-route-storeId="@storeId" class="h-100">
                             <button type="submit" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-testid="sync-wallet-btn">
@@ -63,20 +67,20 @@ else
                         </div>
                     }
                      <div class="col-6">
-                         <a asp-action="Intents" asp-route-storeId="@storeId" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center"> 
-                             View Intents 
-                         </a> 
+                         <a asp-action="Intents" asp-route-storeId="@storeId" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center">
+                             View Intents
+                         </a>
                      </div>
-                     <div class="col-6"> 
-                         <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#forceRefreshModal"> 
-                             Force Batch 
-                         </button> 
-                     </div> 
-                    @if (Model.SignerAvailable && !string.IsNullOrEmpty(Model.Wallet))
+                     <div class="col-6">
+                         <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#forceRefreshModal">
+                             Force Batch
+                         </button>
+                     </div>
+                    @if (Model.SignerAvailable && !string.IsNullOrEmpty(Model.Wallet) && Model.CanManagePrivateKeys)
                     {
                         <div class="col-6">
                             <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#showPrivateKeyModal" data-testid="show-private-key-btn">
-                                Show Private Key
+                                @(Model.WalletType == WalletType.HD ? "Show Seed Phrase" : "Show Private Key")
                             </button>
                         </div>
                     }
@@ -97,7 +101,7 @@ else
                 <h5 class="mb-0">Wallet Status</h5>
             </div>
             <div class="card-body">
-                @if (!string.IsNullOrEmpty(Model.DefaultAddress))
+                @if (!string.IsNullOrEmpty(Model.DefaultAddress) && Model.WalletType == WalletType.SingleKey)
                 {
                     <div class="mb-3">
                         <label class="text-muted small">Default Ark Address</label>
@@ -109,6 +113,12 @@ else
                         </div>
                     </div>
                 }
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <span class="text-muted">Wallet Type</span>
+                    <span class="badge @(Model.WalletType == WalletType.HD ? "text-bg-primary" : "text-bg-secondary")">
+                        @(Model.WalletType == WalletType.HD ? "HD (BIP-39)" : "Legacy (nsec)")
+                    </span>
+                </div>
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <span class="text-muted">Wallet ID</span>
                     @if (!string.IsNullOrEmpty(Model.WalletId))
@@ -284,24 +294,44 @@ else
     </div>
 </div>
 
-<!-- Show Private Key Modal -->
-@if (Model.SignerAvailable && !string.IsNullOrEmpty(Model.Wallet))
+<!-- Show Private Key / Seed Phrase Modal -->
+@if (Model.SignerAvailable && !string.IsNullOrEmpty(Model.Wallet) && Model.CanManagePrivateKeys)
 {
     <div class="modal fade" id="showPrivateKeyModal" tabindex="-1" aria-labelledby="showPrivateKeyModalLabel" aria-hidden="true">
         <div class="modal-dialog">
             <div class="modal-content">
                 <div class="modal-header bg-warning">
                     <h5 class="modal-title" id="showPrivateKeyModalLabel">
-                        <vc:icon symbol="warning" /> Show Private Key
+                        <vc:icon symbol="warning" /> @(Model.WalletType == WalletType.HD ? "Show Seed Phrase" : "Show Private Key")
                     </h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
                     <div class="alert alert-danger">
-                        <strong>Warning:</strong> Never share your private key with anyone. Anyone with access to this key can spend your funds.
+                        @if (Model.WalletType == WalletType.HD)
+                        {
+                            <span><strong>Warning:</strong> Never share your seed phrase with anyone. Anyone with access to these words can spend your funds. Write them down and store them securely offline.</span>
+                        }
+                        else
+                        {
+                            <span><strong>Warning:</strong> Never share your private key with anyone. Anyone with access to this key can spend your funds.</span>
+                        }
                     </div>
                     <div class="form-group mb-3">
-                        <label class="form-label fw-bold">Private Key (nsec)</label>
+                        @if (Model.WalletType == WalletType.HD)
+                        {
+                            <label class="form-label fw-bold">Recovery Seed Phrase (BIP-39 Mnemonic)</label>
+                            <div class="alert alert-info py-2 mb-2">
+                                <small>This is a 12 or 24-word recovery phrase. Write it down in order and store it securely.</small>
+                            </div>
+                        }
+                        else
+                        {
+                            <label class="form-label fw-bold">Private Key (nsec)</label>
+                            <div class="alert alert-secondary py-2 mb-2">
+                                <small>This is a legacy Nostr-style private key (nsec format).</small>
+                            </div>
+                        }
                         <div class="input-group">
                             <input type="password" id="privateKeyInput" class="form-control font-monospace" value="@Model.Wallet" readonly />
                             <button type="button" class="btn btn-outline-secondary" onclick="togglePrivateKeyVisibility()">
@@ -417,7 +447,7 @@ else
     function copyPrivateKey() {
         const input = document.getElementById('privateKeyInput');
         navigator.clipboard.writeText(input.value).then(() => {
-            alert('Private key copied to clipboard!');
+            alert('Copied to clipboard!');
         });
     }
 </script>

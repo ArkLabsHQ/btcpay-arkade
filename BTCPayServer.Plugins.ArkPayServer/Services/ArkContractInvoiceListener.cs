@@ -82,7 +82,7 @@ public class ArkContractInvoiceListener(
         try
         {
             var terms = await clientTransport.GetServerInfoAsync();
-            var serverKey = OutputDescriptorHelpers.Extract(terms.SignerKey).XOnlyPubKey;
+            var serverKey = terms.SignerKey.Extract().XOnlyPubKey;
             var script = Script.FromHex(vtxo.Script);
             var address = ArkAddress.FromScriptPubKey(script, serverKey);
             var network = terms.Network;
