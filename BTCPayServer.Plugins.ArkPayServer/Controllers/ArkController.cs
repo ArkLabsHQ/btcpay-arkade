@@ -823,7 +823,6 @@ public class ArkController(
             if (coins.Count == 0)
                 return RedirectWithError(nameof(StoreOverview), "No VTXOs available to refresh.", new { storeId });
 
-            var serverInfo = await clientTransport.GetServerInfoAsync(cancellationToken);
             var refreshWallet = await walletStorage.GetWalletByIdAsync(config.WalletId!, cancellationToken);
             if (refreshWallet == null)
             {

@@ -67,14 +67,13 @@ public class EfCoreContractStorage : IContractStorage
     }
 
     public async Task SaveContract(
-        string walletIdentifier,
         ArkContractEntity walletEntity,
         CancellationToken cancellationToken = default)
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
         var existing = await db.WalletContracts.FirstOrDefaultAsync(
-            c => c.Script == walletEntity.Script && c.WalletId == walletIdentifier,
+            c => c.Script == walletEntity.Script && c.WalletId == walletEntity.WalletIdentifier,
             cancellationToken);
 
         if (existing != null)
@@ -88,7 +87,7 @@ public class EfCoreContractStorage : IContractStorage
             var entity = new ArkWalletContract
             {
                 Script = walletEntity.Script,
-                WalletId = walletIdentifier,
+                WalletId = walletEntity.WalletIdentifier,
                 Active = walletEntity.Important,
                 Type = walletEntity.Type,
                 ContractData = walletEntity.AdditionalData,
