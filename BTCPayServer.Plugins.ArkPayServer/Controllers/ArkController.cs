@@ -1007,7 +1007,7 @@ public class ArkController(
 
             // Create the contract using ToEntity and save via storage
             var contractEntity = arkContract.ToEntity(config.WalletId);
-            await contractStorage.SaveContract(config.WalletId, contractEntity, cancellationToken);
+            await contractStorage.SaveContract( contractEntity, cancellationToken);
 
             // Sync the wallet to detect any VTXOs for this contract
             var allScripts = await contractStorage.GetContractScriptsAsync(config.WalletId, cancellationToken);
