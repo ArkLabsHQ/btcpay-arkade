@@ -33,9 +33,9 @@ public class HierarchicalDeterministicAddressProvider(
         return expected.Equals(descriptor);
     }
 
-    public async Task<OutputDescriptor> GetNextSigningDescriptor(string identifier, CancellationToken cancellationToken = default)
+    public async Task<OutputDescriptor> GetNextSigningDescriptor(CancellationToken cancellationToken = default)
     {
-        await using var @lock = await safetyService.LockKeyAsync($"wallet::{identifier}", cancellationToken);
+        await using var @lock = await safetyService.LockKeyAsync($"wallet::{wallet.Id}", cancellationToken);
 
         var descriptor =
             GetDescriptorFromIndex(
@@ -43,9 +43,6 @@ public class HierarchicalDeterministicAddressProvider(
                 wallet.AccountDescriptor ?? throw new Exception("Malformed HD Wallet"),
                 wallet.LastUsedIndex++
             );
-        
-        if (identifier != wallet.AccountDescriptor) 
-            throw new ArgumentException(nameof(identifier));
 
         await walletStorage.SaveWallet(wallet.Id, wallet, wallet.AccountDescriptor, cancellationToken);
         
@@ -60,22 +57,28 @@ public class HierarchicalDeterministicAddressProvider(
         return OutputDescriptor.Parse(descriptor.Replace("/*", $"/{index}"), network);
     }
 
-    public async Task<(ArkContract Contract, ContractActivityState? SuggestedActivityState)> GetNextContract(string identifier, NextContractPurpose purpose, CancellationToken cancellationToken = default)
+    public async Task<(ArkContract contract, ArkContractEntity entity)> GetNextContract(
+        NextContractPurpose purpose,
+        ContractActivityState activityState,
+        CancellationToken cancellationToken = default)
     {
         var info = await transport.GetServerInfoAsync(cancellationToken);
+        ArkContract? result = null;
         if (purpose == NextContractPurpose.SendToSelf && sweepDestination is not null)
         {
             // Static sweeping address is reusable - always keep it Active
-            var contract = new UnknownArkContract(sweepDestination, info.SignerKey, info.Network.ChainName == ChainName.Mainnet);
-            return (contract, ContractActivityState.Active);
+            result = new UnknownArkContract(sweepDestination, info.SignerKey, info.Network.ChainName == ChainName.Mainnet);
+            activityState = ContractActivityState.Inactive;
+        }else if (purpose == NextContractPurpose.SendToSelf)
+        {
+            activityState = ContractActivityState.AwaitingFundsBeforeDeactivate;
         }
 
-        var signingDescriptor = await GetNextSigningDescriptor(identifier, cancellationToken);
-        var paymentContract = new ArkPaymentContract(
+        result??= new ArkPaymentContract(
             info.SignerKey,
             info.UnilateralExit,
-            signingDescriptor
+            await GetNextSigningDescriptor(cancellationToken)
         );
-        return (paymentContract, null);
+        return (result, result.ToEntity(wallet.Id, null, activityState));
     }
 }

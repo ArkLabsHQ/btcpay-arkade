@@ -1,3 +1,4 @@
+using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using NArk.Abstractions;
 using NArk.Abstractions.Contracts;
 using NArk.Abstractions.Wallets;
@@ -12,43 +13,46 @@ namespace BTCPayServer.Plugins.ArkPayServer.Wallet;
 
 public class SingleKeyAddressProvider(
     IClientTransport transport,
-    OutputDescriptor outputDescriptor,
+    ArkWallet wallet,
+    Network network,
     ArkAddress? sweepingAddress
 ) : IArkadeAddressProvider
 {
-    public OutputDescriptor Descriptor { get; } = outputDescriptor;
+    public OutputDescriptor Descriptor { get; } = OutputDescriptor.Parse(wallet.AccountDescriptor, network);
     
 
     public async Task<bool> IsOurs(OutputDescriptor descriptor, CancellationToken cancellationToken = default)
     {
         return descriptor.Extract().XOnlyPubKey.ToBytes().SequenceEqual(Descriptor.Extract().XOnlyPubKey.ToBytes()); 
     }
-
-
-    public Task<OutputDescriptor> GetNextSigningDescriptor(string identifier, CancellationToken cancellationToken = default)
+    public Task<OutputDescriptor> GetNextSigningDescriptor(CancellationToken cancellationToken = default)
     {
         return Task.FromResult(Descriptor);
     }
 
-    public async Task<(ArkContract Contract, ContractActivityState? SuggestedActivityState)> GetNextContract(string identifier, NextContractPurpose purpose, CancellationToken cancellationToken = default)
+    public async Task<(ArkContract contract, ArkContractEntity entity)> GetNextContract(
+        NextContractPurpose purpose,
+        ContractActivityState activityState,
+        CancellationToken cancellationToken = default)
     {
         var info = await transport.GetServerInfoAsync(cancellationToken);
+        ArkContract? result = null;
         if (purpose == NextContractPurpose.SendToSelf && sweepingAddress is not null)
         {
             // Static sweeping address is reusable - always keep it Active
-            var contract = new UnknownArkContract(sweepingAddress, info.SignerKey, info.Network.ChainName == ChainName.Mainnet);
-            return (contract, ContractActivityState.Active);
+            result = new UnknownArkContract(sweepingAddress, info.SignerKey, info.Network.ChainName == ChainName.Mainnet);
+            activityState =  ContractActivityState.Inactive;
         }
-        var signingDescriptor = await GetNextSigningDescriptor(identifier, cancellationToken);
+        var signingDescriptor = await GetNextSigningDescriptor(cancellationToken);
         //TODO: lets actually make use of the LastUsedIndex and derives bytes deterministically
         var bytes = RandomUtils.GetBytes(32);
-        var hashLockedContract = new HashLockedArkPaymentContract(
+        result??= new HashLockedArkPaymentContract(
             info.SignerKey,
             info.UnilateralExit,
             signingDescriptor,
             bytes,
             HashLockTypeOption.Hash160 //FIXME: i forgot which type we used before in master
         );
-        return (hashLockedContract, null);
+        return (result, result.ToEntity(wallet.Id, null, activityState));
     }
 }

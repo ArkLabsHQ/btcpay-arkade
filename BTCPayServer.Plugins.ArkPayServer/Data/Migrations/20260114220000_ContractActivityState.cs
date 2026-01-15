@@ -1,10 +1,12 @@
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
 namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
 {
-    /// <inheritdoc />
+    [DbContext(typeof(ArkPluginDbContext))]
+    [Migration("20260114220000_ContractActivityState")]
     public partial class ContractActivityState : Migration
     {
         /// <inheritdoc />

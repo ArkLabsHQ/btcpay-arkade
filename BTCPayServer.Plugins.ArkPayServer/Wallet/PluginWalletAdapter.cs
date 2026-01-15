@@ -50,7 +50,7 @@ public class PluginWalletAdapter(
             return wallet.WalletType switch
             {
                 WalletType.HD => new HierarchicalDeterministicAddressProvider(clientTransport,safetyService, walletStorage, wallet, network, sweepDestination),
-                WalletType.SingleKey => new SingleKeyAddressProvider(clientTransport,OutputDescriptor.Parse(wallet.AccountDescriptor, network), sweepDestination),
+                WalletType.SingleKey => new SingleKeyAddressProvider(clientTransport,wallet, network,sweepDestination),
                 _ => throw new ArgumentOutOfRangeException(nameof(wallet.WalletType))
             };
         }
