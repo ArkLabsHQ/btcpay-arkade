@@ -51,7 +51,7 @@ public class SingleKeyAddressProvider(
             info.UnilateralExit,
             signingDescriptor,
             bytes,
-            HashLockTypeOption.Hash160 //FIXME: i forgot which type we used before in master
+            HashLockTypeOption.Hash160
         );
         return (result, result.ToEntity(wallet.Id, null, activityState));
     }

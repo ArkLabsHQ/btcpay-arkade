@@ -1,5 +1,6 @@
 using NArk;
 using NArk.Abstractions;
+using NArk.Extensions;
 using NArk.Swaps.Helpers;
 using NBitcoin;
 using NBitcoin.DataEncoders;
@@ -82,8 +83,7 @@ public static class WalletFactory
         var keyData2 = encoder2.DecodeDataRaw(nsec, out _);
         var privKey = ECPrivKey.Create(keyData2);
         
-        var xOnlyPubKey = privKey.CreatePubKey();
-        var outputDescriptor = $"tr({xOnlyPubKey})";
+        var outputDescriptor = $"tr({privKey.CreatePubKey().ToBytes().ToHexStringLower()})";
         return outputDescriptor;
     }
 

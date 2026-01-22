@@ -73,17 +73,27 @@ public class EfCoreSwapStorage : ISwapStorage
         return MapToNNarkSwap(entity);
     }
 
-    public async Task<IReadOnlyCollection<NNarkArkSwap>> GetActiveSwaps(
-        string? walletId = null,
+    public async Task<IReadOnlyCollection<NNarkArkSwap>> GetSwaps(string? walletId = null, string[]? swapIds = null, bool? active = null,
         CancellationToken cancellationToken = default)
     {
+
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
-        var query = db.Swaps.Where(s => s.Status == ArkSwapStatus.Pending);
+
+            var query = db.Swaps.AsQueryable();
 
         if (walletId != null)
         {
             query = query.Where(s => s.WalletId == walletId);
+        }
+        if (swapIds != null)
+        {
+            query = query.Where(s => swapIds.Contains(s.SwapId));
+        }
+
+        if (active is not null)
+        {
+            query = query.Where(s => s.Status == ArkSwapStatus.Pending || s.Status == ArkSwapStatus.Unknown);
         }
 
         var entities = await query.ToListAsync(cancellationToken);
