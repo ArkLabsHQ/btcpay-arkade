@@ -104,12 +104,12 @@
             <tbody>
                 @foreach (var intent in Model.Intents)
                 {
-                    var detailsId = $"intent_details_{intent.InternalId}";
+                    var detailsId = $"intent_details_{intent.IntentTxId}";
                     
                     ArkIntentVtxo[]? vtxos = [];
-                    var hasVtxos = Model.IntentVtxos.TryGetValue(intent.InternalId, out vtxos) && vtxos.Any();
+                    var hasVtxos = Model.IntentVtxos.TryGetValue(intent.IntentTxId, out vtxos) && vtxos.Any();
 
-                    <tr id="intent_@intent.InternalId">
+                    <tr id="intent_@intent.IntentTxId">
                         <td class="align-middle date-col">@intent.CreatedAt.ToBrowserDate()</td>
                         <td class="align-middle">
                             @if (!string.IsNullOrEmpty(intent.IntentId))
@@ -169,7 +169,7 @@
                             <div class="d-inline-flex align-items-center gap-2">
                                 @if (intent.State == ArkIntentState.WaitingToSubmit || intent.State == ArkIntentState.WaitingForBatch)
                                 {
-                                    <form asp-action="CancelIntent" method="post" asp-route-storeId="@storeId" asp-route-internalId="@intent.InternalId" class="d-inline" onsubmit="return confirm('Are you sure you want to cancel this intent?');">
+                                    <form asp-action="CancelIntent" method="post" asp-route-storeId="@storeId" asp-route-intentTxId="@intent.IntentTxId" class="d-inline" onsubmit="return confirm('Are you sure you want to cancel this intent?');">
                                         <button type="submit" class="btn btn-sm btn-outline-danger" title="Cancel Intent">
                                             <vc:icon symbol="cross" />
                                         </button>

@@ -730,11 +730,11 @@ public class ArkController(
             stateFilter,
             HttpContext.RequestAborted);
 
-        var intentVtxos = new Dictionary<int, ArkIntentVtxo[]>();
+        var intentVtxos = new Dictionary<string, ArkIntentVtxo[]>();
         if (intents.Any())
         {
-            var intentIds = intents.Select(i => i.InternalId);
-            intentVtxos = await efCoreIntentStorage.GetIntentVtxosByIntentIdsAsync(intentIds, HttpContext.RequestAborted);
+            var intentTxIds = intents.Select(i => i.IntentTxId);
+            intentVtxos = await efCoreIntentStorage.GetIntentVtxosByIntentTxIdsAsync(intentTxIds, HttpContext.RequestAborted);
         }
 
         return View(new StoreIntentsViewModel
@@ -860,7 +860,7 @@ public class ArkController(
 
     [HttpPost("stores/{storeId}/cancel-intent")]
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
-    public async Task<IActionResult> CancelIntent(string storeId, string internalId, CancellationToken cancellationToken)
+    public async Task<IActionResult> CancelIntent(string storeId, string intentTxId, CancellationToken cancellationToken)
     {
         var (store, config, errorResult) = ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
@@ -868,7 +868,7 @@ public class ArkController(
         try
         {
             // Get the intent from storage
-            var intent = await intentStorage.GetIntentByInternalId(Guid.Parse(internalId), cancellationToken);
+            var intent = await intentStorage.GetIntentByIntentTxId(intentTxId, cancellationToken);
             if (intent == null)
                 return RedirectWithError(nameof(Intents), "Intent not found.", new { storeId });
 

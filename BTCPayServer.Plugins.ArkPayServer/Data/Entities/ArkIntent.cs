@@ -1,11 +1,15 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using NArk.Abstractions.Intents;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Data;
 
 public class ArkIntent
 {
-    public int InternalId { get; set; }
+    /// <summary>
+    /// The unique transaction ID for this intent (primary key).
+    /// </summary>
+    public string IntentTxId { get; set; } = "";
+
     public string? IntentId { get; set; }
     public string WalletId { get; set; }
     public ArkIntentState State { get; set; }
@@ -37,8 +41,7 @@ public class ArkIntent
     internal static void OnModelCreating(ModelBuilder builder)
     {
         var entity = builder.Entity<ArkIntent>();
-        entity.HasKey(e => e.InternalId);
-        entity.Property(e => e.InternalId).ValueGeneratedOnAdd();
+        entity.HasKey(e => e.IntentTxId);
         entity.HasIndex(e => e.IntentId).IsUnique().HasFilter("\"IntentId\" IS NOT NULL");
         entity.Property(e => e.BatchId).HasDefaultValue(null);
         entity.Property(e => e.CommitmentTransactionId).HasDefaultValue(null);
@@ -46,7 +49,7 @@ public class ArkIntent
         entity.Property(e => e.SignerDescriptor).HasDefaultValue(null);
         entity.HasMany(e => e.IntentVtxos)
             .WithOne(e => e.Intent)
-            .HasForeignKey(e => e.InternalId)
+            .HasForeignKey(e => e.IntentTxId)
             .OnDelete(DeleteBehavior.Cascade);
     }
 }

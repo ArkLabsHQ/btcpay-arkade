@@ -12,8 +12,8 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
 {
     [DbContext(typeof(ArkPluginDbContext))]
-    [Migration("20260105144501_NNArk")]
-    partial class NNArk
+    [Migration("20260127184932_IntentsRefresh")]
+    partial class IntentsRefresh
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -28,11 +28,8 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
 
             modelBuilder.Entity("BTCPayServer.Plugins.ArkPayServer.Data.ArkIntent", b =>
                 {
-                    b.Property<int>("InternalId")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("InternalId"));
+                    b.Property<string>("IntentTxId")
+                        .HasColumnType("text");
 
                     b.Property<string>("BatchId")
                         .HasColumnType("text");
@@ -88,7 +85,7 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.HasKey("InternalId");
+                    b.HasKey("IntentTxId");
 
                     b.HasIndex("IntentId")
                         .IsUnique()
@@ -99,8 +96,8 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
 
             modelBuilder.Entity("BTCPayServer.Plugins.ArkPayServer.Data.ArkIntentVtxo", b =>
                 {
-                    b.Property<int>("InternalId")
-                        .HasColumnType("integer");
+                    b.Property<string>("IntentTxId")
+                        .HasColumnType("text");
 
                     b.Property<string>("VtxoTransactionId")
                         .HasColumnType("text");
@@ -111,7 +108,7 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
                     b.Property<DateTimeOffset>("LinkedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.HasKey("InternalId", "VtxoTransactionId", "VtxoTransactionOutputIndex");
+                    b.HasKey("IntentTxId", "VtxoTransactionId", "VtxoTransactionOutputIndex");
 
                     b.HasIndex("VtxoTransactionId", "VtxoTransactionOutputIndex");
 
@@ -176,9 +173,6 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
                     b.Property<string>("AccountDescriptor")
                         .HasColumnType("text");
 
-                    b.Property<string>("IntentSchedulingPolicy")
-                        .HasColumnType("text");
-
                     b.Property<int>("LastUsedIndex")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("integer")
@@ -212,8 +206,8 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
                     b.Property<string>("WalletId")
                         .HasColumnType("text");
 
-                    b.Property<bool>("Active")
-                        .HasColumnType("boolean");
+                    b.Property<int>("ActivityState")
+                        .HasColumnType("integer");
 
                     b.Property<string>("ContractData")
                         .IsRequired()
@@ -275,7 +269,7 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
                 {
                     b.HasOne("BTCPayServer.Plugins.ArkPayServer.Data.ArkIntent", "Intent")
                         .WithMany("IntentVtxos")
-                        .HasForeignKey("InternalId")
+                        .HasForeignKey("IntentTxId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 

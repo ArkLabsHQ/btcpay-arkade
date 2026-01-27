@@ -26,11 +26,10 @@ public class EfCoreIntentStorage : IIntentStorage
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
-        // Try to find existing by InternalId (using Guid to int mapping)
-        var internalId = GuidToInt(intent.InternalId);
+        // Try to find existing by IntentTxId
         var existing = await db.Intents
             .Include(i => i.IntentVtxos)
-            .FirstOrDefaultAsync(i => i.InternalId == internalId, cancellationToken);
+            .FirstOrDefaultAsync(i => i.IntentTxId == intent.IntentTxId, cancellationToken);
 
         if (existing != null)
         {
@@ -54,6 +53,7 @@ public class EfCoreIntentStorage : IIntentStorage
         {
             var entity = new PluginArkIntent
             {
+                IntentTxId = intent.IntentTxId,
                 IntentId = intent.IntentId,
                 WalletId = intent.WalletId,
                 State = intent.State,
@@ -98,20 +98,6 @@ public class EfCoreIntentStorage : IIntentStorage
         return entities.Select(MapToNNarkIntent).ToList();
     }
 
-    public async Task<NNarkArkIntent?> GetIntentByInternalId(
-        Guid internalId,
-        CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        var id = GuidToInt(internalId);
-        var entity = await db.Intents
-            .Include(i => i.IntentVtxos)
-            .FirstOrDefaultAsync(i => i.InternalId == id, cancellationToken);
-
-        return entity == null ? null : MapToNNarkIntent(entity);
-    }
-
     public async Task<NNarkArkIntent?> GetIntentByIntentId(
         string walletId,
         string intentId,
@@ -122,6 +108,20 @@ public class EfCoreIntentStorage : IIntentStorage
         var entity = await db.Intents
             .Include(i => i.IntentVtxos)
             .FirstOrDefaultAsync(i => i.WalletId == walletId && i.IntentId == intentId,
+                cancellationToken);
+
+        return entity == null ? null : MapToNNarkIntent(entity);
+    }
+
+    public async Task<NNarkArkIntent?> GetIntentByIntentTxId(
+        string intentTxId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        var entity = await db.Intents
+            .Include(i => i.IntentVtxos)
+            .FirstOrDefaultAsync(i => i.IntentTxId == intentTxId,
                 cancellationToken);
 
         return entity == null ? null : MapToNNarkIntent(entity);
@@ -199,7 +199,7 @@ public class EfCoreIntentStorage : IIntentStorage
     private NNarkArkIntent MapToNNarkIntent(PluginArkIntent entity)
     {
         return new NNarkArkIntent(
-            InternalId: IntToGuid(entity.InternalId),
+            IntentTxId: entity.IntentTxId,
             IntentId: entity.IntentId,
             WalletId: entity.WalletId,
             State: entity.State,
@@ -221,46 +221,25 @@ public class EfCoreIntentStorage : IIntentStorage
         );
     }
 
-
-    /// <summary>
-    /// Convert int InternalId to Guid for NNark compatibility.
-    /// Uses a deterministic mapping.
-    /// </summary>
-    private static Guid IntToGuid(int id)
-    {
-        var bytes = new byte[16];
-        BitConverter.GetBytes(id).CopyTo(bytes, 0);
-        return new Guid(bytes);
-    }
-
-    /// <summary>
-    /// Convert Guid back to int InternalId.
-    /// </summary>
-    private static int GuidToInt(Guid guid)
-    {
-        var bytes = guid.ToByteArray();
-        return BitConverter.ToInt32(bytes, 0);
-    }
-
     #region Plugin-specific methods (wallet-guarded)
 
     /// <summary>
-    /// Gets intent VTXOs grouped by intent InternalId.
+    /// Gets intent VTXOs grouped by IntentTxId.
     /// </summary>
-    public async Task<Dictionary<int, ArkIntentVtxo[]>> GetIntentVtxosByIntentIdsAsync(
-        IEnumerable<int> intentIds,
+    public async Task<Dictionary<string, ArkIntentVtxo[]>> GetIntentVtxosByIntentTxIdsAsync(
+        IEnumerable<string> intentTxIds,
         CancellationToken cancellationToken = default)
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
-        var idSet = intentIds.ToHashSet();
+        var idSet = intentTxIds.ToHashSet();
         var vtxos = await db.IntentVtxos
             .Include(iv => iv.Vtxo)
-            .Where(iv => idSet.Contains(iv.InternalId))
+            .Where(iv => idSet.Contains(iv.IntentTxId))
             .ToArrayAsync(cancellationToken);
 
         return vtxos
-            .GroupBy(iv => iv.InternalId)
+            .GroupBy(iv => iv.IntentTxId)
             .ToDictionary(g => g.Key, g => g.ToArray());
     }
 

@@ -38,7 +38,7 @@
         <PackageReference Include="AsyncKeyedLock" Version="8.0.1" />
         <PackageReference Include="BTCPayServer.Lightning.Common" Version="1.5.2" />
         <PackageReference Include="Cel" Version="0.3.2" />
-        <PackageReference Include="NArk" Version="1.0.7-beta" />
+        <PackageReference Include="NArk" Version="1.0.8-beta" />
 
         <PackageReference Include="NBitcoin" Version="9.0.4" />
         <PackageReference Include="NBitcoin.Secp256k1" Version="3.2.0" />

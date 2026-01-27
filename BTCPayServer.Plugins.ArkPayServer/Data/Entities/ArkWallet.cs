@@ -30,7 +30,7 @@ public class ArkWallet
     /// For HD wallets: the account descriptor (e.g., tr([fingerprint/86'/0'/0']xpub...)).
     /// For legacy wallets: the simple tr(pubkey) descriptor.
     /// </summary>
-    public string AccountDescriptor { get; set; }
+    public string? AccountDescriptor { get; set; }
 
     /// <summary>
     /// For HD wallets: the last used derivation index.
