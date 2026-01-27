@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using BTCPayServer.Payments;
 using BTCPayServer.Services;
@@ -13,10 +14,9 @@ namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler
         
         public bool Handle(PaymentMethodId paymentMethodId) => paymentMethodId == ArkadePlugin.ArkadePaymentMethodId;
 
-        public async Task<ICheckoutCheatModeExtension.MineBlockResult> MineBlock(
-            ICheckoutCheatModeExtension.MineBlockContext mineBlockContext)
+        public async Task<string> Execute(string cmd)
         {
-            var (fileName, arguments) = GetProcessInfo($"rpc --generate {mineBlockContext.BlockCount}");
+            var (fileName, arguments) = GetProcessInfo(cmd);
             
             var process = new System.Diagnostics.Process
             {
@@ -36,12 +36,14 @@ namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler
             var error = await process.StandardError.ReadToEndAsync();
             await process.WaitForExitAsync();
 
-            if (process.ExitCode == 0)
-            {
-                return new ICheckoutCheatModeExtension.MineBlockResult();
-            }
-
-            throw new Exception($"Failed to generate blocks: {error}");
+            return process.ExitCode != 0 ? throw new ExternalProcessFailedException($"nigiri {cmd}", error + output) : output;
+        }
+        
+        public async Task<ICheckoutCheatModeExtension.MineBlockResult> MineBlock(
+            ICheckoutCheatModeExtension.MineBlockContext mineBlockContext)
+        {
+            await Execute($"rpc --generate {mineBlockContext.BlockCount}");
+            return new ICheckoutCheatModeExtension.MineBlockResult();
         }
 
         public async Task<ICheckoutCheatModeExtension.PayInvoiceResult> PayInvoice(ICheckoutCheatModeExtension.PayInvoiceContext payInvoiceContext)
@@ -50,36 +52,29 @@ namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler
             var amt = Money.Coins(payInvoiceContext.Amount).Satoshi;
 
             var nigiriArgs = $"ark send --to {destination} --amount {amt} --password secret";
-            var (fileName, arguments) = GetProcessInfo(nigiriArgs);
-            
-            var process = new System.Diagnostics.Process
+            try
             {
-                StartInfo = new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = fileName,
-                    Arguments = arguments,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                }
-            };
-
-            process.Start();
-            
-            var output = await process.StandardOutput.ReadToEndAsync();
-            var error = await process.StandardError.ReadToEndAsync();
-            await process.WaitForExitAsync();
-
-            if (process.ExitCode == 0)
-            {
-                var arkOutput = JObject.Parse(output);
-                var txId = arkOutput.GetValue("txid")?.Value<string>();
-                if (txId is not null)
-                    return new ICheckoutCheatModeExtension.PayInvoiceResult(txId);
+               var output = await  Execute(nigiriArgs);
+               var arkOutput = JObject.Parse(output);
+               var txId = arkOutput.GetValue("txid")?.Value<string>();
+               if (txId is not null)
+                   return new ICheckoutCheatModeExtension.PayInvoiceResult(txId);
+               throw new Exception(output);
             }
-
-            throw new ExternalProcessFailedException($"nigiri {nigiriArgs}", error);
+            catch (ExternalProcessFailedException e) when(e.Message.Contains("Insufficient funds"))
+            {
+                //
+                //nigiri settle
+                await Execute("faucet $(nigiri ark receive | jq -r \".onchain_address\") 2");
+                await Execute("ark settle --password secret");
+                return await PayInvoice(payInvoiceContext);
+            }
+            catch (ExternalProcessFailedException e) when(e.Message.Contains("VTXO_RECOVERABLE"))
+            {
+                await Execute("ark settle --password secret");
+                return await PayInvoice(payInvoiceContext);
+            }
+            
         }
 
         /// <summary>
