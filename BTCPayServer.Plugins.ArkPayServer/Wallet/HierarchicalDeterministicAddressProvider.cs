@@ -37,18 +37,23 @@ public class HierarchicalDeterministicAddressProvider(
     {
         await using var @lock = await safetyService.LockKeyAsync($"wallet::{wallet.Id}", cancellationToken);
 
+        // Reload wallet from DB to get current LastUsedIndex (avoids stale in-memory copy)
+        var freshWallet = await walletStorage.GetWalletByIdAsync(wallet.Id, cancellationToken)
+            ?? throw new Exception("Wallet not found");
+
         var descriptor =
             GetDescriptorFromIndex(
                 network,
-                wallet.AccountDescriptor ?? throw new Exception("Malformed HD Wallet"),
-                wallet.LastUsedIndex++
+                freshWallet.AccountDescriptor ?? throw new Exception("Malformed HD Wallet"),
+                freshWallet.LastUsedIndex++
             );
 
-        await walletStorage.SaveWallet(wallet.Id, wallet, wallet.AccountDescriptor, cancellationToken);
-        
-        return descriptor;
+        await walletStorage.SaveWallet(freshWallet.Id, freshWallet, freshWallet.AccountDescriptor, cancellationToken);
 
-      
+        // Update local copy for consistency
+        wallet.LastUsedIndex = freshWallet.LastUsedIndex;
+
+        return descriptor;
     }
     
     private static OutputDescriptor GetDescriptorFromIndex(Network network, string descriptor, int index)
