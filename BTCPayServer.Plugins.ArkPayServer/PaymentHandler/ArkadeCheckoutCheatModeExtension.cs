@@ -20,7 +20,7 @@ namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler
             
             var process = new System.Diagnostics.Process
             {
-                StartInfo = new System.Diagnostics.ProcessStartInfo
+                StartInfo = new ProcessStartInfo
                 {
                     FileName = fileName,
                     Arguments = arguments,

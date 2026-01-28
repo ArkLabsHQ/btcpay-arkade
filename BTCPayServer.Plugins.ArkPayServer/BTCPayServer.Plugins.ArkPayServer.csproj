@@ -34,11 +34,18 @@
             <Private>false</Private>
             <Private Condition="'$(Configuration)' == 'Debug'">true</Private>
         </ProjectReference>
+        <!-- NNark submodule projects -->
+        <ProjectReference Include="..\submodules\NNark\NArk.Abstractions\NArk.Abstractions.csproj" />
+        <ProjectReference Include="..\submodules\NNark\NArk.Blockchain.NBXplorer\NArk.Blockchain.NBXplorer.csproj" />
+        <ProjectReference Include="..\submodules\NNark\NArk.Core\NArk.Core.csproj" />
+        <ProjectReference Include="..\submodules\NNark\NArk.Hosting\NArk.Hosting.csproj" />
+        <ProjectReference Include="..\submodules\NNark\NArk.Safety.AsyncKeyedLock\NArk.Safety.AsyncKeyedLock.csproj" />
+        <ProjectReference Include="..\submodules\NNark\NArk.Swaps\NArk.Swaps.csproj" />
+        <ProjectReference Include="..\submodules\NNark\NArk.Transport.GrpcClient\NArk.Transport.GrpcClient.csproj" />
         <!-- NNark transitive dependencies (must be explicit for plugin publish) -->
         <PackageReference Include="AsyncKeyedLock" Version="8.0.1" />
         <PackageReference Include="BTCPayServer.Lightning.Common" Version="1.5.2" />
         <PackageReference Include="Cel" Version="0.3.2" />
-        <PackageReference Include="NArk" Version="1.0.11-beta" />
 
         <PackageReference Include="NBitcoin" Version="9.0.4" />
         <PackageReference Include="NBitcoin.Secp256k1" Version="3.2.0" />

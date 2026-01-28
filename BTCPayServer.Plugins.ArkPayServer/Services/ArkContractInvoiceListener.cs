@@ -19,6 +19,7 @@ using Newtonsoft.Json.Linq;
 using BTCPayServer.Plugins.ArkPayServer.Storage;
 using NArk.Abstractions;
 using NArk.Abstractions.Contracts;
+using NArk.Swaps.Services;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
 
@@ -46,6 +47,7 @@ public class ArkContractInvoiceListener(
         // Subscribe to NNark's storage events directly
         vtxoStorage.VtxosChanged += OnVtxoChanged;
         swapStorage.SwapsChanged += OnSwapChanged;
+
 
         _ = PollAllInvoices(cancellationToken);
     }
@@ -156,13 +158,12 @@ public class ArkContractInvoiceListener(
     }
     
     
-    public Task StopAsync(CancellationToken cancellationToken)
+    public async Task StopAsync(CancellationToken cancellationToken)
     {
         vtxoStorage.VtxosChanged -= OnVtxoChanged;
         swapStorage.SwapsChanged -= OnSwapChanged;
         _leases.Dispose();
         _leases = new CompositeDisposable();
-        return Task.CompletedTask;
     }
 
     public async Task ToggleArkadeContract(InvoiceEntity invoice)
