@@ -97,6 +97,7 @@
                     <th text-translate="true" class="text-nowrap">State</th>
                     <th text-translate="true" class="text-nowrap">Valid Until</th>
                     <th text-translate="true">Batch ID</th>
+                    <th text-translate="true" class="text-nowrap">Commitment Tx</th>
                     <th text-translate="true">VTXOs</th>
                     <th></th>
                 </tr>
@@ -156,6 +157,16 @@
                             }
                         </td>
                         <td class="align-middle">
+                            @if (!string.IsNullOrEmpty(intent.CommitmentTransactionId))
+                            {
+                                <vc:truncate-center text="@intent.CommitmentTransactionId" classes="truncate-center-id"/>
+                            }
+                            else
+                            {
+                                <span class="text-muted">-</span>
+                            }
+                        </td>
+                        <td class="align-middle">
                             @if (hasVtxos)
                             {
                                 <span class="badge text-bg-info">@vtxos.Length</span>
@@ -187,7 +198,7 @@
                     
                     @if (hasVtxos)
                     {
-                        var colspanCount = 7;
+                        var colspanCount = 8;
                         <tr id="@detailsId" class="intent-details-row collapse">
                             <td colspan="@colspanCount" class="border-top-0">
                                 <h6 class="mb-3">VTXOs</h6>
