@@ -111,15 +111,12 @@ public class ArkController(
 
                     // Signer is automatically registered via WalletSaved event
                     await walletStorage.UpsertWalletAsync(wallet, walletSettings.IsOwnedByStore, HttpContext.RequestAborted);
+                    
                     if (wallet.WalletType == WalletType.SingleKey)
                     {
-                        var addressProvider = await walletProvider.GetAddressProviderAsync(wallet.Id, HttpContext.RequestAborted);
-                        if (addressProvider != null)
-                            await addressProvider.GetNextContract(NextContractPurpose.SendToSelf,
-                                ContractActivityState.Active, HttpContext.RequestAborted);
+                       await  contractService.DeriveContract(wallet.Id, NextContractPurpose.SendToSelf, ContractActivityState.Active, HttpContext.RequestAborted);
                     }
                     
-
                     walletSettings = walletSettings with { WalletId = wallet.Id };
                 }
                 catch (Exception ex)
@@ -1040,7 +1037,7 @@ public class ArkController(
         }
 
         // Check if input is a BIP-39 mnemonic (12 or 24 words)
-        var words = wallet.Trim().Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+        var words = wallet.Trim().Split([' ', '\t', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries);
         if (words.Length is 12 or 24)
         {
             try
@@ -1058,19 +1055,12 @@ public class ArkController(
         if (ArkAddress.TryParse(wallet, out var addr))
         {
             var terms = await clientTransport.GetServerInfoAsync();
-            var serverKey = OutputDescriptorHelpers.Extract(terms.SignerKey).XOnlyPubKey;
+            var serverKey = terms.SignerKey.Extract().XOnlyPubKey;
 
-            if (!serverKey.ToBytes().SequenceEqual(addr!.ServerKey.ToBytes()))
-                throw new Exception("Invalid destination address");
-
-            return new TemporaryWalletSettings(GenerateWallet(), null, wallet, true, true);
+            return !serverKey.ToBytes().SequenceEqual(addr!.ServerKey.ToBytes()) ? throw new Exception("Invalid destination address") : new TemporaryWalletSettings(GenerateWallet(), null, wallet, true, true);
         }
         var existingWallet = await walletStorage.GetWalletByIdAsync(wallet, HttpContext.RequestAborted);
-        if (existingWallet == null)
-            throw new Exception("Unsupported value. Enter a BIP-39 seed phrase (12 or 24 words), nsec private key, Ark address, or wallet ID.");
-
-        return new TemporaryWalletSettings(null, wallet, null, false, false);
-
+        return existingWallet == null ? throw new Exception("Unsupported value. Enter a BIP-39 seed phrase (12 or 24 words), nsec private key, Ark address, or wallet ID.") : new TemporaryWalletSettings(null, wallet, null, false, false);
     }
     private static string GenerateWallet()
     {
