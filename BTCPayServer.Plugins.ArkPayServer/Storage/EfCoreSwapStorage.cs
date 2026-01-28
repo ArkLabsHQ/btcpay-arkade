@@ -37,7 +37,7 @@ public class EfCoreSwapStorage : ISwapStorage
         {
             // Update existing
             existing.Status = swap.Status;
-            existing.UpdatedAt = swap.UpdatedAt;
+            existing.UpdatedAt = swap.UpdatedAt.ToUniversalTime();
         }
         else
         {
@@ -51,8 +51,8 @@ public class EfCoreSwapStorage : ISwapStorage
                 ContractScript = swap.ContractScript,
                 Status = swap.Status,
                 Hash = swap.Hash,
-                CreatedAt = swap.CreatedAt,
-                UpdatedAt = swap.UpdatedAt
+                CreatedAt = swap.CreatedAt.ToUniversalTime(),
+                UpdatedAt = swap.UpdatedAt.ToUniversalTime()
             };
             db.Swaps.Add(entity);
         }
