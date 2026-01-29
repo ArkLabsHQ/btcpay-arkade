@@ -313,12 +313,368 @@ else
 @section PageFootContent
 {
     <script>
-        // Basic section toggle functionality (JavaScript implementation will be in Task 8)
-        function toggleSection(sectionId) {
+    (function() {
+        'use strict';
+
+        // State
+        const state = {
+            coinSelectionMode: '@Model.CoinSelectionMode',
+            detectedSpendType: null,
+            estimatedFee: null,
+            isLightning: false
+        };
+
+        // DOM elements
+        const form = document.getElementById('send-wizard-form');
+        const outputsContainer = document.getElementById('outputs-container');
+        const addOutputBtn = document.getElementById('add-output-btn');
+        const coinsTable = document.getElementById('coins-table');
+        const selectAllCoins = document.getElementById('select-all-coins');
+        const sendBtn = document.getElementById('send-btn');
+        const feeDisplay = document.getElementById('fee-amount');
+        const coinsSummary = document.getElementById('coins-summary');
+        const selectionModeBadge = document.getElementById('selection-mode-badge');
+        const reviewSummary = document.getElementById('review-summary');
+        const reviewContent = document.getElementById('review-content');
+
+        // Debounce helper
+        function debounce(fn, delay) {
+            let timeout;
+            return function(...args) {
+                clearTimeout(timeout);
+                timeout = setTimeout(() => fn.apply(this, args), delay);
+            };
+        }
+
+        // Toggle section collapse
+        window.toggleSection = function(sectionId) {
             const section = document.getElementById(sectionId);
-            if (section) {
-                section.classList.toggle('collapsed');
+            section.classList.toggle('collapsed');
+        };
+
+        // Get selected coins
+        function getSelectedCoins() {
+            const checkboxes = coinsTable.querySelectorAll('.coin-checkbox:checked');
+            return Array.from(checkboxes).map(cb => cb.value);
+        }
+
+        // Update coins summary
+        function updateCoinsSummary() {
+            const checkboxes = coinsTable.querySelectorAll('.coin-checkbox:checked');
+            const count = checkboxes.length;
+            let totalSats = 0;
+
+            checkboxes.forEach(cb => {
+                const row = cb.closest('tr');
+                const amountText = row.cells[2].textContent;
+                const btc = parseFloat(amountText);
+                totalSats += Math.round(btc * 100000000);
+            });
+
+            const totalBtc = (totalSats / 100000000).toFixed(8);
+            coinsSummary.textContent = `${count} selected · ${totalBtc} BTC`;
+            selectionModeBadge.textContent = state.coinSelectionMode;
+        }
+
+        // Get outputs from form
+        function getOutputs() {
+            const outputs = [];
+            const rows = outputsContainer.querySelectorAll('.output-row');
+
+            rows.forEach((row, i) => {
+                const destInput = row.querySelector('.destination-input');
+                const amountInput = row.querySelector('.amount-input');
+
+                outputs.push({
+                    destination: destInput?.value?.trim() || '',
+                    amountBtc: amountInput?.value ? parseFloat(amountInput.value) : null
+                });
+            });
+
+            return outputs;
+        }
+
+        // Detect destination type
+        function detectDestinationType(destination) {
+            if (!destination) return null;
+
+            const lower = destination.toLowerCase();
+            if (lower.startsWith('ln') || lower.startsWith('lightning:')) {
+                return 'LightningInvoice';
+            }
+            if (lower.startsWith('bitcoin:') || lower.startsWith('ark:')) {
+                return 'Bip21Uri';
+            }
+            // Simple heuristic: Ark addresses are typically longer
+            if (destination.length > 60) {
+                return 'ArkAddress';
+            }
+            return 'BitcoinAddress';
+        }
+
+        // Update destination badges
+        function updateDestinationBadges() {
+            const rows = outputsContainer.querySelectorAll('.output-row');
+            let hasLightning = false;
+
+            rows.forEach((row, i) => {
+                const destInput = row.querySelector('.destination-input');
+                const badge = row.querySelector('.destination-type-badge');
+                const type = detectDestinationType(destInput?.value);
+
+                if (type === 'LightningInvoice') hasLightning = true;
+
+                if (badge) {
+                    badge.textContent = type || '';
+                    badge.className = 'destination-type-badge badge ' + (type ? 'text-bg-info' : '');
+                }
+            });
+
+            state.isLightning = hasLightning;
+
+            // Disable add output for Lightning
+            if (addOutputBtn) {
+                addOutputBtn.disabled = hasLightning;
+                addOutputBtn.title = hasLightning ? 'Lightning supports single output only' : '';
             }
         }
+
+        // Estimate fees
+        const estimateFees = debounce(async function() {
+            const selectedCoins = getSelectedCoins();
+            const outputs = getOutputs().filter(o => o.destination);
+
+            if (!selectedCoins.length || !outputs.length) {
+                feeDisplay.textContent = '--';
+                sendBtn.disabled = true;
+                return;
+            }
+
+            // Calculate total input
+            let totalInputSats = 0;
+            const checkboxes = coinsTable.querySelectorAll('.coin-checkbox:checked');
+            checkboxes.forEach(cb => {
+                const row = cb.closest('tr');
+                const amountText = row.cells[2].textContent;
+                const btc = parseFloat(amountText);
+                totalInputSats += Math.round(btc * 100000000);
+            });
+
+            try {
+                const response = await fetch(`/plugins/ark/stores/@Model.StoreId/estimate-fees`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'RequestVerificationToken': document.querySelector('input[name="__RequestVerificationToken"]')?.value
+                    },
+                    body: JSON.stringify({
+                        vtxoOutpoints: selectedCoins,
+                        totalInputSats: totalInputSats,
+                        outputs: outputs.map(o => ({
+                            destination: o.destination,
+                            amountSats: o.amountBtc ? Math.round(o.amountBtc * 100000000) : null
+                        }))
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    feeDisplay.textContent = data.error;
+                    sendBtn.disabled = true;
+                } else {
+                    const feeBtc = (data.estimatedFeeSats / 100000000).toFixed(8);
+                    feeDisplay.textContent = `~${data.estimatedFeeSats} sats (${feeBtc} BTC)`;
+                    if (data.feeDescription) {
+                        feeDisplay.textContent += ` - ${data.feeDescription}`;
+                    }
+                    state.estimatedFee = data.estimatedFeeSats;
+                    sendBtn.disabled = false;
+
+                    // Update review section
+                    updateReviewSection(selectedCoins, outputs, data);
+                }
+            } catch (err) {
+                console.error('Fee estimation failed:', err);
+                feeDisplay.textContent = 'Error estimating fee';
+                sendBtn.disabled = true;
+            }
+        }, 500);
+
+        // Update review section
+        function updateReviewSection(coins, outputs, feeData) {
+            const totalInput = coins.length;
+            const totalOutputs = outputs.length;
+
+            let spendType = 'Batch';
+            if (state.isLightning) spendType = 'Lightning Swap';
+            else if (feeData.isOffchain) spendType = 'Offchain';
+
+            reviewSummary.textContent = `${totalOutputs} output(s) via ${spendType}`;
+
+            let html = '<dl class="row mb-0">';
+            html += `<dt class="col-sm-4">Inputs</dt><dd class="col-sm-8">${totalInput} coin(s)</dd>`;
+            html += `<dt class="col-sm-4">Outputs</dt><dd class="col-sm-8">${totalOutputs}</dd>`;
+            html += `<dt class="col-sm-4">Spend Type</dt><dd class="col-sm-8"><span class="badge text-bg-primary">${spendType}</span></dd>`;
+            html += `<dt class="col-sm-4">Fee</dt><dd class="col-sm-8">${feeData.estimatedFeeSats} sats</dd>`;
+            html += '</dl>';
+
+            reviewContent.innerHTML = html;
+        }
+
+        // Suggest coins based on destination
+        async function suggestCoins() {
+            if (state.coinSelectionMode !== 'auto') return;
+
+            const outputs = getOutputs().filter(o => o.destination);
+            if (!outputs.length) return;
+
+            const firstDest = outputs[0].destination;
+            const destType = detectDestinationType(firstDest);
+            if (!destType) return;
+
+            // Calculate total amount needed
+            let totalSats = null;
+            const amounts = outputs.map(o => o.amountBtc ? Math.round(o.amountBtc * 100000000) : null);
+            if (amounts.every(a => a !== null)) {
+                totalSats = amounts.reduce((sum, a) => sum + a, 0);
+            }
+
+            try {
+                const response = await fetch(`/plugins/ark/stores/@Model.StoreId/suggest-coins`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'RequestVerificationToken': document.querySelector('input[name="__RequestVerificationToken"]')?.value
+                    },
+                    body: JSON.stringify({
+                        destinationType: destType,
+                        amountSats: totalSats
+                    })
+                });
+
+                const data = await response.json();
+
+                if (!data.error && data.suggestedOutpoints?.length) {
+                    // Select suggested coins
+                    const suggested = new Set(data.suggestedOutpoints);
+                    coinsTable.querySelectorAll('.coin-checkbox').forEach(cb => {
+                        cb.checked = suggested.has(cb.value);
+                    });
+
+                    state.detectedSpendType = data.spendType;
+                    updateCoinsSummary();
+                    estimateFees();
+                }
+            } catch (err) {
+                console.error('Coin suggestion failed:', err);
+            }
+        }
+
+        // Add output row
+        function addOutputRow() {
+            const index = outputsContainer.querySelectorAll('.output-row').length;
+            const template = `
+                <div class="output-row" data-index="${index}">
+                    <div class="row g-3">
+                        <div class="col-12 col-md-8">
+                            <label class="form-label">Address, Invoice, or BIP21</label>
+                            <input type="text"
+                                   name="Outputs[${index}].Destination"
+                                   class="form-control destination-input"
+                                   placeholder="Paste address, invoice, or BIP21 URI..."
+                                   data-index="${index}" />
+                        </div>
+                        <div class="col-12 col-md-3">
+                            <label class="form-label">Amount (BTC)</label>
+                            <input type="number"
+                                   name="Outputs[${index}].AmountBtc"
+                                   class="form-control amount-input"
+                                   placeholder="Optional"
+                                   step="0.00000001"
+                                   min="0"
+                                   data-index="${index}" />
+                        </div>
+                        <div class="col-12 col-md-1 d-flex align-items-end">
+                            <button type="button" class="btn btn-outline-danger remove-output-btn" data-index="${index}">
+                                <span>&times;</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="mt-2">
+                        <span class="destination-type-badge badge" data-index="${index}"></span>
+                    </div>
+                </div>
+            `;
+            outputsContainer.insertAdjacentHTML('beforeend', template);
+        }
+
+        // Remove output row and reindex
+        function removeOutputRow(index) {
+            const row = outputsContainer.querySelector(`.output-row[data-index="${index}"]`);
+            if (row) {
+                row.remove();
+                reindexOutputs();
+                updateDestinationBadges();
+                estimateFees();
+            }
+        }
+
+        // Reindex output rows after removal
+        function reindexOutputs() {
+            const rows = outputsContainer.querySelectorAll('.output-row');
+            rows.forEach((row, i) => {
+                row.dataset.index = i;
+                row.querySelectorAll('[data-index]').forEach(el => el.dataset.index = i);
+                row.querySelectorAll('[name*="Outputs["]').forEach(input => {
+                    input.name = input.name.replace(/Outputs\[\d+\]/, `Outputs[${i}]`);
+                });
+            });
+        }
+
+        // Event listeners
+        addOutputBtn?.addEventListener('click', addOutputRow);
+
+        outputsContainer?.addEventListener('click', function(e) {
+            const removeBtn = e.target.closest('.remove-output-btn');
+            if (removeBtn) {
+                removeOutputRow(parseInt(removeBtn.dataset.index));
+            }
+        });
+
+        outputsContainer?.addEventListener('input', debounce(function(e) {
+            if (e.target.classList.contains('destination-input')) {
+                updateDestinationBadges();
+                suggestCoins();
+            } else if (e.target.classList.contains('amount-input')) {
+                estimateFees();
+            }
+        }, 300));
+
+        coinsTable?.addEventListener('change', function(e) {
+            if (e.target.classList.contains('coin-checkbox')) {
+                state.coinSelectionMode = 'manual';
+                updateCoinsSummary();
+                estimateFees();
+            }
+        });
+
+        selectAllCoins?.addEventListener('change', function() {
+            const checkboxes = coinsTable.querySelectorAll('.coin-checkbox');
+            checkboxes.forEach(cb => cb.checked = this.checked);
+            state.coinSelectionMode = 'manual';
+            updateCoinsSummary();
+            estimateFees();
+        });
+
+        // Initialize
+        updateDestinationBadges();
+        updateCoinsSummary();
+
+        // If pre-selected coins, estimate fees
+        if (getSelectedCoins().length > 0 && getOutputs().some(o => o.destination)) {
+            estimateFees();
+        }
+    })();
     </script>
 }
