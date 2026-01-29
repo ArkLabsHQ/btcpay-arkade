@@ -953,6 +953,118 @@ public class ArkController(
         return Json(response);
     }
 
+    /// <summary>
+    /// Unified Send Wizard - main entry point.
+    /// </summary>
+    [HttpGet("stores/{storeId}/send")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> Send(
+        string storeId,
+        string? vtxos,
+        string? destinations,
+        string? destination,
+        CancellationToken token)
+    {
+        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: false);
+        if (errorResult != null)
+            return errorResult;
+
+        var model = new SendWizardViewModel
+        {
+            StoreId = storeId,
+            VtxoOutpoints = vtxos,
+            Destinations = destinations,
+            Destination = destination
+        };
+
+        // Load balances
+        model.Balances = await GetArkBalances(config!.WalletId!, token);
+
+        // Load available (spendable) coins - get outpoints from ArkCoin, then fetch ArkVtxo details
+        var allCoins = await arkadeSpender.GetAvailableCoins(config.WalletId!, token);
+        var spendableOutpoints = allCoins.Select(c => c.Outpoint).ToList();
+
+        if (!spendableOutpoints.Any())
+        {
+            model.Errors.Add("No spendable coins available");
+            return View("Send", model);
+        }
+
+        // Fetch full ArkVtxo details for the spendable coins
+        var availableVtxos = await vtxoStorage.GetVtxos(new VtxoFilter
+        {
+            Outpoints = spendableOutpoints,
+            WalletIds = new[] { config.WalletId! },
+            IncludeSpent = false,
+            IncludeRecoverable = true
+        }, token);
+        model.AvailableVtxos = availableVtxos.ToList();
+
+        if (!model.AvailableVtxos.Any())
+        {
+            model.Errors.Add("No spendable coins available");
+            return View("Send", model);
+        }
+
+        // Handle pre-selected VTXOs from query param
+        if (!string.IsNullOrEmpty(vtxos))
+        {
+            var requestedOutpoints = vtxos.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => s.Trim())
+                .ToHashSet();
+
+            model.SelectedVtxos = model.AvailableVtxos
+                .Where(v => requestedOutpoints.Contains($"{v.TransactionId}:{v.TransactionOutputIndex}"))
+                .ToList();
+
+            model.CoinSelectionMode = "manual";
+
+            // Warn if some requested coins unavailable
+            if (model.SelectedVtxos.Count < requestedOutpoints.Count)
+            {
+                var found = model.SelectedVtxos
+                    .Select(v => $"{v.TransactionId}:{v.TransactionOutputIndex}")
+                    .ToHashSet();
+                var missing = requestedOutpoints.Except(found).Count();
+                model.Errors.Add($"{missing} selected coin(s) no longer available");
+            }
+        }
+
+        // Handle pre-filled destinations
+        if (!string.IsNullOrEmpty(destinations))
+        {
+            // Format: addr1:amt1,addr2:amt2,...
+            var parts = destinations.Split(',', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var part in parts)
+            {
+                var segments = part.Split(':', 2);
+                var output = new SendOutputViewModel
+                {
+                    Destination = segments[0].Trim()
+                };
+
+                if (segments.Length > 1 && decimal.TryParse(segments[1], out var amt))
+                {
+                    output.AmountBtc = amt;
+                }
+
+                model.Outputs.Add(output);
+            }
+        }
+        else if (!string.IsNullOrEmpty(destination))
+        {
+            // Single destination (BIP21, address, invoice)
+            model.Outputs.Add(new SendOutputViewModel { Destination = destination });
+        }
+        else
+        {
+            // Default: one empty output row
+            model.Outputs.Add(new SendOutputViewModel());
+        }
+
+        return View("Send", model);
+    }
+
     private static SuggestCoinsResponse SelectCoins(
         List<ArkCoin> coins,
         long? targetSats,
