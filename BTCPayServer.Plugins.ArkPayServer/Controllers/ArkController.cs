@@ -1065,6 +1065,168 @@ public class ArkController(
         return View("Send", model);
     }
 
+    /// <summary>
+    /// Execute the send transaction.
+    /// </summary>
+    [HttpPost("stores/{storeId}/send")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> Send(
+        string storeId,
+        [FromForm] SendWizardViewModel model,
+        [FromForm] string[] selectedVtxoOutpoints,
+        CancellationToken token)
+    {
+        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: false);
+        if (errorResult != null)
+            return errorResult;
+
+        model.StoreId = storeId;
+        model.Balances = await GetArkBalances(config!.WalletId!, token);
+
+        // Re-load available coins for validation
+        var allCoins = await arkadeSpender.GetAvailableCoins(config.WalletId!, token);
+        var spendableOutpoints = allCoins.Select(c => c.Outpoint).ToList();
+        var availableVtxos = await vtxoStorage.GetVtxos(new VtxoFilter
+        {
+            Outpoints = spendableOutpoints,
+            WalletIds = new[] { config.WalletId! },
+            IncludeSpent = false,
+            IncludeRecoverable = true
+        }, token);
+        model.AvailableVtxos = availableVtxos.ToList();
+
+        // Validate selected coins
+        if (!selectedVtxoOutpoints.Any())
+        {
+            model.Errors.Add("No coins selected");
+            return View("Send", model);
+        }
+
+        var selectedSet = selectedVtxoOutpoints.ToHashSet();
+        var selectedCoins = allCoins
+            .Where(c => selectedSet.Contains($"{c.Outpoint.Hash}:{c.Outpoint.N}"))
+            .ToList();
+
+        if (selectedCoins.Count != selectedVtxoOutpoints.Length)
+        {
+            model.Errors.Add("Some selected coins are no longer available");
+            return View("Send", model);
+        }
+
+        model.SelectedVtxos = model.AvailableVtxos
+            .Where(v => selectedSet.Contains($"{v.TransactionId}:{v.TransactionOutputIndex}"))
+            .ToList();
+
+        // Validate outputs
+        var validOutputs = model.Outputs.Where(o => !string.IsNullOrWhiteSpace(o.Destination)).ToList();
+        if (!validOutputs.Any())
+        {
+            model.Errors.Add("At least one destination required");
+            return View("Send", model);
+        }
+
+        // Check for Lightning
+        var isLightning = validOutputs.Any(o =>
+            o.Destination.StartsWith("ln", StringComparison.OrdinalIgnoreCase) ||
+            o.Destination.StartsWith("lightning:", StringComparison.OrdinalIgnoreCase));
+
+        if (isLightning)
+        {
+            if (validOutputs.Count > 1)
+            {
+                model.Errors.Add("Lightning supports single output only");
+                return View("Send", model);
+            }
+
+            if (selectedCoins.Any(c => c.Swept))
+            {
+                model.Errors.Add("Lightning requires non-recoverable coins");
+                return View("Send", model);
+            }
+
+            // Execute Lightning payment
+            try
+            {
+                var lnDestination = validOutputs[0].Destination
+                    .Replace("lightning:", "", StringComparison.OrdinalIgnoreCase);
+                await arkadeSpendingService.Spend(store!, lnDestination, token);
+                return RedirectWithSuccess(nameof(StoreOverview), "Lightning payment sent!", new { storeId });
+            }
+            catch (Exception ex)
+            {
+                model.Errors.Add($"Lightning payment failed: {ex.Message}");
+                return View("Send", model);
+            }
+        }
+
+        // Parse all destinations and build ArkTxOut array
+        var serverInfo = await clientTransport.GetServerInfoAsync(token);
+        var totalInputAmount = selectedCoins.Sum(c => c.TxOut.Value.Satoshi);
+        var arkOutputs = new List<ArkTxOut>();
+
+        for (int i = 0; i < validOutputs.Count; i++)
+        {
+            var output = validOutputs[i];
+            var spendOutput = new SpendOutputViewModel { Destination = output.Destination };
+            var (dest, parsedAmount, outputType) = ParseOutputDestination(spendOutput, serverInfo.Network);
+
+            if (dest == null)
+            {
+                output.Error = "Invalid address format";
+                model.Errors.Add($"Output {i + 1}: Invalid address format");
+                continue;
+            }
+
+            // Amount priority: user-specified > destination-specified > (single output: send all)
+            var outputAmount = output.AmountSats.HasValue
+                ? Money.Satoshis(output.AmountSats.Value)
+                : parsedAmount;
+
+            if (outputAmount == null || outputAmount == Money.Zero)
+            {
+                if (validOutputs.Count == 1)
+                {
+                    // Single output with no amount - send all
+                    outputAmount = Money.Satoshis(totalInputAmount);
+                }
+                else
+                {
+                    output.Error = "Amount is required";
+                    model.Errors.Add($"Output {i + 1}: Amount is required");
+                    continue;
+                }
+            }
+
+            arkOutputs.Add(new ArkTxOut(outputType, outputAmount, dest));
+        }
+
+        if (model.Errors.Any())
+        {
+            return View("Send", model);
+        }
+
+        // Execute the spend
+        try
+        {
+            var txId = await arkadeSpender.Spend(
+                config.WalletId!,
+                selectedCoins.ToArray(),
+                arkOutputs.ToArray(),
+                token);
+
+            // Poll for VTXO updates
+            var activeScripts = await contractStorage.GetActiveContractScriptsAsync(config.WalletId!, token);
+            await vtxoPollingService.PollScriptsForVtxos(activeScripts.ToHashSet(), token);
+
+            return RedirectWithSuccess(nameof(StoreOverview), $"Transaction sent successfully! TxId: {txId}", new { storeId });
+        }
+        catch (Exception ex)
+        {
+            model.Errors.Add($"Transaction failed: {ex.Message}");
+            return View("Send", model);
+        }
+    }
+
     private static SuggestCoinsResponse SelectCoins(
         List<ArkCoin> coins,
         long? targetSats,
