@@ -1095,12 +1095,51 @@ public class ArkController(
             .Where(v => selectedSet.Contains($"{v.TransactionId}:{v.TransactionOutputIndex}"))
             .ToList();
 
-        // Validate outputs
+        // Validate outputs - allow empty for consolidation
         var validOutputs = model.Outputs.Where(o => !string.IsNullOrWhiteSpace(o.Destination)).ToList();
-        if (!validOutputs.Any())
+        var isConsolidation = !validOutputs.Any();
+
+        // Handle consolidation (no destination = send to self)
+        if (isConsolidation)
         {
-            model.Errors.Add("At least one destination required");
-            return View("Send", model);
+            try
+            {
+                var consolidationServerInfo = await clientTransport.GetServerInfoAsync(token);
+                var consolidationTotalInput = selectedCoins.Sum(c => c.TxOut.Value.Satoshi);
+
+                // Get the wallet's own Ark address for consolidation
+                var contract = await contractStorage.GetFirstActiveContractAsync(config.WalletId!, token);
+                if (contract == null)
+                {
+                    model.Errors.Add("No contract found for consolidation");
+                    return View("Send", model);
+                }
+
+                var serverKey = consolidationServerInfo.SignerKey.Extract().XOnlyPubKey;
+                var selfDest = ArkAddress.FromScriptPubKey(Script.FromHex(contract.Script), serverKey);
+
+                var consolidationOutput = new ArkTxOut(
+                    ArkTxOutType.Vtxo,
+                    Money.Satoshis(consolidationTotalInput),
+                    selfDest);
+
+                var txId = await arkadeSpender.Spend(
+                    config.WalletId!,
+                    selectedCoins.ToArray(),
+                    new[] { consolidationOutput },
+                    token);
+
+                // Poll for VTXO updates
+                var activeScripts = await contractStorage.GetActiveContractScriptsAsync(config.WalletId!, token);
+                await vtxoPollingService.PollScriptsForVtxos(activeScripts.ToHashSet(), token);
+
+                return RedirectWithSuccess(nameof(StoreOverview), $"Coins consolidated successfully! TxId: {txId}", new { storeId });
+            }
+            catch (Exception ex)
+            {
+                model.Errors.Add($"Consolidation failed: {ex.Message}");
+                return View("Send", model);
+            }
         }
 
         // Check for Lightning

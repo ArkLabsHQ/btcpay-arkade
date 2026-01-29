@@ -141,7 +141,7 @@ else
                                            name="Outputs[@i].Destination"
                                            value="@output.Destination"
                                            class="form-control destination-input"
-                                           placeholder="Paste address, invoice, or BIP21 URI..."
+                                           placeholder="Leave empty to consolidate, or paste address..."
                                            data-index="@i" />
                                     @if (!string.IsNullOrEmpty(output.Error))
                                     {
@@ -442,9 +442,18 @@ else
         // Estimate fees
         const estimateFees = debounce(async function() {
             const selectedCoins = getSelectedCoins();
-            const outputs = getOutputs().filter(o => o.destination);
+            const outputs = getOutputs();
+            const hasDestinations = outputs.some(o => o.destination);
+            const isConsolidation = !hasDestinations && selectedCoins.length > 0;
 
-            if (!selectedCoins.length || !outputs.length) {
+            if (!selectedCoins.length) {
+                feeDisplay.textContent = '--';
+                sendBtn.disabled = true;
+                return;
+            }
+
+            // For consolidation (no destination), we still allow the send
+            if (!hasDestinations && !isConsolidation) {
                 feeDisplay.textContent = '--';
                 sendBtn.disabled = true;
                 return;
@@ -470,7 +479,7 @@ else
                     body: JSON.stringify({
                         vtxoOutpoints: selectedCoins,
                         totalInputSats: totalInputSats,
-                        outputs: outputs.map(o => ({
+                        outputs: outputs.filter(o => o.destination).map(o => ({
                             destination: o.destination,
                             amountSats: o.amountBtc ? Math.round(o.amountBtc * 100000000) : null
                         }))
@@ -504,13 +513,17 @@ else
         // Update review section
         function updateReviewSection(coins, outputs, feeData) {
             const totalInput = coins.length;
-            const totalOutputs = outputs.length;
+            const totalOutputs = outputs.filter(o => o.destination).length;
+            const isConsolidation = totalOutputs === 0;
 
             let spendType = 'Batch';
-            if (state.isLightning) spendType = 'Lightning Swap';
+            if (isConsolidation) spendType = 'Consolidation';
+            else if (state.isLightning) spendType = 'Lightning Swap';
             else if (feeData.isOffchain) spendType = 'Offchain';
 
-            reviewSummary.textContent = `${totalOutputs} output(s) via ${spendType}`;
+            reviewSummary.textContent = isConsolidation
+                ? `Consolidating ${totalInput} coin(s)`
+                : `${totalOutputs} output(s) via ${spendType}`;
 
             let html = '<dl class="row mb-0">';
             html += `<dt class="col-sm-4">Inputs</dt><dd class="col-sm-8">${totalInput} coin(s)</dd>`;

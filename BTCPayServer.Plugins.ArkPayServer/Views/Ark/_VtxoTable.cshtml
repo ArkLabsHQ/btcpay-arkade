@@ -1,67 +1,179 @@
 @using BTCPayServer.Abstractions.Extensions
 @using BTCPayServer.Plugins.ArkPayServer.Helpers
+@using NArk.Abstractions.Blockchain
 @using NBitcoin
+@using NArk.Abstractions.VTXOs
 @inject ArkNetworkConfig ArkNetworkConfig
-@model IEnumerable<BTCPayServer.Plugins.ArkPayServer.Data.Entities.VTXO>
+@inject IChainTimeProvider ChainTimeProvider
+@model IEnumerable<ArkVtxo>
+
+@{
+    var showMassSelect = ViewData["ShowMassSelect"] as bool? ?? false;
+    var formAction = ViewData["FormAction"] as string ?? "";
+    var storeId = ViewData["StoreId"] as string ?? "";
+    var contractScript = ViewData["ContractScript"] as string ?? "";
+    var formId = $"vtxo-sublist-form-{contractScript.GetHashCode()}";
+    var chainTime = await ChainTimeProvider.GetChainTime(Context.RequestAborted);
+}
 
 @if (Model.Any())
 {
-    <div class="table-responsive">
-        <table class="table table-sm mb-0">
-            <thead>
-                <tr>
-                    <th text-translate="true">Outpoint</th>
-                    <th text-translate="true">Amount</th>
-                    <th text-translate="true">@(ViewData["TimeColumnLabel"] ?? "Seen")</th>
-                    <th text-translate="true">Status</th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach (var vtxo in Model)
-                {
-                    var outpoint = ArkadeLinkHelper.FormatOutpoint(vtxo.TransactionId, (uint)vtxo.TransactionOutputIndex);
-                    var link = ArkadeLinkHelper.GetIndexerLinkForVtxo(ArkNetworkConfig.ArkUri, vtxo.TransactionId, (uint)vtxo.TransactionOutputIndex);
-                    var showLink = ViewData["ShowLinks"] as bool? ?? true;
-                    
+    if (showMassSelect && !string.IsNullOrEmpty(formAction))
+    {
+        <form method="post" action="@formAction" id="@formId">
+            <input type="hidden" name="storeId" value="@storeId" />
+            <input type="hidden" name="contractScript" value="@contractScript" />
+            <div class="table-responsive">
+                <table class="table table-sm mb-0 mass-action">
+                    <thead class="mass-action-head">
+                        <tr>
+                            <th class="mass-action-select-col only-for-js" style="width: 32px;">
+                                <input type="checkbox" class="form-check-input mass-action-select-all" />
+                            </th>
+                            <th text-translate="true">Outpoint</th>
+                            <th text-translate="true">Amount</th>
+                            <th text-translate="true">Expiry</th>
+                            <th text-translate="true">Status</th>
+                        </tr>
+                    </thead>
+                    <thead class="mass-action-actions">
+                        <tr>
+                            <th class="mass-action-select-col only-for-js">
+                                <input type="checkbox" class="form-check-input mass-action-select-all" />
+                            </th>
+                            <th colspan="4">
+                                <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+                                    <div>
+                                        <strong class="mass-action-selected-count">0</strong>
+                                        <span text-translate="true">selected</span>
+                                    </div>
+                                    <div class="d-inline-flex align-items-center gap-3">
+                                        <button type="submit" name="command" value="build-intent" class="btn btn-link">
+                                            <vc:icon symbol="actions-send" />
+                                            <span text-translate="true">Spend</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var vtxo in Model)
+                        {
+                            var outpoint = ArkadeLinkHelper.FormatOutpoint(vtxo.TransactionId, vtxo.TransactionOutputIndex);
+                            var link = ArkadeLinkHelper.GetIndexerLinkForVtxo(ArkNetworkConfig.ArkUri, vtxo.TransactionId, vtxo.TransactionOutputIndex);
+                            var showLink = ViewData["ShowLinks"] as bool? ?? true;
+                            var outpointValue = $"{vtxo.TransactionId}:{vtxo.TransactionOutputIndex}";
+
+                            <tr class="mass-action-row">
+                                <td class="only-for-js align-middle">
+                                    <input name="selectedItems" type="checkbox" class="form-check-input mass-action-select" value="@outpointValue" />
+                                </td>
+                                <td>
+                                    @if (showLink)
+                                    {
+                                        <vc:truncate-center link="@link" text="@outpoint" classes="truncate-center-id"/>
+                                    }
+                                    else
+                                    {
+                                        <vc:truncate-center text="@outpoint" classes="truncate-center-id"/>
+                                    }
+                                </td>
+                                <td>@Money.Satoshis((long)vtxo.Amount).ToDecimal(MoneyUnit.BTC) BTC</td>
+                                <td>
+                                    @if (vtxo.ExpiresAt.HasValue)
+                                    {
+                                        <span class="vtxo-expiry" data-expires="@vtxo.ExpiresAt.Value.ToUnixTimeSeconds()">
+                                            @vtxo.ExpiresAt.Value.ToTimeAgo()
+                                        </span>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted">-</span>
+                                    }
+                                </td>
+                                <td>
+                                    @if (vtxo.IsSpent())
+                                    {
+                                        <span class="badge text-bg-secondary">Spent</span>
+                                    }
+                                    else if (vtxo.IsRecoverable(chainTime))
+                                    {
+                                        <span class="badge text-bg-warning">Recoverable</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge text-bg-success">Unspent</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </form>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table table-sm mb-0">
+                <thead>
                     <tr>
-                        <td>
-                            @if (showLink)
-                            {
-                                <vc:truncate-center link="@link" text="@outpoint" classes="truncate-center-id"/>
-                            }
-                            else
-                            {
-                                <vc:truncate-center text="@outpoint" classes="truncate-center-id"/>
-                            }
-                        </td>
-                        <td>@Money.Satoshis(vtxo.Amount).ToDecimal(MoneyUnit.BTC) BTC</td>
-                        <td>
-                            @if (ViewData["UseTimeAgo"] as bool? ?? false)
-                            {
-                                @vtxo.SeenAt.ToTimeAgo()
-                            }
-                            else
-                            {
-                                @vtxo.SeenAt.ToBrowserDate()
-                            }
-                        </td>
-                        <td>
-                            @if (vtxo.SpentByTransactionId != null)
-                            {
-                                <span class="badge text-bg-secondary">Spent</span>
-                            }
-                            else if (vtxo.Recoverable)
-                            {
-                                <span class="badge text-bg-warning">Recoverable</span>
-                            }
-                            else
-                            {
-                                <span class="badge text-bg-success">Unspent</span>
-                            }
-                        </td>
+                        <th text-translate="true">Outpoint</th>
+                        <th text-translate="true">Amount</th>
+                        <th text-translate="true">Expiry</th>
+                        <th text-translate="true">Status</th>
                     </tr>
-                }
-            </tbody>
-        </table>
-    </div>
+                </thead>
+                <tbody>
+                    @foreach (var vtxo in Model)
+                    {
+                        var outpoint = ArkadeLinkHelper.FormatOutpoint(vtxo.TransactionId, vtxo.TransactionOutputIndex);
+                        var link = ArkadeLinkHelper.GetIndexerLinkForVtxo(ArkNetworkConfig.ArkUri, vtxo.TransactionId, vtxo.TransactionOutputIndex);
+                        var showLink = ViewData["ShowLinks"] as bool? ?? true;
+
+                        <tr>
+                            <td>
+                                @if (showLink)
+                                {
+                                    <vc:truncate-center link="@link" text="@outpoint" classes="truncate-center-id"/>
+                                }
+                                else
+                                {
+                                    <vc:truncate-center text="@outpoint" classes="truncate-center-id"/>
+                                }
+                            </td>
+                            <td>@Money.Satoshis((long)vtxo.Amount).ToDecimal(MoneyUnit.BTC) BTC</td>
+                            <td>
+                                @if (vtxo.ExpiresAt.HasValue)
+                                {
+                                    <span class="vtxo-expiry" data-expires="@vtxo.ExpiresAt.Value.ToUnixTimeSeconds()">
+                                        @vtxo.ExpiresAt.Value.ToTimeAgo()
+                                    </span>
+                                }
+                                else
+                                {
+                                    <span class="text-muted">-</span>
+                                }
+                            </td>
+                            <td>
+                                @if (vtxo.IsSpent())
+                                {
+                                    <span class="badge text-bg-secondary">Spent</span>
+                                }
+                                else if (vtxo.IsRecoverable(chainTime))
+                                {
+                                    <span class="badge text-bg-warning">Recoverable</span>
+                                }
+                                else
+                                {
+                                    <span class="badge text-bg-success">Unspent</span>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
 }
