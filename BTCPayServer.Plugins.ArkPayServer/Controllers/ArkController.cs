@@ -831,6 +831,128 @@ public class ArkController(
         }
     }
 
+    /// <summary>
+    /// Pre-flight validation before executing spend.
+    /// </summary>
+    [HttpPost("stores/{storeId}/validate-spend")]
+    public async Task<IActionResult> ValidateSpend(
+        string storeId,
+        [FromBody] ValidateSpendRequest request,
+        CancellationToken token)
+    {
+        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: false);
+        if (errorResult != null)
+            return Json(new ValidateSpendResponse { Errors = { "Store not configured" } });
+
+        var response = new ValidateSpendResponse();
+        var hasLightning = false;
+        var hasRecoverableCoins = false;
+
+        // Validate coins exist and are spendable
+        if (request.VtxoOutpoints.Any())
+        {
+            var outpoints = ParseOutpoints(request.VtxoOutpoints.ToArray());
+            var filter = new VtxoFilter
+            {
+                WalletIds = new[] { config!.WalletId! },
+                Outpoints = outpoints.ToList(),
+                IncludeSpent = false,
+                IncludeRecoverable = true
+            };
+
+            var vtxos = await vtxoStorage.GetVtxos(filter, token);
+
+            if (vtxos.Count != request.VtxoOutpoints.Count)
+            {
+                response.Errors.Add("Some selected coins are no longer available");
+            }
+
+            hasRecoverableCoins = vtxos.Any(v => v.Swept);
+        }
+        else
+        {
+            response.Errors.Add("No coins selected");
+        }
+
+        // Get network for address parsing
+        var serverInfo = await clientTransport.GetServerInfoAsync(token);
+        var network = serverInfo.Network;
+
+        // Validate each output
+        for (int i = 0; i < request.Outputs.Count; i++)
+        {
+            var output = request.Outputs[i];
+            var result = new OutputValidationResult { Index = i };
+
+            if (string.IsNullOrWhiteSpace(output.Destination))
+            {
+                result.Error = "Destination required";
+            }
+            else
+            {
+                var destination = output.Destination.Trim();
+
+                // Check for Lightning first
+                if (destination.StartsWith("ln", StringComparison.OrdinalIgnoreCase) ||
+                    destination.StartsWith("lightning:", StringComparison.OrdinalIgnoreCase))
+                {
+                    result.DetectedType = DestinationType.LightningInvoice;
+                    hasLightning = true;
+                }
+                else
+                {
+                    // Use existing ParseOutputDestination helper
+                    var spendOutput = new SpendOutputViewModel { Destination = destination };
+                    var (dest, amount, outputType) = ParseOutputDestination(spendOutput, network);
+
+                    if (dest == null)
+                    {
+                        result.Error = "Invalid address format";
+                    }
+                    else if (outputType == ArkTxOutType.Vtxo)
+                    {
+                        result.DetectedType = DestinationType.ArkAddress;
+                    }
+                    else
+                    {
+                        result.DetectedType = DestinationType.BitcoinAddress;
+                    }
+                }
+            }
+
+            response.OutputResults.Add(result);
+        }
+
+        // Cross-validation rules
+        if (hasLightning)
+        {
+            if (request.Outputs.Count > 1)
+            {
+                response.Errors.Add("Lightning supports single output only");
+            }
+            if (hasRecoverableCoins)
+            {
+                response.Errors.Add("Lightning requires non-recoverable coins");
+            }
+            response.SpendType = SpendType.Swap;
+        }
+        else if (response.OutputResults.Any(r => r.DetectedType == DestinationType.BitcoinAddress))
+        {
+            response.SpendType = SpendType.Batch;
+        }
+        else if (hasRecoverableCoins)
+        {
+            response.SpendType = SpendType.Batch;
+        }
+        else
+        {
+            response.SpendType = SpendType.Offchain;
+        }
+
+        response.IsValid = !response.Errors.Any() && !response.OutputResults.Any(r => r.Error != null);
+        return Json(response);
+    }
+
     private static SuggestCoinsResponse SelectCoins(
         List<ArkCoin> coins,
         long? targetSats,
