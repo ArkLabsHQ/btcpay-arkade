@@ -61,59 +61,74 @@ public class EfCoreVtxoStorage : IVtxoStorage
         return isNew;
     }
 
-    public async Task<ArkVtxo?> GetVtxoByOutPoint(OutPoint outpoint, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyCollection<ArkVtxo>> GetVtxos(VtxoFilter filter, CancellationToken cancellationToken = default)
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
-        var txId = outpoint.Hash.ToString();
-        var index = (int)outpoint.N;
+        var query = db.Vtxos.AsQueryable();
 
-        var entity = await db.Vtxos.FirstOrDefaultAsync(
-            v => v.TransactionId == txId && v.TransactionOutputIndex == index,
-            cancellationToken);
+        // Filter by scripts
+        if (filter.Scripts is { Count: > 0 })
+        {
+            var scriptSet = filter.Scripts.ToHashSet();
+            query = query.Where(v => scriptSet.Contains(v.Script));
+        }
 
-        return entity == null ? null : MapToArkVtxo(entity);
-    }
+        // Filter by outpoints
+        if (filter.Outpoints is { Count: > 0 })
+        {
+            var outpointPairs = filter.Outpoints
+                .Select(op => $"{op.Hash}{op.N}")
+                .ToHashSet();
+            query = query.Where(v => outpointPairs.Contains(v.TransactionId + v.TransactionOutputIndex));
+        }
 
-    public async Task<IReadOnlyCollection<ArkVtxo>> GetVtxosByScripts(
-        IReadOnlyCollection<string> scripts,
-        bool allowSpent = false,
-        CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        // Filter by wallet IDs (join with WalletContracts)
+        if (filter.WalletIds is { Length: > 0 })
+        {
+            var walletScripts = db.WalletContracts
+                .Where(c => filter.WalletIds.Contains(c.WalletId))
+                .Select(c => c.Script);
+            query = query.Where(v => walletScripts.Contains(v.Script));
+        }
 
-        var scriptSet = scripts.ToHashSet();
-        var query = db.Vtxos.Where(v => scriptSet.Contains(v.Script));
-
-        if (!allowSpent)
+        // Filter by spent state
+        if (!filter.IncludeSpent)
         {
             query = query.Where(v =>
                 (v.SpentByTransactionId ?? "").Length == 0 &&
                 (v.SettledByTransactionId ?? "").Length == 0);
         }
 
-        var entities = await query.ToListAsync(cancellationToken);
-        return entities.Select(MapToArkVtxo).ToList();
-    }
+        // Filter by recoverable state
+        if (!filter.IncludeRecoverable)
+        {
+            query = query.Where(v => !v.Recoverable);
+        }
 
-    public async Task<IReadOnlyCollection<ArkVtxo>> GetUnspentVtxos(CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        // Search text filter
+        if (!string.IsNullOrEmpty(filter.SearchText))
+        {
+            query = query.Where(v =>
+                v.TransactionId.Contains(filter.SearchText) ||
+                v.Script.Contains(filter.SearchText));
+        }
 
-        var entities = await db.Vtxos
-            .Where(v =>
-                (v.SpentByTransactionId ?? "").Length == 0 &&
-                (v.SettledByTransactionId ?? "").Length == 0)
-            .ToListAsync(cancellationToken);
+        // Order by creation date (newest first) for consistent pagination
+        query = query.OrderByDescending(v => v.SeenAt);
 
-        return entities.Select(MapToArkVtxo).ToList();
-    }
+        // Pagination
+        if (filter.Skip.HasValue)
+        {
+            query = query.Skip(filter.Skip.Value);
+        }
 
-    public async Task<IReadOnlyCollection<ArkVtxo>> GetAllVtxos(CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        if (filter.Take.HasValue)
+        {
+            query = query.Take(filter.Take.Value);
+        }
 
-        var entities = await db.Vtxos.ToListAsync(cancellationToken);
+        var entities = await query.AsNoTracking().ToListAsync(cancellationToken);
         return entities.Select(MapToArkVtxo).ToList();
     }
 
@@ -134,6 +149,29 @@ public class EfCoreVtxoStorage : IVtxoStorage
     }
 
     #region Plugin-specific methods (wallet-guarded)
+
+    /// <summary>
+    /// Gets a VTXO by outpoint for a specific wallet.
+    /// </summary>
+    public async Task<VTXO?> GetVtxoByOutpointAsync(
+        string walletId,
+        string transactionId,
+        int outputIndex,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        // Get wallet's contract scripts to verify ownership
+        var walletScripts = await db.WalletContracts
+            .Where(c => c.WalletId == walletId)
+            .Select(c => c.Script)
+            .ToListAsync(cancellationToken);
+
+        return await db.Vtxos
+            .Where(v => v.TransactionId == transactionId && v.TransactionOutputIndex == outputIndex)
+            .Where(v => walletScripts.Contains(v.Script))
+            .FirstOrDefaultAsync(cancellationToken);
+    }
 
     /// <summary>
     /// Gets unspent VTXOs for a wallet's contracts.
