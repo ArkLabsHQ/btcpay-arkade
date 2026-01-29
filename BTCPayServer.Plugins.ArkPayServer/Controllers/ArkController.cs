@@ -264,42 +264,20 @@ public class ArkController(
         });
     }
 
+    /// <summary>
+    /// Legacy redirect - SpendOverview now redirects to Send wizard.
+    /// </summary>
     [HttpGet("stores/{storeId}/spend")]
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
-    public async Task<IActionResult> SpendOverview(string[]? destinations, string? vtxoOutpoints, bool isIntent = true, CancellationToken token = default)
+    public IActionResult SpendOverview(string storeId, string[]? destinations, string? vtxoOutpoints)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: true);
-        if (errorResult != null) return errorResult;
+        // Convert old parameters to new format
+        var vtxos = vtxoOutpoints;
+        var destinationsParam = destinations != null && destinations.Length > 0
+            ? string.Join(",", destinations)
+            : null;
 
-        var balances = await GetArkBalances(config!.WalletId!, token);
-
-        // If vtxoOutpoints is provided, show the intent builder view
-        if (!string.IsNullOrEmpty(vtxoOutpoints))
-        {
-            // Special case: "all" means select all spendable VTXOs
-            var outpointsToUse = vtxoOutpoints;
-            if (vtxoOutpoints.Equals("all", StringComparison.OrdinalIgnoreCase))
-            {
-                var allCoins = await arkadeSpender.GetAvailableCoins(config.WalletId!, token);
-                outpointsToUse = string.Join(",", allCoins.Select(c => $"{c.Outpoint.Hash}:{c.Outpoint.N}"));
-
-                if (string.IsNullOrEmpty(outpointsToUse))
-                {
-                    TempData[WellKnownTempData.ErrorMessage] = "No spendable VTXOs available to join batch.";
-                    return RedirectToAction(nameof(StoreOverview), new { storeId = store!.Id });
-                }
-            }
-
-            var model = await BuildIntentBuilderViewModel(store!.Id, config.WalletId!, outpointsToUse, isIntent, balances, token);
-            return View("IntentBuilder", model);
-        }
-
-        // Otherwise show the simple transfer view
-        return View(new SpendOverviewViewModel
-        {
-            PrefilledDestination = destinations?.ToList() ?? [],
-            Balances = balances
-        });
+        return RedirectToAction(nameof(Send), new { storeId, vtxos, destinations = destinationsParam });
     }
 
     private async Task<IntentBuilderViewModel> BuildIntentBuilderViewModel(
@@ -2379,14 +2357,9 @@ public class ArkController(
             switch (command)
             {
                 case "build-intent":
-                    // Parse outpoints and build intent
-                    var outpoints = ParseOutpoints(selectedItems);
-                    // Redirect to intent builder with selected VTXOs
-                    return RedirectToAction(nameof(SpendOverview), new { storeId, vtxoOutpoints = string.Join(",", selectedItems) });
-
                 case "build-transaction":
-                    // Redirect to transaction builder
-                    return RedirectToAction(nameof(SpendOverview), new { storeId, vtxoOutpoints = string.Join(",", selectedItems) });
+                    // Redirect to new unified Send wizard
+                    return RedirectToAction(nameof(Send), new { storeId, vtxos = string.Join(",", selectedItems) });
 
                 case "refresh-state":
                     // Get wallet scripts and poll for updates
