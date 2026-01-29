@@ -1,0 +1,324 @@
+@using BTCPayServer.Abstractions.Contracts
+@using BTCPayServer.Abstractions.Extensions
+@using BTCPayServer.Plugins.ArkPayServer.Helpers
+@using NBitcoin
+@using NArk.Abstractions.VTXOs
+@model BTCPayServer.Plugins.ArkPayServer.Models.SendWizardViewModel
+@inject IScopeProvider ScopeProvider
+@inject ArkNetworkConfig ArkNetworkConfig
+
+@{
+    ViewData.SetActivePage(category: "Ark", activePage: "Send", title: "Ark - Send");
+    var storeId = ScopeProvider.GetCurrentStoreId();
+}
+
+@section PageHeadContent
+{
+    <link rel="stylesheet" href="~/plugins/ArkPayServer/css/ark-plugin.css" asp-append-version="true" />
+    <style>
+        .wizard-section {
+            border: 1px solid var(--btcpay-body-border-light);
+            border-radius: 4px;
+            margin-bottom: 1rem;
+        }
+        .wizard-section-header {
+            padding: 0.75rem 1rem;
+            background: var(--btcpay-body-bg);
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .wizard-section-header:hover {
+            background: var(--btcpay-body-bg-hover);
+        }
+        .wizard-section-body {
+            padding: 1rem;
+            border-top: 1px solid var(--btcpay-body-border-light);
+        }
+        .wizard-section.collapsed .wizard-section-body {
+            display: none;
+        }
+        .wizard-section.collapsed .wizard-section-header .section-icon {
+            transform: rotate(-90deg);
+        }
+        .section-icon {
+            transition: transform 0.2s;
+        }
+        .section-summary {
+            font-size: 0.875rem;
+            color: var(--btcpay-body-text-muted);
+        }
+        .output-row {
+            border: 1px solid var(--btcpay-body-border-light);
+            border-radius: 4px;
+            padding: 1rem;
+            margin-bottom: 0.5rem;
+        }
+        .coin-summary {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+        .spend-type-badge {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.5rem;
+        }
+        .destination-type-badge:empty {
+            display: none;
+        }
+    </style>
+}
+
+<div class="sticky-header">
+    <h2>
+        <span>@ViewData["Title"]</span>
+        <a href="#descriptor" data-bs-toggle="collapse">
+            <vc:icon symbol="info" />
+        </a>
+    </h2>
+</div>
+
+<div id="descriptor" class="collapse">
+    <div class="d-flex px-4 py-4 mb-4 bg-tile rounded">
+        <div class="flex-fill">
+            <p text-translate="true" class="mb-2">Send funds using the Ark protocol.</p>
+            <p text-translate="true" class="mb-3">Supports Ark addresses (instant offchain), Bitcoin addresses (batch settlement), and Lightning invoices (via swap).</p>
+        </div>
+        <button type="button" class="btn-close ms-auto" data-bs-toggle="collapse" data-bs-target="#descriptor" aria-expanded="false" aria-label="Close">
+            <vc:icon symbol="close" />
+        </button>
+    </div>
+</div>
+
+<partial name="_StatusMessage" />
+
+@if (Model.Errors.Any())
+{
+    <div class="alert alert-danger">
+        <ul class="mb-0">
+            @foreach (var error in Model.Errors)
+            {
+                <li>@error</li>
+            }
+        </ul>
+    </div>
+}
+
+@if (!Model.AvailableVtxos.Any())
+{
+    <div class="alert alert-warning">
+        <p class="mb-0" text-translate="true">No spendable coins available. Receive some funds first.</p>
+    </div>
+
+    @if (Model.Balances != null)
+    {
+        <partial name="_ArkBalances" model="Model.Balances" />
+    }
+}
+else
+{
+    <form method="post" asp-action="Send" asp-route-storeId="@Model.StoreId" id="send-wizard-form">
+        <!-- Destination Section -->
+        <div class="wizard-section" id="destination-section">
+            <div class="wizard-section-header" onclick="toggleSection('destination-section')">
+                <div>
+                    <vc:icon symbol="caret-down" css-class="section-icon" />
+                    <strong text-translate="true">Destination</strong>
+                </div>
+                <span class="section-summary" id="destination-summary"></span>
+            </div>
+            <div class="wizard-section-body">
+                <div id="outputs-container">
+                    @for (int i = 0; i < Math.Max(1, Model.Outputs.Count); i++)
+                    {
+                        var output = i < Model.Outputs.Count ? Model.Outputs[i] : new BTCPayServer.Plugins.ArkPayServer.Models.SendOutputViewModel();
+                        <div class="output-row" data-index="@i">
+                            <div class="row g-3">
+                                <div class="col-12 col-md-8">
+                                    <label class="form-label" text-translate="true">Address, Invoice, or BIP21</label>
+                                    <input type="text"
+                                           name="Outputs[@i].Destination"
+                                           value="@output.Destination"
+                                           class="form-control destination-input"
+                                           placeholder="Paste address, invoice, or BIP21 URI..."
+                                           data-index="@i" />
+                                    @if (!string.IsNullOrEmpty(output.Error))
+                                    {
+                                        <div class="text-danger small mt-1">@output.Error</div>
+                                    }
+                                </div>
+                                <div class="col-12 col-md-3">
+                                    <label class="form-label" text-translate="true">Amount (BTC)</label>
+                                    <input type="number"
+                                           name="Outputs[@i].AmountBtc"
+                                           value="@output.AmountBtc"
+                                           class="form-control amount-input"
+                                           placeholder="Optional"
+                                           step="0.00000001"
+                                           min="0"
+                                           data-index="@i" />
+                                </div>
+                                <div class="col-12 col-md-1 d-flex align-items-end">
+                                    @if (i > 0)
+                                    {
+                                        <button type="button" class="btn btn-outline-danger remove-output-btn" data-index="@i">
+                                            <vc:icon symbol="cross" />
+                                        </button>
+                                    }
+                                </div>
+                            </div>
+                            <div class="mt-2">
+                                <span class="destination-type-badge badge" data-index="@i">
+                                    @if (output.DetectedType.HasValue)
+                                    {
+                                        @switch (output.DetectedType.Value)
+                                        {
+                                            case BTCPayServer.Plugins.ArkPayServer.Models.DestinationType.ArkAddress:
+                                                <text>Ark Address</text>
+                                                break;
+                                            case BTCPayServer.Plugins.ArkPayServer.Models.DestinationType.BitcoinAddress:
+                                                <text>Bitcoin Address</text>
+                                                break;
+                                            case BTCPayServer.Plugins.ArkPayServer.Models.DestinationType.LightningInvoice:
+                                                <text>Lightning Invoice</text>
+                                                break;
+                                            case BTCPayServer.Plugins.ArkPayServer.Models.DestinationType.Bip21Uri:
+                                                <text>BIP21 URI</text>
+                                                break;
+                                        }
+                                    }
+                                </span>
+                            </div>
+                        </div>
+                    }
+                </div>
+                <button type="button" id="add-output-btn" class="btn btn-link p-0 mt-2">
+                    <vc:icon symbol="actions-add" />
+                    <span text-translate="true">Add another output</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Coins Section -->
+        <div class="wizard-section @(Model.HasPreselectedCoins ? "" : "collapsed")" id="coins-section">
+            <div class="wizard-section-header" onclick="toggleSection('coins-section')">
+                <div>
+                    <vc:icon symbol="caret-down" css-class="section-icon" />
+                    <strong text-translate="true">Coins</strong>
+                </div>
+                <div class="coin-summary">
+                    <span id="coins-summary">@Model.SelectedCount selected - @Model.TotalSelectedBtc.ToString("0.00000000") BTC</span>
+                    <span class="badge text-bg-secondary" id="selection-mode-badge">@Model.CoinSelectionMode</span>
+                </div>
+            </div>
+            <div class="wizard-section-body">
+                <div class="table-responsive">
+                    <table id="coins-table" class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th style="width: 32px;">
+                                    <input type="checkbox" class="form-check-input" id="select-all-coins" />
+                                </th>
+                                <th text-translate="true">Outpoint</th>
+                                <th text-translate="true">Amount</th>
+                                <th text-translate="true">Expiry</th>
+                                <th text-translate="true">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var vtxo in Model.AvailableVtxos)
+                            {
+                                var outpoint = $"{vtxo.TransactionId}:{vtxo.TransactionOutputIndex}";
+                                var shortOutpoint = ArkadeLinkHelper.FormatOutpoint(vtxo.TransactionId, vtxo.TransactionOutputIndex);
+                                var link = ArkadeLinkHelper.GetIndexerLinkForVtxo(ArkNetworkConfig.ArkUri, vtxo.TransactionId, vtxo.TransactionOutputIndex);
+                                var isSelected = Model.SelectedVtxos.Any(s =>
+                                    s.TransactionId == vtxo.TransactionId &&
+                                    s.TransactionOutputIndex == vtxo.TransactionOutputIndex);
+
+                                <tr>
+                                    <td>
+                                        <input type="checkbox"
+                                               name="selectedVtxoOutpoints"
+                                               value="@outpoint"
+                                               class="form-check-input coin-checkbox"
+                                               @(isSelected ? "checked" : "") />
+                                    </td>
+                                    <td>
+                                        <vc:truncate-center link="@link" text="@shortOutpoint" classes="truncate-center-id"/>
+                                    </td>
+                                    <td>@Money.Satoshis((long)vtxo.Amount).ToDecimal(MoneyUnit.BTC) BTC</td>
+                                    <td>
+                                        @if (vtxo.ExpiresAt.HasValue)
+                                        {
+                                            <span class="vtxo-expiry" data-expires="@vtxo.ExpiresAt.Value.ToUnixTimeSeconds()">
+                                                @vtxo.ExpiresAt.Value.ToTimeAgo()
+                                            </span>
+                                        }
+                                        else
+                                        {
+                                            <span class="text-muted">-</span>
+                                        }
+                                    </td>
+                                    <td>
+                                        @if (vtxo.Swept)
+                                        {
+                                            <span class="badge text-bg-warning">Recoverable</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge text-bg-success">Spendable</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Review Section -->
+        <div class="wizard-section collapsed" id="review-section">
+            <div class="wizard-section-header" onclick="toggleSection('review-section')">
+                <div>
+                    <vc:icon symbol="caret-down" css-class="section-icon" />
+                    <strong text-translate="true">Review</strong>
+                </div>
+                <span class="section-summary" id="review-summary"></span>
+            </div>
+            <div class="wizard-section-body">
+                <div id="review-content">
+                    <p class="text-muted" text-translate="true">Complete the destination to see transaction summary.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="d-flex justify-content-between align-items-center mt-4">
+            <div id="fee-display">
+                <span class="text-muted" text-translate="true">Fee:</span>
+                <span id="fee-amount">--</span>
+            </div>
+            <div class="d-flex gap-2">
+                <a asp-action="StoreOverview" asp-route-storeId="@Model.StoreId" class="btn btn-secondary" text-translate="true">Cancel</a>
+                <button type="submit" class="btn btn-primary" id="send-btn" disabled>
+                    <span text-translate="true">Send</span>
+                </button>
+            </div>
+        </div>
+    </form>
+}
+
+@section PageFootContent
+{
+    <script>
+        // Basic section toggle functionality (JavaScript implementation will be in Task 8)
+        function toggleSection(sectionId) {
+            const section = document.getElementById(sectionId);
+            if (section) {
+                section.classList.toggle('collapsed');
+            }
+        }
+    </script>
+}
