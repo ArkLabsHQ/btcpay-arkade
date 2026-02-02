@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using NArk.Abstractions.VTXOs;
 using NBitcoin;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Data.Entities;
@@ -30,6 +31,22 @@ public class VTXO
     public bool IsSpent()
     {
         return !string.IsNullOrEmpty(SpentByTransactionId) || !string.IsNullOrEmpty(SettledByTransactionId);
+    }
+
+    public ArkVtxo ToArkVtxo()
+    {
+        return new ArkVtxo(
+            Script: Script,
+            TransactionId: TransactionId,
+            TransactionOutputIndex: (uint)TransactionOutputIndex,
+            Amount: (ulong)Amount,
+            SpentByTransactionId: SpentByTransactionId,
+            SettledByTransactionId: SettledByTransactionId,
+            Swept: Recoverable,
+            CreatedAt: SeenAt,
+            ExpiresAt: ExpiresAt == DateTimeOffset.MaxValue ? null : ExpiresAt,
+            ExpiresAtHeight: ExpiresAtHeight
+        );
     }
 
     public override int GetHashCode()

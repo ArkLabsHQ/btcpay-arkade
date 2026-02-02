@@ -1,6 +1,7 @@
 using BTCPayServer.Plugins.ArkPayServer.Data;
 using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using Microsoft.EntityFrameworkCore;
+using NArk.Abstractions.Safety;
 using NArk.Abstractions.VTXOs;
 using NBitcoin;
 
@@ -13,17 +14,24 @@ namespace BTCPayServer.Plugins.ArkPayServer.Storage;
 public class EfCoreVtxoStorage : IVtxoStorage
 {
     private readonly IDbContextFactory<ArkPluginDbContext> _dbContextFactory;
+    private readonly ISafetyService _safetyService;
 
     public event EventHandler<ArkVtxo>? VtxosChanged;
     public event EventHandler? ActiveScriptsChanged;
 
-    public EfCoreVtxoStorage(IDbContextFactory<ArkPluginDbContext> dbContextFactory)
+    public EfCoreVtxoStorage(IDbContextFactory<ArkPluginDbContext> dbContextFactory, ISafetyService safetyService)
     {
         _dbContextFactory = dbContextFactory;
+        _safetyService = safetyService;
     }
 
     public async Task<bool> UpsertVtxo(ArkVtxo vtxo, CancellationToken cancellationToken = default)
     {
+        var outpointKey = $"vtxo-upsert::{vtxo.TransactionId}:{vtxo.TransactionOutputIndex}";
+
+        // Lock to prevent race conditions during upsert
+        await using var lockHandle = await _safetyService.LockKeyAsync(outpointKey, cancellationToken);
+
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
         var existing = await db.Vtxos.FirstOrDefaultAsync(
@@ -57,86 +65,86 @@ public class EfCoreVtxoStorage : IVtxoStorage
             ActiveScriptsChanged?.Invoke(this, EventArgs.Empty);
         }
 
-
         return isNew;
     }
 
-    public async Task<IReadOnlyCollection<ArkVtxo>> GetVtxos(VtxoFilter filter, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyCollection<ArkVtxo>> GetVtxos(
+        IReadOnlyCollection<string>? scripts = null,
+        IReadOnlyCollection<OutPoint>? outpoints = null,
+        string[]? walletIds = null,
+        bool includeSpent = false,
+        string? searchText = null,
+        int? skip = null,
+        int? take = null,
+        CancellationToken cancellationToken = default)
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-        var entities = await BuildQuery(db, filter).AsNoTracking().ToListAsync(cancellationToken);
-        return entities.Select(MapToArkVtxo).ToList();
-    }
 
-    /// <summary>
-    /// Builds a query from VtxoFilter. Used by both GetVtxos and plugin-specific methods.
-    /// </summary>
-    private static IQueryable<VTXO> BuildQuery(ArkPluginDbContext db, VtxoFilter filter)
-    {
         var query = db.Vtxos.AsQueryable();
 
         // Filter by scripts
-        if (filter.Scripts is { Count: > 0 })
+        if (scripts is { })
         {
-            var scriptSet = filter.Scripts.ToHashSet();
+            var scriptSet = scripts.ToHashSet();
             query = query.Where(v => scriptSet.Contains(v.Script));
         }
 
         // Filter by outpoints
-        if (filter.Outpoints is { Count: > 0 })
+        if (outpoints is {  })
         {
-            var outpointPairs = filter.Outpoints
+            var outpointPairs = outpoints
                 .Select(op => $"{op.Hash}{op.N}")
                 .ToHashSet();
             query = query.Where(v => outpointPairs.Contains(v.TransactionId + v.TransactionOutputIndex));
         }
 
         // Filter by wallet IDs (join with WalletContracts)
-        if (filter.WalletIds is { Length: > 0 })
+        if (walletIds is {  })
         {
             var walletScripts = db.WalletContracts
-                .Where(c => filter.WalletIds.Contains(c.WalletId))
+                .Where(c => walletIds.Contains(c.WalletId))
                 .Select(c => c.Script);
             query = query.Where(v => walletScripts.Contains(v.Script));
         }
 
         // Filter by spent state
-        if (!filter.IncludeSpent)
+        if (!includeSpent)
         {
             query = query.Where(v =>
                 (v.SpentByTransactionId ?? "").Length == 0 &&
                 (v.SettledByTransactionId ?? "").Length == 0);
         }
 
-        // Filter by recoverable state
-        if (!filter.IncludeRecoverable)
+        // Search text filter - search in TransactionId, Script, and also match against Contract Type
+        if (!string.IsNullOrEmpty(searchText))
         {
-            query = query.Where(v => !v.Recoverable);
-        }
+            // Get contract scripts that match by Type
+            var matchingContractScripts = db.WalletContracts
+                .Where(c => c.Type.Contains(searchText))
+                .Select(c => c.Script);
 
-        // Search text filter
-        if (!string.IsNullOrEmpty(filter.SearchText))
-        {
             query = query.Where(v =>
-                v.TransactionId.Contains(filter.SearchText) ||
-                v.Script.Contains(filter.SearchText));
+                v.TransactionId.Contains(searchText) ||
+                v.Script.Contains(searchText) ||
+                matchingContractScripts.Contains(v.Script));
         }
 
         // Order by creation date (newest first) for consistent pagination
         query = query.OrderByDescending(v => v.SeenAt);
 
         // Pagination
-        if (filter.Skip.HasValue)
+        if (skip.HasValue)
         {
-            query = query.Skip(filter.Skip.Value);
+            query = query.Skip(skip.Value);
         }
 
-        if (filter.Take.HasValue)
+        if (take.HasValue)
         {
-            query = query.Take(filter.Take.Value);
+            query = query.Take(take.Value);
         }
 
-        return query;
+        var entities = await query.AsNoTracking().ToListAsync(cancellationToken);
+        return entities.Select(MapToArkVtxo).ToList();
     }
 
     private static ArkVtxo MapToArkVtxo(VTXO entity)
@@ -154,118 +162,4 @@ public class EfCoreVtxoStorage : IVtxoStorage
             ExpiresAtHeight: null // Plugin doesn't track height-based expiry
         );
     }
-
-    #region Plugin-specific methods (return VTXO entities, use VtxoFilter internally)
-
-    /// <summary>
-    /// Gets a VTXO by outpoint for a specific wallet.
-    /// </summary>
-    public async Task<VTXO?> GetVtxoByOutpointAsync(
-        string walletId,
-        string transactionId,
-        int outputIndex,
-        CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        var outpoint = new OutPoint(uint256.Parse(transactionId), (uint)outputIndex);
-        var filter = new VtxoFilter
-        {
-            Outpoints = [outpoint],
-            WalletIds = [walletId],
-            IncludeSpent = true // Include spent for lookups
-        };
-
-        return await BuildQuery(db, filter).FirstOrDefaultAsync(cancellationToken);
-    }
-
-    /// <summary>
-    /// Gets unspent VTXOs for a wallet's contracts.
-    /// </summary>
-    public async Task<IReadOnlyList<VTXO>> GetUnspentVtxosByContractScriptsAsync(
-        IEnumerable<string> contractScripts,
-        CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        var filter = new VtxoFilter
-        {
-            Scripts = contractScripts.ToList(),
-            IncludeSpent = false,
-            IncludeRecoverable = true
-        };
-
-        return await BuildQuery(db, filter).ToListAsync(cancellationToken);
-    }
-
-    /// <summary>
-    /// Sums the balance of unspent, non-recoverable VTXOs for a wallet's contracts.
-    /// </summary>
-    public async Task<long> SumUnspentBalanceByContractScriptsAsync(
-        IEnumerable<string> contractScripts,
-        CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        var filter = new VtxoFilter
-        {
-            Scripts = contractScripts.ToList(),
-            IncludeSpent = false,
-            IncludeRecoverable = false
-        };
-
-        return await BuildQuery(db, filter).SumAsync(v => v.Amount, cancellationToken);
-    }
-
-    /// <summary>
-    /// Gets VTXOs with pagination and filtering by contract scripts.
-    /// </summary>
-    public async Task<IReadOnlyList<VTXO>> GetVtxosWithPaginationAsync(
-        IEnumerable<string> contractScripts,
-        int skip = 0,
-        int count = 10,
-        string? searchText = null,
-        bool includeSpent = false,
-        bool includeRecoverable = false,
-        CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        var filter = new VtxoFilter
-        {
-            Scripts = contractScripts.ToList(),
-            IncludeSpent = includeSpent,
-            IncludeRecoverable = includeRecoverable,
-            SearchText = searchText,
-            Skip = skip,
-            Take = count
-        };
-
-        return await BuildQuery(db, filter).AsNoTracking().ToListAsync(cancellationToken);
-    }
-
-    /// <summary>
-    /// Gets VTXOs by contract scripts with optional outpoint filtering.
-    /// </summary>
-    public async Task<IReadOnlyList<VTXO>> GetVtxosByScriptsAndOutpointsAsync(
-        IEnumerable<string> contractScripts,
-        HashSet<OutPoint>? vtxoOutpoints = null,
-        bool includeSpent = false,
-        bool includeRecoverable = false,
-        CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        var filter = new VtxoFilter
-        {
-            Scripts = contractScripts.ToList(),
-            Outpoints = vtxoOutpoints?.ToList(),
-            IncludeSpent = includeSpent,
-            IncludeRecoverable = includeRecoverable
-        };
-
-        return await BuildQuery(db, filter).ToListAsync(cancellationToken);
-    }
-
-    #endregion
 }

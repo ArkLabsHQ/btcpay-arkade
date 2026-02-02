@@ -61,7 +61,7 @@ namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler
                    return new ICheckoutCheatModeExtension.PayInvoiceResult(txId);
                throw new Exception(output);
             }
-            catch (ExternalProcessFailedException e) when(e.Message.Contains("Insufficient funds"))
+            catch (ExternalProcessFailedException e) when(e.Message.Contains("not enough funds"))
             {
                 //
                 //nigiri settle

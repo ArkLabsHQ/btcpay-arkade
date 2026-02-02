@@ -1,6 +1,8 @@
 @using BTCPayServer.Abstractions.Contracts
 @using BTCPayServer.Abstractions.Extensions
 @using BTCPayServer.Plugins.ArkPayServer.Data
+@using BTCPayServer.Plugins.ArkPayServer.Data.Entities
+@using BTCPayServer.Plugins.ArkPayServer.Helpers
 @using NArk.Core.Transport
 @using NArk.Abstractions.Intents
 @using static BTCPayServer.Plugins.ArkPayServer.Helpers.ArkViewHelpers
@@ -159,7 +161,8 @@
                         <td class="align-middle">
                             @if (!string.IsNullOrEmpty(intent.CommitmentTransactionId))
                             {
-                                <vc:truncate-center text="@intent.CommitmentTransactionId" classes="truncate-center-id"/>
+                                var txLink = ArkadeLinkHelper.GetTransactionLink(ArkNetworkConfig, intent.CommitmentTransactionId);
+                                <vc:truncate-center link="@txLink" text="@intent.CommitmentTransactionId" classes="truncate-center-id"/>
                             }
                             else
                             {
@@ -203,7 +206,7 @@
                             <td colspan="@colspanCount" class="border-top-0">
                                 <h6 class="mb-3">VTXOs</h6>
                                 @{
-                                    var vtxoList = vtxos.Select(iv => iv.Vtxo).ToList();
+                                    var vtxoList = vtxos.Select(iv => iv.Vtxo.ToArkVtxo()).ToList();
                                 }
                                 <partial name="_VtxoTable" model="vtxoList" view-data='new ViewDataDictionary(ViewData) { { "ShowLinks", true }, { "UseTimeAgo", true }, { "TimeColumnLabel", "Linked" } }' />
                             </td>

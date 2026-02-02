@@ -16,25 +16,30 @@
 {
     <link rel="stylesheet" href="~/plugins/ArkPayServer/css/ark-plugin.css" asp-append-version="true" />
     <style>
+        /* Wizard section tiles - BTCPay modern style */
         .wizard-section {
-            border: 1px solid var(--btcpay-body-border-light);
-            border-radius: 4px;
+            background: var(--btcpay-bg-tile);
+            border-radius: var(--btcpay-border-radius-l, 0.5rem);
             margin-bottom: 1rem;
+            overflow: hidden;
         }
         .wizard-section-header {
-            padding: 0.75rem 1rem;
-            background: var(--btcpay-body-bg);
+            padding: 1rem 1.25rem;
             cursor: pointer;
             display: flex;
             justify-content: space-between;
             align-items: center;
+            border-bottom: 1px solid transparent;
+            transition: border-color 0.2s;
+        }
+        .wizard-section:not(.collapsed) .wizard-section-header {
+            border-bottom-color: var(--btcpay-body-border-light);
         }
         .wizard-section-header:hover {
-            background: var(--btcpay-body-bg-hover);
+            background: var(--btcpay-body-bg-hover, rgba(0,0,0,0.02));
         }
         .wizard-section-body {
-            padding: 1rem;
-            border-top: 1px solid var(--btcpay-body-border-light);
+            padding: 1.25rem;
         }
         .wizard-section.collapsed .wizard-section-body {
             display: none;
@@ -50,10 +55,10 @@
             color: var(--btcpay-body-text-muted);
         }
         .output-row {
-            border: 1px solid var(--btcpay-body-border-light);
-            border-radius: 4px;
+            background: var(--btcpay-body-bg);
+            border-radius: var(--btcpay-border-radius, 0.25rem);
             padding: 1rem;
-            margin-bottom: 0.5rem;
+            margin-bottom: 0.75rem;
         }
         .coin-summary {
             display: flex;
@@ -200,19 +205,33 @@ else
             </div>
         </div>
 
-        <!-- Coins Section -->
-        <div class="wizard-section @(Model.HasPreselectedCoins ? "" : "collapsed")" id="coins-section">
+        <!-- Coins Section - collapsed by default in auto mode (no preselected coins) -->
+        <div class="wizard-section @(Model.CoinSelectionMode == "manual" ? "" : "collapsed")" id="coins-section">
             <div class="wizard-section-header" onclick="toggleSection('coins-section')">
                 <div>
                     <vc:icon symbol="caret-down" css-class="section-icon" />
                     <strong text-translate="true">Coins</strong>
                 </div>
-                <div class="coin-summary">
+                <div class="coin-summary d-flex align-items-center gap-2">
                     <span id="coins-summary">@Model.SelectedCount selected - @Model.TotalSelectedBtc.ToString("0.00000000") BTC</span>
                     <span class="badge text-bg-secondary" id="selection-mode-badge">@Model.CoinSelectionMode</span>
+                    <button type="button" class="btn btn-link btn-sm p-0 text-muted" id="reset-to-auto-btn" style="display: none;" title="Switch to automatic coin selection">
+                        <small>Switch to automatic</small>
+                    </button>
                 </div>
             </div>
             <div class="wizard-section-body">
+                <!-- Quick select buttons and total balance -->
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div class="btn-group btn-group-sm" role="group" aria-label="Quick select">
+                        <button type="button" class="btn btn-outline-secondary" id="select-active-btn" title="Select all active (non-recoverable) coins">Select Active</button>
+                        <button type="button" class="btn btn-outline-secondary" id="select-recoverable-btn" title="Select all recoverable coins">Select Recoverable</button>
+                    </div>
+                    <div class="text-muted small" id="total-balance-display">
+                        Total: <strong>@Model.TotalAvailableBtc.ToString("0.00000000") BTC</strong>
+                        <span class="ms-2">(@Model.AvailableVtxos.Count() coins)</span>
+                    </div>
+                </div>
                 <div class="table-responsive">
                     <table id="coins-table" class="table table-sm">
                         <thead>
@@ -231,7 +250,7 @@ else
                             {
                                 var outpoint = $"{vtxo.TransactionId}:{vtxo.TransactionOutputIndex}";
                                 var shortOutpoint = ArkadeLinkHelper.FormatOutpoint(vtxo.TransactionId, vtxo.TransactionOutputIndex);
-                                var link = ArkadeLinkHelper.GetIndexerLinkForVtxo(ArkNetworkConfig.ArkUri, vtxo.TransactionId, vtxo.TransactionOutputIndex);
+                                var link = ArkadeLinkHelper.GetOutpointLink(ArkNetworkConfig, vtxo.TransactionId, vtxo.TransactionOutputIndex);
                                 var isSelected = Model.SelectedVtxos.Any(s =>
                                     s.TransactionId == vtxo.TransactionId &&
                                     s.TransactionOutputIndex == vtxo.TransactionOutputIndex);
@@ -263,17 +282,44 @@ else
                                     <td>
                                         @if (vtxo.Swept)
                                         {
-                                            <span class="badge text-bg-warning">Recoverable</span>
+                                            <span class="badge text-bg-warning" data-coin-type="recoverable" title="Requires batch transaction to spend">Batch Only</span>
                                         }
                                         else
                                         {
-                                            <span class="badge text-bg-success">Spendable</span>
+                                            <span data-coin-type="spendable"></span>
                                         }
                                     </td>
                                 </tr>
                             }
                         </tbody>
                     </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Spend Type Section -->
+        <div class="wizard-section" id="spend-type-section">
+            <div class="wizard-section-header" onclick="toggleSection('spend-type-section')">
+                <div>
+                    <vc:icon symbol="caret-down" css-class="section-icon" />
+                    <strong text-translate="true">Transaction Type</strong>
+                </div>
+                <span class="section-summary" id="spend-type-summary"></span>
+            </div>
+            <div class="wizard-section-body">
+                <div class="form-check mb-2">
+                    <input class="form-check-input" type="radio" name="SpendType" id="spend-type-arkade" value="Arkade" checked>
+                    <label class="form-check-label" for="spend-type-arkade">
+                        <strong>Arkade</strong>
+                        <span class="text-muted d-block small">Instant, no fees. Preconfirmed state.</span>
+                    </label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="SpendType" id="spend-type-batch" value="Batch">
+                    <label class="form-check-label" for="spend-type-batch">
+                        <strong>Batch</strong>
+                        <span class="text-muted d-block small">Achieves Bitcoin finality for your coins, allows paying onchain, renews your expiry. Not instant, must wait for batch and has variable fees based on your transaction.</span>
+                    </label>
                 </div>
             </div>
         </div>
@@ -295,17 +341,11 @@ else
         </div>
 
         <!-- Footer -->
-        <div class="d-flex justify-content-between align-items-center mt-4">
-            <div id="fee-display">
-                <span class="text-muted" text-translate="true">Fee:</span>
-                <span id="fee-amount">--</span>
-            </div>
-            <div class="d-flex gap-2">
-                <a asp-action="StoreOverview" asp-route-storeId="@Model.StoreId" class="btn btn-secondary" text-translate="true">Cancel</a>
-                <button type="submit" class="btn btn-primary" id="send-btn" disabled>
-                    <span text-translate="true">Send</span>
-                </button>
-            </div>
+        <div class="d-flex justify-content-end align-items-center mt-4 gap-2">
+            <a asp-action="StoreOverview" asp-route-storeId="@Model.StoreId" class="btn btn-secondary" text-translate="true">Cancel</a>
+            <button type="submit" class="btn btn-primary" id="send-btn" disabled>
+                <span text-translate="true">Send</span>
+            </button>
         </div>
     </form>
 }
@@ -321,7 +361,8 @@ else
             coinSelectionMode: '@Model.CoinSelectionMode',
             detectedSpendType: null,
             estimatedFee: null,
-            isLightning: false
+            isLightning: false,
+            userSpendType: 'Arkade' // User's choice - influences auto coin selection
         };
 
         // DOM elements
@@ -331,11 +372,17 @@ else
         const coinsTable = document.getElementById('coins-table');
         const selectAllCoins = document.getElementById('select-all-coins');
         const sendBtn = document.getElementById('send-btn');
-        const feeDisplay = document.getElementById('fee-amount');
         const coinsSummary = document.getElementById('coins-summary');
         const selectionModeBadge = document.getElementById('selection-mode-badge');
         const reviewSummary = document.getElementById('review-summary');
         const reviewContent = document.getElementById('review-content');
+        const spendTypeSection = document.getElementById('spend-type-section');
+        const spendTypeSummary = document.getElementById('spend-type-summary');
+        const spendTypeArkade = document.getElementById('spend-type-arkade');
+        const spendTypeBatch = document.getElementById('spend-type-batch');
+        const resetToAutoBtn = document.getElementById('reset-to-auto-btn');
+        const selectActiveBtn = document.getElementById('select-active-btn');
+        const selectRecoverableBtn = document.getElementById('select-recoverable-btn');
 
         // Debounce helper
         function debounce(fn, delay) {
@@ -351,6 +398,32 @@ else
             const section = document.getElementById(sectionId);
             section.classList.toggle('collapsed');
         };
+
+        // Select coins by type
+        function selectCoinsByType(type) {
+            state.coinSelectionMode = 'manual';
+            const rows = coinsTable.querySelectorAll('tbody tr');
+            rows.forEach(row => {
+                const badge = row.querySelector('[data-coin-type]');
+                const cb = row.querySelector('.coin-checkbox');
+                if (!badge || !cb) return;
+
+                const coinType = badge.dataset.coinType; // 'recoverable' or 'spendable'
+                cb.checked = (coinType === type);
+            });
+
+            updateCoinsSummary();
+            handleCoinSelectionChange();
+        }
+
+        // Select all visible coins
+        function selectAllCoinsVisible(select) {
+            const rows = coinsTable.querySelectorAll('tbody tr');
+            rows.forEach(row => {
+                const cb = row.querySelector('.coin-checkbox');
+                if (cb) cb.checked = select;
+            });
+        }
 
         // Get selected coins
         function getSelectedCoins() {
@@ -372,8 +445,22 @@ else
             });
 
             const totalBtc = (totalSats / 100000000).toFixed(8);
-            coinsSummary.textContent = `${count} selected · ${totalBtc} BTC`;
+
+            // In auto mode with no selection, show total available balance
+            if (state.coinSelectionMode === 'auto' && count === 0) {
+                const totalAvailable = @((Model.TotalAvailableSats / 100_000_000m).ToString("0.00000000", System.Globalization.CultureInfo.InvariantCulture));
+                const totalCoins = @Model.AvailableVtxos.Count();
+                coinsSummary.textContent = `${totalCoins} coins · ${totalAvailable} BTC available`;
+            } else {
+                coinsSummary.textContent = `${count} selected · ${totalBtc} BTC`;
+            }
+
             selectionModeBadge.textContent = state.coinSelectionMode;
+
+            // Show/hide reset button based on mode
+            if (resetToAutoBtn) {
+                resetToAutoBtn.style.display = state.coinSelectionMode === 'manual' ? '' : 'none';
+            }
         }
 
         // Get outputs from form
@@ -416,12 +503,14 @@ else
         function updateDestinationBadges() {
             const rows = outputsContainer.querySelectorAll('.output-row');
             let hasLightning = false;
+            let filledDestCount = 0;
 
             rows.forEach((row, i) => {
                 const destInput = row.querySelector('.destination-input');
                 const badge = row.querySelector('.destination-type-badge');
                 const type = detectDestinationType(destInput?.value);
 
+                if (destInput?.value?.trim()) filledDestCount++;
                 if (type === 'LightningInvoice') hasLightning = true;
 
                 if (badge) {
@@ -432,10 +521,33 @@ else
 
             state.isLightning = hasLightning;
 
-            // Disable add output for Lightning
+            // Lightning swap constraints
             if (addOutputBtn) {
                 addOutputBtn.disabled = hasLightning;
-                addOutputBtn.title = hasLightning ? 'Lightning supports single output only' : '';
+                addOutputBtn.title = hasLightning ? 'Lightning swaps support single output only' : '';
+                addOutputBtn.style.display = hasLightning ? 'none' : '';
+            }
+
+            // Hide spend type section for Lightning (type is determined by destination)
+            if (spendTypeSection) {
+                if (hasLightning) {
+                    spendTypeSection.style.display = 'none';
+                }
+            }
+
+            // Show error if Lightning with multiple destinations
+            const lightningError = document.getElementById('lightning-multi-dest-error');
+            if (hasLightning && filledDestCount > 1) {
+                if (!lightningError) {
+                    const errorDiv = document.createElement('div');
+                    errorDiv.id = 'lightning-multi-dest-error';
+                    errorDiv.className = 'alert alert-danger mt-2';
+                    errorDiv.textContent = 'Lightning swaps only support a single destination. Remove extra destinations to continue.';
+                    outputsContainer.parentNode.insertBefore(errorDiv, outputsContainer.nextSibling);
+                }
+                sendBtn.disabled = true;
+            } else if (lightningError) {
+                lightningError.remove();
             }
         }
 
@@ -447,15 +559,22 @@ else
             const isConsolidation = !hasDestinations && selectedCoins.length > 0;
 
             if (!selectedCoins.length) {
-                feeDisplay.textContent = '--';
                 sendBtn.disabled = true;
+                updateReviewContent('Select coins to continue.');
                 return;
             }
 
-            // For consolidation (no destination), we still allow the send
-            if (!hasDestinations && !isConsolidation) {
-                feeDisplay.textContent = '--';
+            // For consolidation (no destination), enable send without fee estimation
+            if (isConsolidation) {
+                sendBtn.disabled = false;
+                updateReviewSection(selectedCoins, outputs, { estimatedFeeSats: 0, isConsolidation: true });
+                return;
+            }
+
+            // No coins or no destination - disable
+            if (!hasDestinations) {
                 sendBtn.disabled = true;
+                updateReviewContent('Enter a destination or leave empty to consolidate.');
                 return;
             }
 
@@ -489,14 +608,9 @@ else
                 const data = await response.json();
 
                 if (data.error) {
-                    feeDisplay.textContent = data.error;
                     sendBtn.disabled = true;
+                    updateReviewContent(data.error);
                 } else {
-                    const feeBtc = (data.estimatedFeeSats / 100000000).toFixed(8);
-                    feeDisplay.textContent = `~${data.estimatedFeeSats} sats (${feeBtc} BTC)`;
-                    if (data.feeDescription) {
-                        feeDisplay.textContent += ` - ${data.feeDescription}`;
-                    }
                     state.estimatedFee = data.estimatedFeeSats;
                     sendBtn.disabled = false;
 
@@ -505,21 +619,146 @@ else
                 }
             } catch (err) {
                 console.error('Fee estimation failed:', err);
-                feeDisplay.textContent = 'Error estimating fee';
                 sendBtn.disabled = true;
+                updateReviewContent('Error estimating fee');
             }
         }, 500);
+
+        // Helper to update review content with a message
+        function updateReviewContent(message) {
+            reviewSummary.textContent = '';
+            reviewContent.innerHTML = `<p class="text-muted">${message}</p>`;
+        }
+
+        // Check if any selected coins are recoverable (batch-only)
+        function hasRecoverableCoins() {
+            const checkboxes = coinsTable.querySelectorAll('.coin-checkbox:checked');
+            for (const cb of checkboxes) {
+                const row = cb.closest('tr');
+                const badge = row.querySelector('[data-coin-type]');
+                if (badge && badge.dataset.coinType === 'recoverable') {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Update spend type section summary
+        function updateSpendTypeSection() {
+            // Hide for Lightning (type is determined by destination)
+            if (state.isLightning) {
+                spendTypeSection.style.display = 'none';
+                return;
+            }
+            spendTypeSection.style.display = '';
+            spendTypeSummary.textContent = state.userSpendType;
+        }
+
+        // Get coins sorted by expiry (closest first)
+        function getCoinsSortedByExpiry() {
+            const rows = Array.from(coinsTable.querySelectorAll('tbody tr'));
+            return rows.sort((a, b) => {
+                const expiryA = a.querySelector('.vtxo-expiry')?.dataset.expires || Infinity;
+                const expiryB = b.querySelector('.vtxo-expiry')?.dataset.expires || Infinity;
+                return parseFloat(expiryA) - parseFloat(expiryB);
+            });
+        }
+
+        // Auto-select coins based on spend type and amount needed
+        function autoSelectCoins(amountNeededSats = null) {
+            if (state.coinSelectionMode !== 'auto') return;
+
+            const rows = coinsTable.querySelectorAll('tbody tr');
+            let selectedSats = 0;
+
+            // First pass: select based on spend type preference
+            rows.forEach(row => {
+                const badge = row.querySelector('[data-coin-type]');
+                const cb = row.querySelector('.coin-checkbox');
+                if (!badge || !cb) return;
+
+                const coinType = badge.dataset.coinType;
+                const amountText = row.cells[2].textContent;
+                const coinSats = Math.round(parseFloat(amountText) * 100000000);
+
+                if (state.userSpendType === 'Arkade') {
+                    // Arkade: only select non-recoverable (spendable) coins
+                    cb.checked = (coinType === 'spendable');
+                } else {
+                    // Batch: prefer recoverable coins first
+                    cb.checked = (coinType === 'recoverable');
+                }
+
+                if (cb.checked) selectedSats += coinSats;
+            });
+
+            // If Batch and amount needed, check if we need to add non-recoverable coins
+            if (state.userSpendType === 'Batch' && amountNeededSats && selectedSats < amountNeededSats) {
+                // Sort non-recoverable by expiry (closest first) and add until we have enough
+                const sortedRows = getCoinsSortedByExpiry();
+                for (const row of sortedRows) {
+                    if (selectedSats >= amountNeededSats) break;
+
+                    const badge = row.querySelector('[data-coin-type]');
+                    const cb = row.querySelector('.coin-checkbox');
+                    if (!badge || !cb || cb.checked) continue;
+
+                    const coinType = badge.dataset.coinType;
+                    if (coinType === 'spendable') {
+                        const amountText = row.cells[2].textContent;
+                        const coinSats = Math.round(parseFloat(amountText) * 100000000);
+                        cb.checked = true;
+                        selectedSats += coinSats;
+                    }
+                }
+            }
+
+            updateCoinsSummary();
+        }
+
+        // Get the effective spend type based on conditions and user choice
+        function getEffectiveSpendType(needsRecovery) {
+            if (needsRecovery) return 'Batch (Recovery)';
+            if (state.isLightning) return 'Lightning Swap';
+            return state.userSpendType;
+        }
+
+        // Check for pointless 1-in-1-out Arkade consolidation
+        function isPointlessArkadeConsolidation(coinsCount, hasDestinations, needsRecovery) {
+            // Arkade mode, no destination (consolidation), single non-recoverable coin = pointless
+            return !hasDestinations &&
+                   coinsCount === 1 &&
+                   !needsRecovery &&
+                   state.userSpendType === 'Arkade';
+        }
 
         // Update review section
         function updateReviewSection(coins, outputs, feeData) {
             const totalInput = coins.length;
             const totalOutputs = outputs.filter(o => o.destination).length;
             const isConsolidation = totalOutputs === 0;
+            const needsRecovery = hasRecoverableCoins();
 
-            let spendType = 'Batch';
-            if (isConsolidation) spendType = 'Consolidation';
-            else if (state.isLightning) spendType = 'Lightning Swap';
-            else if (feeData.isOffchain) spendType = 'Offchain';
+            // Update spend type section
+            updateSpendTypeSection();
+
+            const spendType = getEffectiveSpendType(needsRecovery);
+
+            // Check for pointless 1-in-1-out Arkade consolidation
+            if (isPointlessArkadeConsolidation(totalInput, !isConsolidation, needsRecovery)) {
+                sendBtn.disabled = true;
+                reviewSummary.innerHTML = '<span class="text-warning">1-in-1-out not useful</span>';
+                reviewContent.innerHTML = `
+                    <div class="alert alert-warning mb-0">
+                        <strong>Not useful:</strong> Arkade consolidation with a single coin doesn't accomplish anything.
+                        <ul class="mb-0 mt-2">
+                            <li>Select multiple coins to consolidate them into one</li>
+                            <li>Use <strong>Batch</strong> mode to renew your coin's expiry</li>
+                            <li>Enter a destination to send funds somewhere</li>
+                        </ul>
+                    </div>`;
+                return;
+            }
 
             reviewSummary.textContent = isConsolidation
                 ? `Consolidating ${totalInput} coin(s)`
@@ -529,7 +768,9 @@ else
             html += `<dt class="col-sm-4">Inputs</dt><dd class="col-sm-8">${totalInput} coin(s)</dd>`;
             html += `<dt class="col-sm-4">Outputs</dt><dd class="col-sm-8">${totalOutputs}</dd>`;
             html += `<dt class="col-sm-4">Spend Type</dt><dd class="col-sm-8"><span class="badge text-bg-primary">${spendType}</span></dd>`;
-            html += `<dt class="col-sm-4">Fee</dt><dd class="col-sm-8">${feeData.estimatedFeeSats} sats</dd>`;
+            if (feeData.estimatedFeeSats !== null) {
+                html += `<dt class="col-sm-4">Fee</dt><dd class="col-sm-8">${feeData.estimatedFeeSats} sats</dd>`;
+            }
             html += '</dl>';
 
             reviewContent.innerHTML = html;
@@ -645,7 +886,39 @@ else
             });
         }
 
+        // Helper to handle coin selection changes (consolidation vs destination mode)
+        function handleCoinSelectionChange() {
+            const outputs = getOutputs();
+            const hasDestinations = outputs.some(o => o.destination);
+            const selectedCoins = getSelectedCoins();
+
+            if (!hasDestinations && selectedCoins.length > 0) {
+                // Consolidation mode - enable send button immediately
+                sendBtn.disabled = false;
+                updateReviewSection(selectedCoins, outputs, { estimatedFeeSats: 0, isConsolidation: true });
+            } else if (selectedCoins.length === 0) {
+                // No coins selected
+                sendBtn.disabled = true;
+                updateReviewContent('Select coins to continue.');
+            } else {
+                // Has destination - use debounced fee estimation
+                estimateFees();
+            }
+        }
+
         // Event listeners
+
+        // Quick select buttons
+        selectActiveBtn?.addEventListener('click', function(e) {
+            e.stopPropagation();
+            selectCoinsByType('spendable');
+        });
+
+        selectRecoverableBtn?.addEventListener('click', function(e) {
+            e.stopPropagation();
+            selectCoinsByType('recoverable');
+        });
+
         addOutputBtn?.addEventListener('click', addOutputRow);
 
         outputsContainer?.addEventListener('click', function(e) {
@@ -668,25 +941,108 @@ else
             if (e.target.classList.contains('coin-checkbox')) {
                 state.coinSelectionMode = 'manual';
                 updateCoinsSummary();
-                estimateFees();
+                handleCoinSelectionChange();
             }
         });
 
         selectAllCoins?.addEventListener('change', function() {
-            const checkboxes = coinsTable.querySelectorAll('.coin-checkbox');
-            checkboxes.forEach(cb => cb.checked = this.checked);
+            selectAllCoinsVisible(this.checked);
             state.coinSelectionMode = 'manual';
             updateCoinsSummary();
-            estimateFees();
+            handleCoinSelectionChange();
+        });
+
+        // Reset to auto coin selection
+        resetToAutoBtn?.addEventListener('click', function(e) {
+            e.stopPropagation(); // Don't toggle section collapse
+            state.coinSelectionMode = 'auto';
+
+            // Clear all coin selections first
+            coinsTable.querySelectorAll('.coin-checkbox').forEach(cb => cb.checked = false);
+            if (selectAllCoins) selectAllCoins.checked = false;
+
+            // Re-trigger auto selection based on spend type and destination
+            const outputs = getOutputs();
+            const hasDestinations = outputs.some(o => o.destination);
+
+            if (hasDestinations) {
+                // Calculate amount needed for destination-based selection
+                const amounts = outputs.filter(o => o.destination).map(o => o.amountBtc ? Math.round(o.amountBtc * 100000000) : null);
+                const totalNeeded = amounts.every(a => a !== null) ? amounts.reduce((sum, a) => sum + a, 0) : null;
+                autoSelectCoins(totalNeeded);
+                handleCoinSelectionChange();
+            } else {
+                // No destination - auto select based on spend type
+                autoSelectCoins();
+                handleCoinSelectionChange();
+            }
+        });
+
+        // Spend type selection - triggers auto coin re-selection
+        spendTypeArkade?.addEventListener('change', function() {
+            if (this.checked) {
+                state.userSpendType = 'Arkade';
+                spendTypeSummary.textContent = 'Arkade';
+
+                // Re-select coins based on new spend type if in auto mode
+                if (state.coinSelectionMode === 'auto') {
+                    const outputs = getOutputs();
+                    const amounts = outputs.filter(o => o.destination).map(o => o.amountBtc ? Math.round(o.amountBtc * 100000000) : null);
+                    const totalNeeded = amounts.every(a => a !== null) ? amounts.reduce((sum, a) => sum + a, 0) : null;
+                    autoSelectCoins(totalNeeded);
+                }
+                handleCoinSelectionChange();
+            }
+        });
+
+        spendTypeBatch?.addEventListener('change', function() {
+            if (this.checked) {
+                state.userSpendType = 'Batch';
+                spendTypeSummary.textContent = 'Batch';
+
+                // Re-select coins based on new spend type if in auto mode
+                if (state.coinSelectionMode === 'auto') {
+                    const outputs = getOutputs();
+                    const amounts = outputs.filter(o => o.destination).map(o => o.amountBtc ? Math.round(o.amountBtc * 100000000) : null);
+                    const totalNeeded = amounts.every(a => a !== null) ? amounts.reduce((sum, a) => sum + a, 0) : null;
+                    autoSelectCoins(totalNeeded);
+                }
+                handleCoinSelectionChange();
+            }
         });
 
         // Initialize
         updateDestinationBadges();
-        updateCoinsSummary();
+        updateSpendTypeSection();
 
-        // If pre-selected coins, estimate fees
-        if (getSelectedCoins().length > 0 && getOutputs().some(o => o.destination)) {
-            estimateFees();
+        // Check for pre-selected coins or auto-select based on mode
+        const preselectedCoins = getSelectedCoins();
+        const outputs = getOutputs();
+        const hasDestinations = outputs.some(o => o.destination);
+
+        if (preselectedCoins.length > 0) {
+            // Pre-selected coins (manual mode from URL params)
+            updateCoinsSummary();
+            if (!hasDestinations) {
+                // Consolidation mode - enable immediately
+                sendBtn.disabled = false;
+                updateReviewSection(preselectedCoins, outputs, { estimatedFeeSats: 0, isConsolidation: true });
+            } else {
+                estimateFees();
+            }
+        } else if (state.coinSelectionMode === 'auto') {
+            // Auto mode with no pre-selection - select coins based on spend type
+            autoSelectCoins();
+            updateCoinsSummary();
+            const selectedCoins = getSelectedCoins();
+            if (selectedCoins.length > 0) {
+                sendBtn.disabled = false;
+                updateReviewSection(selectedCoins, outputs, { estimatedFeeSats: 0, isConsolidation: true });
+            } else {
+                updateReviewContent('No coins available for selected transaction type.');
+            }
+        } else {
+            updateCoinsSummary();
         }
     })();
     </script>

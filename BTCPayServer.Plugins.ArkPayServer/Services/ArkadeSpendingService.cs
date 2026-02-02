@@ -6,9 +6,9 @@ using BTCPayServer.Payments.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.Exceptions;
 using BTCPayServer.Plugins.ArkPayServer.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
-using BTCPayServer.Plugins.ArkPayServer.Storage;
 using BTCPayServer.Services.Invoices;
 using NArk.Abstractions;
+using NArk.Abstractions.Contracts;
 using NArk.Core.Services;
 using NArk.Core.Transport;
 using NBitcoin;
@@ -18,8 +18,8 @@ namespace BTCPayServer.Plugins.ArkPayServer.Services;
 public class ArkadeSpendingService(
     ISpendingService arkadeSpender,
     IClientTransport clientTransport,
-    VtxoPollingService vtxoPollingService,
-    EfCoreContractStorage contractStorage,
+    VtxoSynchronizationService vtxoSyncService,
+    IContractStorage contractStorage,
     PaymentMethodHandlerDictionary paymentMethodHandlerDictionary)
 {
     public async Task<string?> Spend(StoreData store, string destination, CancellationToken cancellationToken)
@@ -89,8 +89,8 @@ public class ArkadeSpendingService(
                         cancellationToken);
 
                     // Poll for VTXO updates on active contracts
-                    var activeScripts = await contractStorage.GetActiveContractScriptsAsync(config.WalletId, cancellationToken);
-                    await vtxoPollingService.PollScriptsForVtxos(activeScripts.ToHashSet(), cancellationToken);
+                    var activeContracts = await contractStorage.GetContracts(walletIds: [config.WalletId], isActive: true, cancellationToken: cancellationToken);
+                    await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), cancellationToken);
 
                     return txId.ToString();
                 }

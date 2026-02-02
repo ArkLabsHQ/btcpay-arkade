@@ -1,5 +1,6 @@
 using BTCPayServer.Plugins.ArkPayServer.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using NArk.Abstractions.Intents;
 using NBitcoin;
 using PluginArkIntent = BTCPayServer.Plugins.ArkPayServer.Data.ArkIntent;
@@ -14,12 +15,16 @@ namespace BTCPayServer.Plugins.ArkPayServer.Storage;
 public class EfCoreIntentStorage : IIntentStorage
 {
     private readonly IDbContextFactory<ArkPluginDbContext> _dbContextFactory;
+    private readonly ILogger<EfCoreIntentStorage>? _logger;
 
     public event EventHandler<NNarkArkIntent>? IntentChanged;
 
-    public EfCoreIntentStorage(IDbContextFactory<ArkPluginDbContext> dbContextFactory)
+    public EfCoreIntentStorage(
+        IDbContextFactory<ArkPluginDbContext> dbContextFactory,
+        ILogger<EfCoreIntentStorage>? logger = null)
     {
         _dbContextFactory = dbContextFactory;
+        _logger = logger;
     }
 
     public async Task SaveIntent(string walletId, NNarkArkIntent intent, CancellationToken cancellationToken = default)
@@ -85,115 +90,102 @@ public class EfCoreIntentStorage : IIntentStorage
     }
 
     public async Task<IReadOnlyCollection<NNarkArkIntent>> GetIntents(
-        string walletId,
+        string[]? walletIds = null,
+        string[]? intentTxIds = null,
+        string[]? intentIds = null,
+        OutPoint[]? containingInputs = null,
+        ArkIntentState[]? states = null,
+        DateTimeOffset? validAt = null,
+        int? skip = null,
+        int? take = null,
         CancellationToken cancellationToken = default)
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        var entities = await db.Intents
-            .Include(i => i.IntentVtxos)
-            .Where(i => i.WalletId == walletId)
-            .ToListAsync(cancellationToken);
-
-        return entities.Select(MapToNNarkIntent).ToList();
-    }
-
-    public async Task<NNarkArkIntent?> GetIntentByIntentId(
-        string walletId,
-        string intentId,
-        CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        var entity = await db.Intents
-            .Include(i => i.IntentVtxos)
-            .FirstOrDefaultAsync(i => i.WalletId == walletId && i.IntentId == intentId,
-                cancellationToken);
-
-        return entity == null ? null : MapToNNarkIntent(entity);
-    }
-
-    public async Task<NNarkArkIntent?> GetIntentByIntentTxId(
-        string intentTxId,
-        CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        var entity = await db.Intents
-            .Include(i => i.IntentVtxos)
-            .FirstOrDefaultAsync(i => i.IntentTxId == intentTxId,
-                cancellationToken);
-
-        return entity == null ? null : MapToNNarkIntent(entity);
-    }
-
-    public async Task<IReadOnlyCollection<NNarkArkIntent>> GetIntentsByInputs(
-        string walletId,
-        OutPoint[] inputs,
-        bool pendingOnly = true,
-        CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        var inputStrings = inputs.Select(op =>
-            $"{op.Hash}:{op.N}").ToHashSet();
 
         var query = db.Intents
             .Include(i => i.IntentVtxos)
-            .Where(i => i.WalletId == walletId);
+            .AsQueryable();
 
-        if (pendingOnly)
+        // Filter by wallet IDs
+        if (walletIds is {  })
         {
-            query = query.Where(i =>
-                i.State == ArkIntentState.WaitingToSubmit ||
-                i.State == ArkIntentState.WaitingForBatch ||
-                i.State == ArkIntentState.BatchInProgress);
+            query = query.Where(i => walletIds.Contains(i.WalletId));
         }
 
-        var entities = await query.ToListAsync(cancellationToken);
+        // Filter by intent transaction IDs
+        if (intentTxIds is {  })
+        {
+            query = query.Where(i => intentTxIds.Contains(i.IntentTxId));
+        }
 
-        // Filter by inputs in memory (EF Core can't easily do this join)
-        var filtered = entities.Where(e =>
-            e.IntentVtxos.Any(iv =>
-                inputStrings.Contains($"{iv.VtxoTransactionId}:{iv.VtxoTransactionOutputIndex}")));
+        // Filter by intent IDs
+        if (intentIds is {  })
+        {
+            query = query.Where(i => i.IntentId != null && intentIds.Contains(i.IntentId));
+        }
 
-        return filtered.Select(MapToNNarkIntent).ToList();
-    }
+        // Filter by states
+        if (states is {  })
+        {
+            query = query.Where(i => states.Contains(i.State));
+        }
 
-    public async Task<IReadOnlyCollection<NNarkArkIntent>> GetUnsubmittedIntents(
-        DateTimeOffset? validAt = null,
-        CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        var query = db.Intents
-            .Include(i => i.IntentVtxos)
-            .Where(i => i.State == ArkIntentState.WaitingToSubmit);
-
+        // Filter by validity time
         if (validAt.HasValue)
         {
             query = query.Where(i =>
                 i.ValidFrom <= validAt.Value && i.ValidUntil >= validAt.Value);
         }
 
-        var entities = await query.ToListAsync(cancellationToken);
+        // Order by creation date for consistent pagination
+        query = query.OrderByDescending(i => i.CreatedAt);
+
+        // Pagination
+        if (skip.HasValue)
+        {
+            query = query.Skip(skip.Value);
+        }
+
+        if (take.HasValue)
+        {
+            query = query.Take(take.Value);
+        }
+
+        var entities = await query.AsNoTracking().ToListAsync(cancellationToken);
+
+        // Filter by containing inputs in memory (EF Core can't easily do this join)
+        if (containingInputs is {  })
+        {
+            var inputStrings = containingInputs.Select(op =>
+                $"{op.Hash}:{op.N}").ToHashSet();
+
+            entities = entities.Where(e =>
+                e.IntentVtxos.Any(iv =>
+                    inputStrings.Contains($"{iv.VtxoTransactionId}:{iv.VtxoTransactionOutputIndex}")))
+                .ToList();
+        }
+
         return entities.Select(MapToNNarkIntent).ToList();
     }
 
-    public async Task<IReadOnlyCollection<NNarkArkIntent>> GetActiveIntents(
+    public async Task<IReadOnlyCollection<OutPoint>> GetLockedVtxoOutpoints(
+        string walletId,
         CancellationToken cancellationToken = default)
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
-        var entities = await db.Intents
-            .Include(i => i.IntentVtxos)
-            .Where(i =>
-                i.State == ArkIntentState.WaitingToSubmit ||
-                i.State == ArkIntentState.WaitingForBatch ||
-                i.State == ArkIntentState.BatchInProgress)
+        var results = await db.IntentVtxos
+            .Include(iv => iv.Intent)
+            .Include(iv => iv.Vtxo)
+            .Where(iv => iv.Intent.WalletId == walletId &&
+                        (iv.Intent.State == ArkIntentState.WaitingToSubmit ||
+                         iv.Intent.State == ArkIntentState.WaitingForBatch))
+            .Select(iv => new { iv.Vtxo!.TransactionId, iv.Vtxo.TransactionOutputIndex })
             .ToListAsync(cancellationToken);
 
-        return entities.Select(MapToNNarkIntent).ToList();
+        return results
+            .Select(r => new OutPoint(new uint256(r.TransactionId), (uint)r.TransactionOutputIndex))
+            .ToList();
     }
 
     private NNarkArkIntent MapToNNarkIntent(PluginArkIntent entity)
@@ -221,10 +213,11 @@ public class EfCoreIntentStorage : IIntentStorage
         );
     }
 
-    #region Plugin-specific methods (wallet-guarded)
+    #region Plugin-specific methods (for views that need plugin entities)
 
     /// <summary>
     /// Gets intent VTXOs grouped by IntentTxId.
+    /// Used by Intents view to display VTXOs associated with each intent.
     /// </summary>
     public async Task<Dictionary<string, ArkIntentVtxo[]>> GetIntentVtxosByIntentTxIdsAsync(
         IEnumerable<string> intentTxIds,
@@ -244,26 +237,8 @@ public class EfCoreIntentStorage : IIntentStorage
     }
 
     /// <summary>
-    /// Gets outpoints of VTXOs locked by pending intents for a wallet.
-    /// </summary>
-    public async Task<IReadOnlyList<(string TransactionId, int OutputIndex)>> GetLockedVtxoOutpointsAsync(
-        string walletId,
-        CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        return await db.IntentVtxos
-            .Include(iv => iv.Intent)
-            .Include(iv => iv.Vtxo)
-            .Where(iv => iv.Intent.WalletId == walletId &&
-                        (iv.Intent.State == ArkIntentState.WaitingToSubmit ||
-                         iv.Intent.State == ArkIntentState.WaitingForBatch))
-            .Select(iv => new ValueTuple<string, int>(iv.Vtxo!.TransactionId, iv.Vtxo.TransactionOutputIndex))
-            .ToListAsync(cancellationToken);
-    }
-
-    /// <summary>
     /// Gets intents with pagination and optional filtering.
+    /// Returns plugin entities for use in views that display intent details.
     /// </summary>
     public async Task<IReadOnlyList<PluginArkIntent>> GetIntentsWithPaginationAsync(
         string walletId,

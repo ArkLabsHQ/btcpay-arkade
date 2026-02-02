@@ -1,11 +1,13 @@
-using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
+using NArk.Abstractions.Contracts;
+using NArk.Abstractions.VTXOs;
+using NArk.Swaps.Models;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Models;
 
 public class StoreContractsViewModel : StoreCollectionViewModelBase
 {
-    public IReadOnlyCollection<ArkWalletContract> Contracts { get; set; } = [];
-    public Dictionary<string, VTXO[]> ContractVtxos { get; set; } = new();
+    public IReadOnlyCollection<ArkContractEntity> Contracts { get; set; } = [];
+    public Dictionary<string, ArkVtxo[]> ContractVtxos { get; set; } = new();
     public Dictionary<string, ArkSwap[]> ContractSwaps { get; set; } = new();
     public bool CanManageContracts { get; set; }
     public bool Debug { get; set; }

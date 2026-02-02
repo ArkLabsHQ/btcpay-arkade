@@ -1,14 +1,15 @@
 @using BTCPayServer.Abstractions.Contracts
 @using BTCPayServer.Abstractions.Extensions
 @using BTCPayServer.Plugins.ArkPayServer.Helpers
-@using NArk.Core.Transport
 @using NBitcoin
 @using NArk.Core.Contracts
+@using NArk.Core.Transport
+@using NArk.Hosting
 @using NArk.Swaps.Models
 @using static BTCPayServer.Plugins.ArkPayServer.Helpers.ArkViewHelpers
 @model BTCPayServer.Plugins.ArkPayServer.Models.StoreSwapsViewModel
 @inject IScopeProvider ScopeProvider
-@inject IClientTransport Terms
+@inject IClientTransport ClientTransport
 @inject ArkNetworkConfig ArkNetworkConfig
 
 @{
@@ -18,9 +19,9 @@
     Network network = Network.Main;
     try
     {
-        var terms = await Terms.GetServerInfoAsync();
-        mainnet = terms.Network.ChainName == ChainName.Mainnet;
-        network = terms.Network;
+        var serverInfo = await ClientTransport.GetServerInfoAsync();
+        mainnet = serverInfo.Network.ChainName == ChainName.Mainnet;
+        network = serverInfo.Network;
     }
     catch (Exception ex)
     {
@@ -28,6 +29,7 @@
 
     var statusFilterCount = GetFilterCount(Model.Search, "status");
     var typeFilterCount = GetFilterCount(Model.Search, "type");
+    var debugColumnCount = Model.Debug ? 9 : 8;
 }
 
 @section PageHeadContent
@@ -63,7 +65,7 @@
     <div class="alert alert-info d-flex align-items-center gap-2 mb-4">
         <vc:icon symbol="info" />
         <div>
-            <strong>Debug Mode Active</strong> - Showing cache status. 
+            <strong>Debug Mode Active</strong> - Showing cache status.
             Total cached swap IDs: <strong>@Model.CachedSwapIds.Count</strong>
         </div>
     </div>
@@ -73,7 +75,7 @@
     <input asp-for="Count" type="hidden" />
     <input asp-for="SearchTerm" type="hidden" value="@(Model.Search?.WithoutSearchText() ?? "")"/>
     <input asp-for="SearchText" class="form-control" placeholder="Search…" />
-    
+
     <div class="dropdown">
         <button id="StatusOptionsToggle" class="btn btn-secondary dropdown-toggle dropdown-toggle-custom-caret" type="button" data-bs-toggle="dropdown" aria-expanded="false">
             @if (statusFilterCount > 0)
@@ -91,7 +93,7 @@
             <a asp-action="Swaps" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "failed") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "status", "failed") ? "custom-active" : "")" text-translate="true">Failed</a>
         </div>
     </div>
-    
+
     <div class="dropdown">
         <button id="TypeOptionsToggle" class="btn btn-secondary dropdown-toggle dropdown-toggle-custom-caret" type="button" data-bs-toggle="dropdown" aria-expanded="false">
             @if (typeFilterCount > 0)
@@ -108,7 +110,7 @@
             <a asp-action="Swaps" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("type", "submarine") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "type", "submarine") ? "custom-active" : "")" text-translate="true">Submarine</a>
         </div>
     </div>
-    
+
     @if (statusFilterCount > 0 || typeFilterCount > 0 || !string.IsNullOrEmpty(Model.SearchText))
     {
         <button id="clearAllFiltersBtn" type="button" class="btn btn-secondary" style="min-width: 7rem;" title="Clear all filters">
@@ -121,126 +123,156 @@
 
 @if (Model.Swaps.Any())
 {
-    <div class="table-responsive">
-        <table class="table table-hover">
-            <thead>
-                <tr>
-                    <th class="date-col">
-                        <div class="d-flex align-items-center gap-1">
-                            <span text-translate="true">Created</span>
-                            <button type="button" class="btn btn-link p-0 switch-time-format only-for-js" title="Switch date format">
-                                <vc:icon symbol="time" />
-                            </button>
-                        </div>
-                    </th>
-                    <th text-translate="true" class="text-nowrap">Swap ID</th>
-                    <th text-translate="true" class="text-nowrap">Type</th>
-                    <th text-translate="true" class="text-nowrap">Amount</th>
-                    <th text-translate="true">Contract Address</th>
-                    <th text-translate="true">Status</th>
-                    <th text-translate="true">Invoice</th>
-                    @if (Model.Debug)
-                    {
-                        <th text-translate="true">Cache</th>
-                    }
-                    <th text-translate="true" class="text-end">Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach (var swap in Model.Swaps)
-                {
-                    var arkContract = swap.Contract != null ? ArkContractParser.Parse(swap.Contract.Type, swap.Contract.ContractData, network) : null;
-                    var link = arkContract != null ? ArkadeLinkHelper.GetIndexerLinkForContract(ArkNetworkConfig.ArkUri, arkContract) : "#";
-                    var boltzSwapLink = ArkadeLinkHelper.GetBoltzSwapLink(ArkNetworkConfig.BoltzUri, swap.SwapId);
-
-                    <tr id="swap_@swap.SwapId.GetHashCode()">
-                        <td class="align-middle date-col">@swap.CreatedAt.ToBrowserDate()</td>
-                        <td class="align-middle">
-                            <vc:truncate-center text="@swap.SwapId" link="@boltzSwapLink" classes="truncate-center-id"/>
-                        </td>
-                        <td class="align-middle">
-                            @if (swap.SwapType == ArkSwapType.ReverseSubmarine)
-                            {
-                                <span class="badge text-bg-primary">Reverse</span>
-                            }
-                            else
-                            {
-                                <span class="badge text-bg-info">Submarine</span>
-                            }
-                        </td>
-                        <td class="align-middle">
-                            @Money.Satoshis(swap.ExpectedAmount).ToDecimal(MoneyUnit.BTC) BTC
-                        </td>
-                        <td class="align-middle">
-                            @if (arkContract != null)
-                            {
-                                var arkAddress = arkContract.GetArkAddress().ToString(mainnet);
-                                <vc:truncate-center text="@arkAddress" link="@link" classes="truncate-center-id"/>
-                            }
-                            else
-                            {
-                                <span class="text-muted">-</span>
-                            }
-                        </td>
-                        <td class="align-middle">
-                            @{
-                                var swapclass = swap.Status switch
-                                {
-                                    ArkSwapStatus.Pending => "text-bg-info",
-                                    ArkSwapStatus.Settled => "text-bg-success",
-                                    ArkSwapStatus.Failed => "text-bg-danger",
-                                    _ => "text-bg-warning"
-                                }; 
-                            }
-                            
-                            <span class="badge @swapclass">@Enum.GetName(typeof(ArkSwapStatus), swap.Status)</span>
-                            
-                            
-                            @if (arkContract is VHTLCContract htlcContract && swap.Status != ArkSwapStatus.Settled && swap.Status != ArkSwapStatus.Unknown)
-                            {
-                                <div class="htlc-countdown mt-1" data-locktime="@htlcContract.RefundLocktime.Value" data-is-timelock="@htlcContract.RefundLocktime.IsTimeLock.ToString().ToLower()">
-                                    <small>Refund: <span class="countdown-value">calculating...</span></small>
-                                </div>
-                            }
-                        </td>
-                        <td class="align-middle">
-                            @if (!string.IsNullOrEmpty(swap.Invoice))
-                            {
-                                <vc:truncate-center text="@swap.Invoice" classes="truncate-center-id"/>
-                            }
-                            else
-                            {
-                                <span class="text-muted">-</span>
-                            }
-                        </td>
+    <form method="post" asp-action="MassActionSwaps" asp-route-storeId="@Model.StoreId">
+        <div class="table-responsive">
+            <table id="swaps-table" class="table table-hover mass-action">
+                <thead class="mass-action-head">
+                    <tr>
+                        <th class="mass-action-select-col only-for-js">
+                            <input type="checkbox" class="form-check-input mass-action-select-all" />
+                        </th>
+                        <th class="date-col">
+                            <div class="d-flex align-items-center gap-1">
+                                <span text-translate="true">Created</span>
+                                <button type="button" class="btn btn-link p-0 switch-time-format only-for-js" title="Switch date format">
+                                    <vc:icon symbol="time" />
+                                </button>
+                            </div>
+                        </th>
+                        <th text-translate="true" class="text-nowrap">Swap ID</th>
+                        <th text-translate="true" class="text-nowrap">Type</th>
+                        <th text-translate="true" class="text-nowrap">Amount</th>
+                        <th text-translate="true">Contract Address</th>
+                        <th text-translate="true">Status</th>
+                        <th text-translate="true">Invoice</th>
                         @if (Model.Debug)
                         {
+                            <th text-translate="true">Cache</th>
+                        }
+                        <th text-translate="true" class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <thead class="mass-action-actions">
+                    <tr>
+                        <th class="mass-action-select-col only-for-js">
+                            <input type="checkbox" class="form-check-input mass-action-select-all" />
+                        </th>
+                        <th colspan="@debugColumnCount">
+                            <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+                                <div>
+                                    <strong class="mass-action-selected-count">0</strong>
+                                    <span text-translate="true">selected</span>
+                                </div>
+                                <div class="d-inline-flex align-items-center gap-3">
+                                    <button type="submit" name="command" value="poll-status" class="btn btn-link">
+                                        <vc:icon symbol="actions-refresh" />
+                                        <span text-translate="true">Poll Status</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var swap in Model.Swaps)
+                    {
+                        var contractEntity = Model.SwapContracts.GetValueOrDefault(swap.ContractScript);
+                        var arkContract = contractEntity != null ? ArkContractParser.Parse(contractEntity.Type, contractEntity.AdditionalData, network) : null;
+                        var link = arkContract != null ? ArkadeLinkHelper.GetContractLink(ArkNetworkConfig, arkContract) : "#";
+                        var boltzSwapLink = ArkadeLinkHelper.GetSwapLink(ArkNetworkConfig, swap.SwapId);
+
+                        <tr id="swap_@swap.SwapId.GetHashCode()" class="mass-action-row">
+                            <td class="only-for-js align-middle">
+                                <input name="selectedItems" type="checkbox" class="form-check-input mass-action-select" value="@swap.SwapId" />
+                            </td>
+                            <td class="align-middle date-col">@swap.CreatedAt.ToBrowserDate()</td>
                             <td class="align-middle">
-                                @if (Model.CachedSwapIds.Contains(swap.SwapId))
+                                <vc:truncate-center text="@swap.SwapId" link="@boltzSwapLink" classes="truncate-center-id"/>
+                            </td>
+                            <td class="align-middle">
+                                @if (swap.SwapType == ArkSwapType.ReverseSubmarine)
                                 {
-                                    <span class="badge text-bg-success" title="In active swaps cache">✓ Cached</span>
+                                    <span class="badge text-bg-primary">Reverse</span>
                                 }
                                 else
                                 {
-                                    <span class="badge text-bg-secondary" title="Not in active swaps cache">✗ Not Cached</span>
+                                    <span class="badge text-bg-info">Submarine</span>
                                 }
                             </td>
-                        }
-                        <td class="align-middle text-end">
-                            @if (swap.Status.IsActive())
+                            <td class="align-middle">
+                                @Money.Satoshis(swap.ExpectedAmount).ToDecimal(MoneyUnit.BTC) BTC
+                            </td>
+                            <td class="align-middle">
+                                @if (arkContract != null)
+                                {
+                                    var arkAddress = arkContract.GetArkAddress().ToString(mainnet);
+                                    <vc:truncate-center text="@arkAddress" link="@link" classes="truncate-center-id"/>
+                                }
+                                else
+                                {
+                                    <span class="text-muted">-</span>
+                                }
+                            </td>
+                            <td class="align-middle">
+                                @{
+                                    var swapclass = swap.Status switch
+                                    {
+                                        ArkSwapStatus.Pending => "text-bg-info",
+                                        ArkSwapStatus.Settled => "text-bg-success",
+                                        ArkSwapStatus.Failed => "text-bg-danger",
+                                        _ => "text-bg-warning"
+                                    };
+                                }
+
+                                <span class="badge @swapclass">@Enum.GetName(typeof(ArkSwapStatus), swap.Status)</span>
+
+
+                                @if (arkContract is VHTLCContract htlcContract && swap.Status != ArkSwapStatus.Settled && swap.Status != ArkSwapStatus.Unknown)
+                                {
+                                    <div class="htlc-countdown mt-1" data-locktime="@htlcContract.RefundLocktime.Value" data-is-timelock="@htlcContract.RefundLocktime.IsTimeLock.ToString().ToLower()">
+                                        <small>Refund: <span class="countdown-value">calculating...</span></small>
+                                    </div>
+                                }
+                            </td>
+                            <td class="align-middle">
+                                @if (!string.IsNullOrEmpty(swap.Invoice))
+                                {
+                                    <vc:truncate-center text="@swap.Invoice" classes="truncate-center-id"/>
+                                }
+                                else
+                                {
+                                    <span class="text-muted">-</span>
+                                }
+                            </td>
+                            @if (Model.Debug)
                             {
-                                <form asp-action="PollSwap" asp-route-storeId="@Model.StoreId" asp-route-swapId="@swap.SwapId" method="post" class="d-inline">
-                                    <button type="submit" class="btn btn-link p-0 text-secondary" title="Manually poll swap status" data-bs-toggle="tooltip">
-                                        <vc:icon symbol="actions-refresh" />
-                                    </button>
-                                </form>
+                                <td class="align-middle">
+                                    @if (Model.CachedSwapIds.Contains(swap.SwapId))
+                                    {
+                                        <span class="badge text-bg-success" title="In active swaps cache">Cached</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge text-bg-secondary" title="Not in active swaps cache">Not Cached</span>
+                                    }
+                                </td>
                             }
-                        </td>
-                    </tr>
-                }
-            </tbody>
-        </table>
-    </div>
+                            <td class="align-middle text-end">
+                                @if (swap.Status.IsActive())
+                                {
+                                    <form asp-action="PollSwap" asp-route-storeId="@Model.StoreId" asp-route-swapId="@swap.SwapId" method="post" class="d-inline">
+                                        <button type="submit" class="btn btn-link p-0 text-secondary" title="Manually poll swap status" data-bs-toggle="tooltip">
+                                            <vc:icon symbol="actions-refresh" />
+                                        </button>
+                                    </form>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </form>
 
     <vc:pager view-model="Model" />
 }

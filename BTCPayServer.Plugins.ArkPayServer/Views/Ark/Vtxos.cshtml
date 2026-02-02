@@ -4,18 +4,33 @@
 @using NArk.Abstractions.Blockchain
 @using NBitcoin
 @using NArk.Abstractions.VTXOs
+@using NArk.Core.Contracts
+@using NArk.Core.Transport
 @using static BTCPayServer.Plugins.ArkPayServer.Helpers.ArkViewHelpers
 @model BTCPayServer.Plugins.ArkPayServer.Models.StoreVtxosViewModel
 @inject IScopeProvider ScopeProvider
 @inject ArkNetworkConfig ArkNetworkConfig
 @inject IChainTimeProvider ChainTimeProvider
+@inject IClientTransport ClientTransport
 
 @{
     ViewData.SetActivePage(category: "Ark", activePage: "VTXOs", title: "Ark - VTXOs");
     var storeId = ScopeProvider.GetCurrentStoreId();
     var statusFilterCount = GetFilterCount(Model.Search, "status");
     var chainTime = await ChainTimeProvider.GetChainTime(Context.RequestAborted);
-    
+
+    // Get network for address formatting
+    var mainnet = true;
+    Network network = Network.Main;
+    try
+    {
+        var serverInfo = await ClientTransport.GetServerInfoAsync();
+        mainnet = serverInfo.Network.ChainName == ChainName.Mainnet;
+        network = serverInfo.Network;
+    }
+    catch (Exception)
+    {
+    }
 }
 
 @section PageHeadContent
@@ -49,7 +64,7 @@
 <form class="d-flex flex-wrap flex-sm-nowrap align-items-center gap-3 mb-4 col-xxl-8" asp-action="Vtxos" asp-route-storeId="@Model.StoreId" method="get">
     <input asp-for="Count" type="hidden" />
     <input asp-for="SearchTerm" type="hidden" value="@(Model.Search?.WithoutSearchText() ?? "")"/>
-    <input asp-for="SearchText" class="form-control" placeholder="Search TXID or Script…" />
+    <input asp-for="SearchText" class="form-control" placeholder="Search TXID, Address, or Contract…" />
 
     <div class="dropdown">
         <button id="StatusOptionsToggle" class="btn btn-secondary dropdown-toggle dropdown-toggle-custom-caret" type="button" data-bs-toggle="dropdown" aria-expanded="false">
@@ -101,6 +116,7 @@
                             </div>
                         </th>
                         <th text-translate="true">Outpoint</th>
+                        <th text-translate="true">Address</th>
                         <th text-translate="true">Amount</th>
                         <th text-translate="true">Expiry</th>
                         <th text-translate="true">Status</th>
@@ -111,20 +127,16 @@
                         <th class="mass-action-select-col only-for-js">
                             <input type="checkbox" class="form-check-input mass-action-select-all" />
                         </th>
-                        <th colspan="5">
+                        <th colspan="6">
                             <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
                                 <div>
                                     <strong class="mass-action-selected-count">0</strong>
                                     <span text-translate="true">selected</span>
                                 </div>
                                 <div class="d-inline-flex align-items-center gap-3">
-                                    <button type="submit" name="command" value="build-intent" class="btn btn-link">
-                                        <vc:icon symbol="actions-send" />
-                                        <span text-translate="true">Spend</span>
-                                    </button>
                                     <button type="submit" name="command" value="refresh-state" class="btn btn-link">
                                         <vc:icon symbol="actions-refresh" />
-                                        <span text-translate="true">Refresh State</span>
+                                        <span text-translate="true">Poll</span>
                                     </button>
                                 </div>
                             </div>
@@ -134,19 +146,30 @@
                 <tbody>
                     @foreach (var vtxo in Model.Vtxos)
                     {
-                        var outpoint = ArkadeLinkHelper.FormatOutpoint(vtxo.TransactionId, vtxo.TransactionOutputIndex);
-                        var link = ArkadeLinkHelper.GetIndexerLinkForVtxo(ArkNetworkConfig.ArkUri, vtxo.TransactionId, vtxo.TransactionOutputIndex);
                         var isSpendable = Model.SpendableOutpoints.Contains(vtxo.OutPoint);
                         var outpointValue = $"{vtxo.TransactionId}:{vtxo.TransactionOutputIndex}";
                         var isSpent = vtxo.IsSpent();
 
-                        <tr id="vtxo_@outpoint.GetHashCode()" class="mass-action-row">
+                        // Get contract info for this VTXO
+                        Model.VtxoContracts.TryGetValue(vtxo.Script, out var contract);
+                        var arkContract = contract != null ? ArkContractParser.Parse(contract.Type, contract.AdditionalData, network) : null;
+                        var addressStr = arkContract?.GetArkAddress().ToString(mainnet);
+                        var outpointLink = ArkadeLinkHelper.GetOutpointLink(ArkNetworkConfig, vtxo.OutPoint.ToString());
+                        var addressLink = !string.IsNullOrEmpty(vtxo.Script) ? ArkadeLinkHelper.GetScriptLink(ArkNetworkConfig, vtxo.Script) : null;
+
+                        <tr id="vtxo_@vtxo.OutPoint" class="mass-action-row">
                             <td class="only-for-js align-middle">
-                                <input name="selectedItems" type="checkbox" class="form-check-input mass-action-select" value="@outpointValue" />
+                                <input name="selectedItems" type="checkbox" class="form-check-input mass-action-select"
+                                       value="@outpointValue"/>
                             </td>
                             <td class="align-middle date-col">@vtxo.CreatedAt.ToBrowserDate()</td>
                             <td class="align-middle">
-                                <vc:truncate-center link="@link" text="@outpoint" classes="truncate-center-id"/>
+                                <vc:truncate-center link="@outpointLink" text="@vtxo.OutPoint"
+                                                    classes="truncate-center-id"/>
+                            </td>
+                            <td class="align-middle">
+                                <vc:truncate-center link="@addressLink" text="@addressStr"
+                                                    classes="truncate-center-id"/>
                             </td>
                             <td class="align-middle">@Money.Satoshis((long)vtxo.Amount).ToDecimal(MoneyUnit.BTC) BTC</td>
                             <td class="align-middle">
@@ -169,12 +192,10 @@
                                 else if (vtxo.IsRecoverable(chainTime))
                                 {
                                     <span class="badge text-bg-warning">Recoverable</span>
-                                 
                                 }
                                 else
                                 {
                                     <span class="badge text-bg-success">Unspent</span>
-                                    
                                 }
                                 @if (isSpendable)
                                 {

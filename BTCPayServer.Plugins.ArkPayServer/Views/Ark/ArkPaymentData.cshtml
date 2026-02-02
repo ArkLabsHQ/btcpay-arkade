@@ -1,5 +1,6 @@
 @using System.Globalization
 @using BTCPayServer.Abstractions.Extensions
+@using BTCPayServer.Plugins.ArkPayServer.Helpers
 @using BTCPayServer.Plugins.ArkPayServer.Models
 @using BTCPayServer.Plugins.ArkPayServer.PaymentHandler
 @using BTCPayServer.Services
@@ -8,6 +9,7 @@
 @model BTCPayServer.Models.InvoicingModels.InvoiceDetailsModel
 @inject TransactionLinkProviders TransactionLinkProviders
 @inject PaymentMethodHandlerDictionary handlers
+@inject ArkNetworkConfig ArkNetworkConfig
 
 
 @{
@@ -51,12 +53,14 @@
             <tbody>
             @foreach (var payment in payments)
             {
+	            var addrLink = ArkadeLinkHelper.GetAddressLink(ArkNetworkConfig, payment.Address);
+	            var outpointLink = ArkadeLinkHelper.GetOutpointLink(ArkNetworkConfig, payment.Outpoint);
                 <tr >
 	                <td>
-		                <vc:truncate-center text="@payment.Address"  classes="truncate-center-id" />
+		                <vc:truncate-center text="@payment.Address" link="@addrLink"  classes="truncate-center-id" />
 		                
 	                </td>
-	                <td><vc:truncate-center text="@payment.Outpoint"  classes="truncate-center-id" /></td>
+	                <td><vc:truncate-center text="@payment.Outpoint" link="@outpointLink"  classes="truncate-center-id" /></td>
 	                <td>@payment.ReceivedTime.ToBrowserDate()</td>
 	                <td>  <vc:truncate-center text="@payment.Contract"  classes="truncate-center-id" /></td>
 	                

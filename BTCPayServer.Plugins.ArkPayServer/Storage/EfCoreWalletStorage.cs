@@ -8,8 +8,8 @@ using PluginArkWallet = BTCPayServer.Plugins.ArkPayServer.Data.Entities.ArkWalle
 namespace BTCPayServer.Plugins.ArkPayServer.Storage;
 
 /// <summary>
-/// EF Core implementation of NNark's IWalletStorage interface.
-/// Maps between plugin's ArkWallet entity and NNark's ArkWallet record.
+/// Plugin-specific wallet storage for managing Ark wallet entities.
+/// Handles wallet CRUD operations, destination settings, and HD wallet index tracking.
 /// </summary>
 public class EfCoreWalletStorage
 {

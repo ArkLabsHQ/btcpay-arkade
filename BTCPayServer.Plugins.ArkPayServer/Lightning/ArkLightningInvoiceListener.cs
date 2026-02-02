@@ -1,7 +1,7 @@
 using System.Threading.Channels;
 using BTCPayServer.Lightning;
-using BTCPayServer.Plugins.ArkPayServer.Storage;
 using Microsoft.Extensions.Logging;
+using NArk.Abstractions.Contracts;
 using NArk.Swaps.Abstractions;
 using NArk.Swaps.Models;
 using NBitcoin;
@@ -15,23 +15,27 @@ public class ArkLightningInvoiceListener : ILightningInvoiceListener
     private readonly Network _network;
     private readonly CancellationToken _cancellationToken;
     private readonly ISwapStorage _swapStorage;
-    private readonly EfCoreSwapStorage _efCoreSwapStorage;
+    private readonly IContractStorage _contractStorage;
+    private readonly Func<ArkSwap, ArkContractEntity?, Network, LightningInvoice> _mapFunc;
 
     private readonly Channel<LightningInvoice> _paidInvoicesChannel = Channel.CreateUnbounded<LightningInvoice>();
 
     public ArkLightningInvoiceListener(
         string walletId,
         ILogger<ArkLightningInvoiceListener> logger,
-        EfCoreSwapStorage efCoreSwapStorage,
+        ISwapStorage swapStorage,
+        IContractStorage contractStorage,
         Network network,
+        Func<ArkSwap, ArkContractEntity?, Network, LightningInvoice> mapFunc,
         CancellationToken cancellationToken)
     {
         _walletId = walletId;
         _logger = logger;
         _network = network;
         _cancellationToken = cancellationToken;
-        _efCoreSwapStorage = efCoreSwapStorage;
-        _swapStorage = efCoreSwapStorage; // EfCoreSwapStorage implements ISwapStorage
+        _swapStorage = swapStorage;
+        _contractStorage = contractStorage;
+        _mapFunc = mapFunc;
 
         // Subscribe to NNark's swap storage events directly
         _swapStorage.SwapsChanged += OnSwapChanged;
@@ -51,13 +55,18 @@ public class ArkLightningInvoiceListener : ILightningInvoiceListener
             if (swap.SwapType != ArkSwapType.ReverseSubmarine)
                 return;
 
-            // Fetch the full entity from DB to get contract data for mapping
-            var entity = await _efCoreSwapStorage.GetSwapWithContractAsync(_walletId, swap.SwapId, _cancellationToken);
+            // Fetch the contract data for mapping
+            ArkContractEntity? contract = null;
+            if (!string.IsNullOrEmpty(swap.ContractScript))
+            {
+                var contracts = await _contractStorage.GetContracts(
+                    walletIds: [_walletId],
+                    scripts: [swap.ContractScript],
+                    cancellationToken: _cancellationToken);
+                contract = contracts.FirstOrDefault();
+            }
 
-            if (entity == null)
-                return;
-
-            var invoice = ArkLightningClient.Map(entity, _network);
+            var invoice = _mapFunc(swap, contract, _network);
             if (invoice.Status != LightningInvoiceStatus.Paid)
                 return;
 
@@ -72,7 +81,7 @@ public class ArkLightningInvoiceListener : ILightningInvoiceListener
     public async Task<LightningInvoice?> WaitInvoice(CancellationToken cancellation)
     {
         using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(_cancellationToken, cancellation);
-        
+
         try
         {
             // Wait for a paid invoice from the channel

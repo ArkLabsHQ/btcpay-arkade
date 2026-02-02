@@ -4,10 +4,12 @@ using BTCPayServer.Abstractions.Models;
 using BTCPayServer.Client;
 using BTCPayServer.Data;
 using BTCPayServer.HostedServices;
+using BTCPayServer.Lightning;
 using BTCPayServer.Payments;
 using BTCPayServer.Payments.Lightning;
 using BTCPayServer.PayoutProcessors;
 using BTCPayServer.Plugins.ArkPayServer.Data;
+using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using BTCPayServer.Plugins.ArkPayServer.Exceptions;
 using BTCPayServer.Plugins.ArkPayServer.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.Models;
@@ -24,6 +26,7 @@ using Microsoft.AspNetCore.Mvc;
 using NArk.Abstractions;
 using NArk.Abstractions.Fees;
 using NArk.Abstractions.Intents;
+using NArk.Swaps.Boltz;
 using NArk.Swaps.Boltz.Client;
 using NArk.Swaps.Helpers;
 using NArk.Core.Contracts;
@@ -34,6 +37,7 @@ using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using NArk.Abstractions.Blockchain;
 using NArk.Abstractions.Contracts;
 using NArk.Abstractions.VTXOs;
+using NArk.Swaps.Abstractions;
 using NArk.Abstractions.Wallets;
 using NArk.Swaps.Models;
 using NBitcoin;
@@ -45,7 +49,7 @@ namespace BTCPayServer.Plugins.ArkPayServer.Controllers;
 [Route("plugins/ark")]
 [Authorize(AuthenticationSchemes = AuthenticationSchemes.Cookie)]
 public class ArkController(
-    BoltzLimitsService? boltzLimitsService,
+    BoltzLimitsValidator? boltzLimitsValidator,
     BoltzClient? boltzClient,
     ArkNetworkConfig arkNetworkConfig,
     IAuthorizationService authorizationService,
@@ -65,9 +69,9 @@ public class ArkController(
     IFeeEstimator feeEstimator,
     IContractService contractService,
     IChainTimeProvider bitcoinTimeChainProvider,
-    VtxoPollingService vtxoPollingService,
-    EfCoreContractStorage contractStorage,
-    EfCoreSwapStorage swapStorage,
+    VtxoSynchronizationService vtxoSyncService,
+    IContractStorage contractStorage,
+    ISwapStorage swapStorage,
     IVtxoStorage vtxoStorage,
     EfCoreIntentStorage efCoreIntentStorage,
     EfCoreWalletStorage walletStorage) : Controller
@@ -164,15 +168,15 @@ public class ArkController(
             await storeRepository.UpdateStore(store);
 
             // If a new HD wallet was generated, redirect to seed backup page
-            if (walletSettings.IsNewlyGeneratedWallet && walletSettings.Wallet != null)
+            if (walletSettings is { IsNewlyGeneratedWallet: true, Wallet: not null })
             {
                 return RedirectToAction("RecoverySeedBackup", "UIHome", new
                 {
-                    Mnemonic = walletSettings.Wallet,
                     ReturnUrl = Url.Action(nameof(StoreOverview), new { storeId }),
                     IsStored = true,
                     RequireConfirm = true,
-                    CryptoCode = "ARK"
+                    CryptoCode = "ARK",
+                    Mnemonic = walletSettings.Wallet
                 });
             }
 
@@ -212,7 +216,12 @@ public class ArkController(
 
         // Get the default/active contract address
         string? defaultAddress = null;
-        var activeContract = await contractStorage.GetFirstActiveContractAsync(config.WalletId!, cancellationToken);
+        var activeContracts = await contractStorage.GetContracts(
+            walletIds: [config.WalletId!],
+            isActive: true,
+            take: 1,
+            cancellationToken: cancellationToken);
+        var activeContract = activeContracts.FirstOrDefault();
         if (activeContract != null)
         {
             var terms = await clientTransport.GetServerInfoAsync(cancellationToken);
@@ -234,8 +243,46 @@ public class ArkController(
         var canManagePrivateKeys = config!.GeneratedByStore ||
             (await authorizationService.AuthorizeAsync(User, null, new PolicyRequirement(Policies.CanModifyServerSettings))).Succeeded;
 
+        // Get recent VTXOs for the overview (latest 5, including spent)
+        IReadOnlyCollection<ArkVtxo> recentVtxos = [];
+        HashSet<OutPoint> spendableOutpoints = [];
+        Dictionary<string, ArkContractEntity> vtxoContracts = new();
+        var totalVtxoCount = 0;
+        try
+        {
+            var allCoins = await arkadeSpender.GetAvailableCoins(config.WalletId!, cancellationToken);
+            spendableOutpoints = allCoins.Select(c => c.Outpoint).ToHashSet();
+
+            var vtxos = await vtxoStorage.GetVtxos(
+                walletIds: [config.WalletId!],
+                includeSpent: true,
+                take: 5,
+                cancellationToken: cancellationToken);
+            recentVtxos = vtxos.ToList();
+
+            // Get total count (all VTXOs including spent)
+            var allVtxos = await vtxoStorage.GetVtxos(
+                walletIds: [config.WalletId!],
+                includeSpent: true,
+                cancellationToken: cancellationToken);
+            totalVtxoCount = allVtxos.Count();
+
+            // Get contract info for VTXOs
+            var vtxoScripts = recentVtxos.Select(v => v.Script).Distinct().ToArray();
+            var contracts = await contractStorage.GetContracts(
+                walletIds: [config.WalletId!],
+                scripts: vtxoScripts,
+                cancellationToken: cancellationToken);
+            vtxoContracts = contracts.ToDictionary(c => c.Script);
+        }
+        catch (Exception)
+        {
+            // Silently ignore - VTXOs section will show empty
+        }
+
         return View(new StoreOverviewViewModel
         {
+            StoreId = store!.Id,
             IsDestinationSweepEnabled = destination is not null,
             IsLightningEnabled = IsArkadeLightningEnabled(),
             Balances = balances,
@@ -260,7 +307,11 @@ public class ArkController(
             BoltzSubmarineMinAmount = boltzLimits?.SubmarineMinAmount,
             BoltzSubmarineMaxAmount = boltzLimits?.SubmarineMaxAmount,
             BoltzSubmarineFeePercentage = boltzLimits?.SubmarineFeePercentage,
-            BoltzSubmarineMinerFee = boltzLimits?.SubmarineMinerFee
+            BoltzSubmarineMinerFee = boltzLimits?.SubmarineMinerFee,
+            RecentVtxos = recentVtxos,
+            SpendableOutpoints = spendableOutpoints,
+            VtxoContracts = vtxoContracts,
+            TotalVtxoCount = totalVtxoCount
         });
     }
 
@@ -301,12 +352,11 @@ public class ArkController(
         var outpointStrings = vtxoOutpointsRaw.Split(',', StringSplitOptions.RemoveEmptyEntries);
         var parsedOutpoints = ParseOutpoints(outpointStrings);
 
-        var selectedVtxos = await vtxoStorage.GetVtxos(new VtxoFilter
-        {
-            Outpoints = parsedOutpoints.ToList(),
-            WalletIds = [walletId],
-            IncludeSpent = true
-        }, token);
+        var selectedVtxos = await vtxoStorage.GetVtxos(
+            outpoints: parsedOutpoints.ToList(),
+            walletIds: [walletId],
+            includeSpent: true,
+            cancellationToken: token);
 
         foreach (var vtxo in selectedVtxos)
         {
@@ -510,8 +560,8 @@ public class ArkController(
             var txId = await arkadeSpender.Spend(config.WalletId!, selectedCoins.ToArray(), arkOutputs.ToArray(), token);
 
             // Poll for VTXO updates
-            var activeScripts = await contractStorage.GetActiveContractScriptsAsync(config.WalletId!, token);
-            await vtxoPollingService.PollScriptsForVtxos(activeScripts.ToHashSet(), token);
+            var activeContracts = await contractStorage.GetContracts(walletIds: [config.WalletId!], isActive: true, cancellationToken: token);
+            await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), token);
 
             TempData[WellKnownTempData.SuccessMessage] = $"Successfully joined batch. Your VTXOs will be updated in the next round. Transaction ID: {txId}";
 
@@ -598,12 +648,11 @@ public class ArkController(
         var outpointStrings = model.VtxoOutpointsRaw.Split(',', StringSplitOptions.RemoveEmptyEntries);
         var parsedOutpoints = ParseOutpoints(outpointStrings);
 
-        var selectedVtxos = await vtxoStorage.GetVtxos(new VtxoFilter
-        {
-            Outpoints = parsedOutpoints.ToList(),
-            WalletIds = [walletId],
-            IncludeSpent = true
-        }, token);
+        var selectedVtxos = await vtxoStorage.GetVtxos(
+            outpoints: parsedOutpoints.ToList(),
+            walletIds: [walletId],
+            includeSpent: true,
+            cancellationToken: token);
 
         foreach (var vtxo in selectedVtxos)
         {
@@ -642,16 +691,23 @@ public class ArkController(
                     dest.StartsWith("lightning:", StringComparison.OrdinalIgnoreCase))
                 {
                     // Lightning swap fees
-                    if (boltzLimitsService != null)
+                    if (boltzLimitsValidator != null)
                     {
-                        var limits = await boltzLimitsService.GetLimitsAsync(token);
-                        var amount = request.Outputs[0].AmountSats ?? request.TotalInputSats;
+                        var limits = await boltzLimitsValidator.GetAllLimitsAsync(token);
+                        if (limits != null)
+                        {
+                            var amount = request.Outputs[0].AmountSats ?? request.TotalInputSats;
 
-                        response.IsLightning = true;
-                        response.FeePercentage = limits.SubmarineFeePercentage * 100; // Convert to percentage for display
-                        response.MinerFeeSats = limits.SubmarineMinerFee;
-                        response.EstimatedFeeSats = (long)Math.Ceiling(amount * limits.SubmarineFeePercentage) + limits.SubmarineMinerFee;
-                        response.FeeDescription = $"{limits.SubmarineFeePercentage * 100:F2}% + {limits.SubmarineMinerFee} sats miner fee";
+                            response.IsLightning = true;
+                            response.FeePercentage = limits.SubmarineFeePercentage * 100; // Convert to percentage for display
+                            response.MinerFeeSats = limits.SubmarineMinerFee;
+                            response.EstimatedFeeSats = (long)Math.Ceiling(amount * limits.SubmarineFeePercentage) + limits.SubmarineMinerFee;
+                            response.FeeDescription = $"{limits.SubmarineFeePercentage * 100:F2}% + {limits.SubmarineMinerFee} sats miner fee";
+                        }
+                        else
+                        {
+                            response.Error = "Failed to fetch Boltz limits";
+                        }
                     }
                     else
                     {
@@ -830,15 +886,12 @@ public class ArkController(
         if (request.VtxoOutpoints.Any())
         {
             var outpoints = ParseOutpoints(request.VtxoOutpoints.ToArray());
-            var filter = new VtxoFilter
-            {
-                WalletIds = new[] { config!.WalletId! },
-                Outpoints = outpoints.ToList(),
-                IncludeSpent = false,
-                IncludeRecoverable = true
-            };
 
-            var vtxos = await vtxoStorage.GetVtxos(filter, token);
+            var vtxos = await vtxoStorage.GetVtxos(
+                walletIds: [config!.WalletId!],
+                outpoints: outpoints.ToList(),
+                includeSpent: false,
+                cancellationToken: token);
 
             if (vtxos.Count != request.VtxoOutpoints.Count)
             {
@@ -969,13 +1022,11 @@ public class ArkController(
         }
 
         // Fetch full ArkVtxo details for the spendable coins
-        var availableVtxos = await vtxoStorage.GetVtxos(new VtxoFilter
-        {
-            Outpoints = spendableOutpoints,
-            WalletIds = new[] { config.WalletId! },
-            IncludeSpent = false,
-            IncludeRecoverable = true
-        }, token);
+        var availableVtxos = await vtxoStorage.GetVtxos(
+            outpoints: spendableOutpoints,
+            walletIds: [config.WalletId!],
+            includeSpent: false,
+            cancellationToken: token);
         model.AvailableVtxos = availableVtxos.ToList();
 
         if (!model.AvailableVtxos.Any())
@@ -987,24 +1038,33 @@ public class ArkController(
         // Handle pre-selected VTXOs from query param
         if (!string.IsNullOrEmpty(vtxos))
         {
-            var requestedOutpoints = vtxos.Split(',', StringSplitOptions.RemoveEmptyEntries)
-                .Select(s => s.Trim())
-                .ToHashSet();
-
-            model.SelectedVtxos = model.AvailableVtxos
-                .Where(v => requestedOutpoints.Contains($"{v.TransactionId}:{v.TransactionOutputIndex}"))
-                .ToList();
-
-            model.CoinSelectionMode = "manual";
-
-            // Warn if some requested coins unavailable
-            if (model.SelectedVtxos.Count < requestedOutpoints.Count)
+            if (vtxos.Equals("all", StringComparison.OrdinalIgnoreCase))
             {
-                var found = model.SelectedVtxos
-                    .Select(v => $"{v.TransactionId}:{v.TransactionOutputIndex}")
+                // Special case: select all available VTXOs
+                model.SelectedVtxos = model.AvailableVtxos.ToList();
+                model.CoinSelectionMode = "manual";
+            }
+            else
+            {
+                var requestedOutpoints = vtxos.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(s => s.Trim())
                     .ToHashSet();
-                var missing = requestedOutpoints.Except(found).Count();
-                model.Errors.Add($"{missing} selected coin(s) no longer available");
+
+                model.SelectedVtxos = model.AvailableVtxos
+                    .Where(v => requestedOutpoints.Contains($"{v.TransactionId}:{v.TransactionOutputIndex}"))
+                    .ToList();
+
+                model.CoinSelectionMode = "manual";
+
+                // Warn if some requested coins unavailable
+                if (model.SelectedVtxos.Count < requestedOutpoints.Count)
+                {
+                    var found = model.SelectedVtxos
+                        .Select(v => $"{v.TransactionId}:{v.TransactionOutputIndex}")
+                        .ToHashSet();
+                    var missing = requestedOutpoints.Except(found).Count();
+                    model.Errors.Add($"{missing} selected coin(s) no longer available");
+                }
             }
         }
 
@@ -1052,6 +1112,7 @@ public class ArkController(
         string storeId,
         [FromForm] SendWizardViewModel model,
         [FromForm] string[] selectedVtxoOutpoints,
+        [FromForm] string? SpendType,
         CancellationToken token)
     {
         var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: false);
@@ -1061,16 +1122,17 @@ public class ArkController(
         model.StoreId = storeId;
         model.Balances = await GetArkBalances(config!.WalletId!, token);
 
+        // User's spend type preference (Arkade = offchain, Batch = onchain intent)
+        var preferBatch = string.Equals(SpendType, "Batch", StringComparison.OrdinalIgnoreCase);
+
         // Re-load available coins for validation
         var allCoins = await arkadeSpender.GetAvailableCoins(config.WalletId!, token);
         var spendableOutpoints = allCoins.Select(c => c.Outpoint).ToList();
-        var availableVtxos = await vtxoStorage.GetVtxos(new VtxoFilter
-        {
-            Outpoints = spendableOutpoints,
-            WalletIds = new[] { config.WalletId! },
-            IncludeSpent = false,
-            IncludeRecoverable = true
-        }, token);
+        var availableVtxos = await vtxoStorage.GetVtxos(
+            outpoints: spendableOutpoints,
+            walletIds: [config.WalletId!],
+            includeSpent: false,
+            cancellationToken: token);
         model.AvailableVtxos = availableVtxos.ToList();
 
         // Validate selected coins
@@ -1106,19 +1168,66 @@ public class ArkController(
             {
                 var consolidationServerInfo = await clientTransport.GetServerInfoAsync(token);
                 var consolidationTotalInput = selectedCoins.Sum(c => c.TxOut.Value.Satoshi);
+                var hasRecoverableCoins = selectedCoins.Any(c => c.Swept);
 
-                // Get the wallet's own Ark address for consolidation
-                var contract = await contractStorage.GetFirstActiveContractAsync(config.WalletId!, token);
-                if (contract == null)
+                // Prevent pointless 1-in-1-out Arkade consolidation
+                // With Arkade (not Batch) and only 1 non-recoverable coin, consolidation does nothing useful
+                if (!preferBatch && !hasRecoverableCoins && selectedCoins.Count == 1)
                 {
-                    model.Errors.Add("No contract found for consolidation");
+                    model.Errors.Add("Arkade consolidation with a single coin is not useful. Either select multiple coins to consolidate, use Batch mode to renew expiry, or enter a destination to send funds.");
                     return View("Send", model);
                 }
 
-                var serverKey = consolidationServerInfo.SignerKey.Extract().XOnlyPubKey;
-                var selfDest = ArkAddress.FromScriptPubKey(Script.FromHex(contract.Script), serverKey);
+                // Get the wallet's own Ark address for consolidation
+                var contractOutput = await contractService.DeriveContract(config.WalletId!, NextContractPurpose.SendToSelf, ContractActivityState.AwaitingFundsBeforeDeactivate, token);
+                var selfDest = contractOutput.GetArkAddress();
 
-                var consolidationOutput = new ArkTxOut(
+                // For recoverable coins OR user chose Batch, create an intent (batch transaction)
+                if (hasRecoverableCoins || preferBatch)
+                {
+                    // Estimate fee for batch transaction
+                    var consolidationOutputForFee = new ArkTxOut(
+                        ArkTxOutType.Vtxo,
+                        Money.Satoshis(consolidationTotalInput),
+                        selfDest);
+                    var feeEstimation = await feeEstimator.EstimateFeeAsync(
+                        selectedCoins.ToArray(),
+                        new[] { consolidationOutputForFee },
+                        token);
+
+                    var outputAmount = consolidationTotalInput - feeEstimation;
+                    if (outputAmount <= 0)
+                    {
+                        model.Errors.Add("Insufficient funds after fees");
+                        return View("Send", model);
+                    }
+
+                    var consolidationOutput = new ArkTxOut(
+                        ArkTxOutType.Vtxo,
+                        Money.Satoshis(outputAmount),
+                        selfDest);
+
+                    // Create intent for batch
+                    var intentTxId = await intentGenerationService.GenerateManualIntent(
+                        config.WalletId!,
+                        new ArkIntentSpec(
+                            selectedCoins.ToArray(),
+                            new[] { consolidationOutput },
+                            DateTimeOffset.UtcNow,
+                            DateTimeOffset.UtcNow.AddHours(1)
+                        ),
+                        force: true,
+                        cancellationToken: token);
+
+                    var message = hasRecoverableCoins
+                        ? $"Recovery intent created! Intent ID: {intentTxId}. Coins will be consolidated in the next batch round."
+                        : $"Batch intent created! Intent ID: {intentTxId}. Coins will be consolidated in the next batch round.";
+
+                    return RedirectWithSuccess(nameof(Intents), message, new { storeId });
+                }
+
+                // For non-recoverable coins with Arkade preference, use direct Arkade spend
+                var arkadeOutput = new ArkTxOut(
                     ArkTxOutType.Vtxo,
                     Money.Satoshis(consolidationTotalInput),
                     selfDest);
@@ -1126,12 +1235,12 @@ public class ArkController(
                 var txId = await arkadeSpender.Spend(
                     config.WalletId!,
                     selectedCoins.ToArray(),
-                    new[] { consolidationOutput },
+                    new[] { arkadeOutput },
                     token);
 
                 // Poll for VTXO updates
-                var activeScripts = await contractStorage.GetActiveContractScriptsAsync(config.WalletId!, token);
-                await vtxoPollingService.PollScriptsForVtxos(activeScripts.ToHashSet(), token);
+                var activeContracts = await contractStorage.GetContracts(walletIds: [config.WalletId!], isActive: true, cancellationToken: token);
+                await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), token);
 
                 return RedirectWithSuccess(nameof(StoreOverview), $"Coins consolidated successfully! TxId: {txId}", new { storeId });
             }
@@ -1232,8 +1341,8 @@ public class ArkController(
                 token);
 
             // Poll for VTXO updates
-            var activeScripts = await contractStorage.GetActiveContractScriptsAsync(config.WalletId!, token);
-            await vtxoPollingService.PollScriptsForVtxos(activeScripts.ToHashSet(), token);
+            var activeContracts = await contractStorage.GetContracts(walletIds: [config.WalletId!], isActive: true, cancellationToken: token);
+            await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), token);
 
             return RedirectWithSuccess(nameof(StoreOverview), $"Transaction sent successfully! TxId: {txId}", new { storeId });
         }
@@ -1391,26 +1500,24 @@ public class ArkController(
         var activeFilter = ParseBooleanFilter(searchTerm, "status", "active");
 
         // Get contracts with pagination
-        var contracts = await contractStorage.GetContractsWithPaginationAsync(
-            config.WalletId,
-            skip,
-            count,
-            searchText,
-            activeFilter,
-            includeSwaps: false,
-            HttpContext.RequestAborted);
+        var contracts = await contractStorage.GetContracts(
+            walletIds: [config.WalletId],
+            isActive: activeFilter,
+            searchText: searchText,
+            skip: skip,
+            take: count,
+            cancellationToken: HttpContext.RequestAborted);
 
         // Get VTXOs for the contracts (include spent and recoverable for full history)
         var contractVtxos = new Dictionary<string, ArkVtxo[]>();
         if (contracts.Any())
         {
             var contractScripts = contracts.Select(c => c.Script).ToList();
-            var vtxos = await vtxoStorage.GetVtxos(new VtxoFilter
-            {
-                Scripts = contractScripts,
-                IncludeSpent = true,
-                IncludeRecoverable = true
-            }, HttpContext.RequestAborted);
+            var vtxos = await vtxoStorage.GetVtxos(
+                scripts: contractScripts,
+                walletIds: [config.WalletId],
+                includeSpent: true,
+                cancellationToken: HttpContext.RequestAborted);
 
             contractVtxos = vtxos
                 .GroupBy(v => v.Script)
@@ -1418,14 +1525,17 @@ public class ArkController(
         }
 
         // Always load swaps
-        var contractSwaps = new Dictionary<string, Data.Entities.ArkSwap[]>();
+        var contractSwaps = new Dictionary<string, NArk.Swaps.Models.ArkSwap[]>();
         if (contracts.Any())
         {
-            var contractScripts = contracts.Select(c => c.Script);
-            contractSwaps = await swapStorage.GetSwapsByContractScriptsAsync(
-                config.WalletId,
-                contractScripts,
-                HttpContext.RequestAborted);
+            var contractScripts = contracts.Select(c => c.Script).ToArray();
+            var swaps = await swapStorage.GetSwaps(
+                walletId: config.WalletId,
+                contractScripts: contractScripts,
+                cancellationToken: HttpContext.RequestAborted);
+            contractSwaps = swaps
+                .GroupBy(s => s.ContractScript)
+                .ToDictionary(g => g.Key, g => g.ToArray());
         }
 
         var model = new StoreContractsViewModel
@@ -1441,7 +1551,7 @@ public class ArkController(
             CanManageContracts = config.GeneratedByStore,
             Debug = debug,
             CachedSwapScripts = [], // Active swap scripts tracked by SwapsManagementService internally
-            CachedContractScripts = (await contractStorage.LoadActiveContracts(cancellationToken: HttpContext.RequestAborted))
+            CachedContractScripts = (await contractStorage.GetContracts(walletIds: [config.WalletId], isActive: true, cancellationToken: HttpContext.RequestAborted))
                 .Select(c => c.Script).ToHashSet()
         };
 
@@ -1481,19 +1591,27 @@ public class ArkController(
             _ => null
         });
 
-        var swaps = await swapStorage.GetSwapsWithPaginationAsync(
-            config.WalletId!,
-            skip,
-            count,
-            searchText,
-            statusFilter,
-            typeFilter,
-            HttpContext.RequestAborted);
+        var swaps = await swapStorage.GetSwaps(
+            walletId: config.WalletId!,
+            status: statusFilter,
+            swapType: typeFilter,
+            searchText: searchText,
+            skip: skip,
+            take: count,
+            cancellationToken: HttpContext.RequestAborted);
+
+        // Get contracts for the swaps to display contract details
+        var swapContractScripts = swaps.Select(s => s.ContractScript).Distinct().ToArray();
+        var swapContracts = await contractStorage.GetContracts(
+            walletIds: [config.WalletId!],
+            scripts: swapContractScripts,
+            cancellationToken: HttpContext.RequestAborted);
 
         var model = new StoreSwapsViewModel
         {
             StoreId = storeId,
             Swaps = swaps,
+            SwapContracts = swapContracts.ToDictionary(c => c.Script),
             Skip = skip,
             Count = count,
             SearchText = searchText,
@@ -1517,7 +1635,11 @@ public class ArkController(
             if (boltzClient == null)
                 return RedirectWithError(nameof(Swaps), "Boltz client is not configured", new { storeId });
 
-            var swap = await swapStorage.GetSwapByIdAsync(config!.WalletId!, swapId, HttpContext.RequestAborted);
+            var swaps = await swapStorage.GetSwaps(
+                walletId: config!.WalletId!,
+                swapIds: [swapId],
+                cancellationToken: HttpContext.RequestAborted);
+            var swap = swaps.FirstOrDefault();
             if (swap == null)
                 return RedirectWithError(nameof(Swaps), $"Swap {swapId} not found.", new { storeId });
 
@@ -1526,7 +1648,7 @@ public class ArkController(
 
             if (swap.Status != newStatus)
             {
-                await swapStorage.UpdateSwapStatusAsync(config.WalletId!, swapId, newStatus, HttpContext.RequestAborted);
+                await swapStorage.UpdateSwapStatus(config.WalletId!, swapId, newStatus, cancellationToken: HttpContext.RequestAborted);
                 return RedirectWithSuccess(nameof(Swaps), $"Swap {swapId} polled successfully. Status updated to: {newStatus}", new { storeId });
             }
 
@@ -1568,26 +1690,32 @@ public class ArkController(
         // Parse status filters - default to unspent and recoverable if no filter is set
         var search = new SearchString(searchTerm);
         bool includeSpent = false;
-        bool includeRecoverable = false;
+        bool filterRecoverableOnly = false;
+        bool filterNonRecoverableOnly = false;
         bool? spendableFilter = null; // null = all, true = spendable only, false = non-spendable only
-        
+
         if (search.ContainsFilter("status"))
         {
             var statusFilters = search.GetFilterArray("status");
             includeSpent = statusFilters.Contains("spent");
-            includeRecoverable = statusFilters.Contains("recoverable");
-            
-            // If only "unspent" is selected, don't include spent or recoverable
-            if (statusFilters.Contains("unspent") && !includeSpent && !includeRecoverable)
+            var hasRecoverable = statusFilters.Contains("recoverable");
+            var hasUnspent = statusFilters.Contains("unspent");
+
+            // Determine recoverable filtering based on UI selection
+            if (hasRecoverable && !hasUnspent)
             {
-                includeSpent = false;
-                includeRecoverable = false;
+                filterRecoverableOnly = true;
             }
-            
+            else if (hasUnspent && !hasRecoverable)
+            {
+                filterNonRecoverableOnly = true;
+            }
+            // If both or neither, show all (no recoverable filter)
+
             // Check for spendable filter
             var hasSpendable = statusFilters.Contains("spendable");
             var hasNonSpendable = statusFilters.Contains("non-spendable");
-            
+
             if (hasSpendable && hasNonSpendable)
             {
                 // Both selected = show all (no filter)
@@ -1604,23 +1732,32 @@ public class ArkController(
         }
         else
         {
-            // Default: show unspent and recoverable, exclude spent
-            includeRecoverable = true;
+            // Default: show unspent and recoverable
             searchTerm = "status:unspent,status:recoverable";
             search = new SearchString(searchTerm);
         }
 
         // Get contract scripts for the wallet and fetch VTXOs
-        var vtxoContractScripts = await contractStorage.GetContractScriptsAsync(config.WalletId, HttpContext.RequestAborted);
-        var vtxos = await vtxoStorage.GetVtxos(new VtxoFilter
+        var allContracts = await contractStorage.GetContracts(walletIds: [config.WalletId], cancellationToken: HttpContext.RequestAborted);
+        var vtxoContractScripts = allContracts.Select(c => c.Script).ToList();
+        var vtxos = await vtxoStorage.GetVtxos(
+            scripts: vtxoContractScripts,
+            walletIds: [config.WalletId],
+            includeSpent: includeSpent,
+            searchText: searchText,
+            skip: skip,
+            take: count,
+            cancellationToken: HttpContext.RequestAborted);
+
+        // Apply recoverable filter in-memory if needed
+        if (filterRecoverableOnly)
         {
-            Scripts = vtxoContractScripts.ToList(),
-            IncludeSpent = includeSpent,
-            IncludeRecoverable = includeRecoverable,
-            SearchText = searchText,
-            Skip = skip,
-            Take = count
-        }, HttpContext.RequestAborted);
+            vtxos = vtxos.Where(v => v.Swept).ToList();
+        }
+        else if (filterNonRecoverableOnly)
+        {
+            vtxos = vtxos.Where(v => !v.Swept).ToList();
+        }
 
         // Get spendable coins to determine which VTXOs are actually spendable
         var spendableCoins = await arkadeSpender.GetAvailableCoins(config.WalletId, HttpContext.RequestAborted);
@@ -1641,11 +1778,20 @@ public class ArkController(
                 .ToList();
         }
 
+        // Get contract info for all VTXO scripts
+        var vtxoScripts = vtxos.Select(v => v.Script).Distinct().ToArray();
+        var vtxoContractsQuery = await contractStorage.GetContracts(
+            walletIds: [config.WalletId],
+            scripts: vtxoScripts,
+            cancellationToken: HttpContext.RequestAborted);
+        var vtxoContracts = vtxoContractsQuery.ToDictionary(c => c.Script);
+
         var model = new StoreVtxosViewModel
         {
             StoreId = storeId,
             Vtxos = vtxos,
             SpendableOutpoints = spendableOutpoints,
+            VtxoContracts = vtxoContracts,
             Skip = skip,
             Count = count,
             SearchText = searchText,
@@ -1789,7 +1935,12 @@ public class ArkController(
             }
 
             // Get destination for refresh (back to same wallet)
-            var destination = await contractService.DeriveContract(refreshWallet.Id, NextContractPurpose.SendToSelf, cancellationToken: cancellationToken);
+            // Use AwaitingFundsBeforeDeactivate so the contract can be deactivated if the intent fails
+            var destination = await contractService.DeriveContract(
+                refreshWallet.Id,
+                NextContractPurpose.SendToSelf,
+                ContractActivityState.AwaitingFundsBeforeDeactivate,
+                cancellationToken);
             var totalAmount = coins.Sum(c => c.TxOut.Value);
 
 
@@ -1802,13 +1953,13 @@ public class ArkController(
             );
 
             // Create intent via NNark
-            var intentId = await intentGenerationService.GenerateManualIntent(
+            var intentTxId = await intentGenerationService.GenerateManualIntent(
                 config.WalletId,
                 arkIntentSpec,
                 force: true,
-                cancellationToken);                                                            
+                cancellationToken);
 
-            TempData[WellKnownTempData.SuccessMessage] = $"Refresh intent {intentId} created with {coins.Count} VTXOs. Intent will be submitted automatically.";
+            TempData[WellKnownTempData.SuccessMessage] = $"Refresh intent {intentTxId} created with {coins.Count} VTXOs. Intent will be submitted automatically.";
         }
         catch (Exception ex)
         {
@@ -1827,8 +1978,12 @@ public class ArkController(
 
         try
         {
-            // Get the intent from storage
-            var intent = await intentStorage.GetIntentByIntentTxId(intentTxId, cancellationToken);
+            // Get the intent from storage - filter by wallet to prevent cross-wallet access
+            var intents = await intentStorage.GetIntents(
+                walletIds: [config!.WalletId],
+                intentTxIds: [intentTxId],
+                cancellationToken: cancellationToken);
+            var intent = intents.FirstOrDefault();
             if (intent == null)
                 return RedirectWithError(nameof(Intents), "Intent not found.", new { storeId });
 
@@ -1867,8 +2022,8 @@ public class ArkController(
 
         try
         {
-            var scripts = await contractStorage.GetContractScriptsAsync(config!.WalletId, cancellationToken);
-            await vtxoPollingService.PollScriptsForVtxos(scripts.ToHashSet(), cancellationToken);
+            var contracts = await contractStorage.GetContracts(walletIds: [config!.WalletId], cancellationToken: cancellationToken);
+            await vtxoSyncService.PollScriptsForVtxos(contracts.Select(c => c.Script).ToHashSet(), cancellationToken);
             return RedirectWithSuccess(nameof(StoreOverview), "Wallet synchronized successfully. All contracts and VTXOs have been updated.", new { storeId });
         }
         catch (Exception ex)
@@ -1886,12 +2041,12 @@ public class ArkController(
 
         try
         {
-            var contractExists = await contractStorage.ContractExistsAsync(config!.WalletId, script, cancellationToken);
-            if (!contractExists)
+            var contracts = await contractStorage.GetContracts(walletIds: [config!.WalletId], scripts: [script], cancellationToken: cancellationToken);
+            if (!contracts.Any())
                 return RedirectWithError(nameof(Contracts), "Contract not found.", new { storeId });
 
-            var scripts = await contractStorage.GetContractScriptsAsync(config.WalletId, cancellationToken);
-            await vtxoPollingService.PollScriptsForVtxos(scripts.ToHashSet(), cancellationToken);
+            var allContracts = await contractStorage.GetContracts(walletIds: [config.WalletId], cancellationToken: cancellationToken);
+            await vtxoSyncService.PollScriptsForVtxos(allContracts.Select(c => c.Script).ToHashSet(), cancellationToken);
             return RedirectWithSuccess(nameof(Contracts), "Contract VTXOs updated successfully.", new { storeId });
         }
         catch (Exception ex)
@@ -1913,17 +2068,17 @@ public class ArkController(
 
         try
         {
-            var contract = await contractStorage.GetContractWithSwapsAsync(config.WalletId, script, cancellationToken);
-            if (contract == null)
+            var contracts = await contractStorage.GetContracts(walletIds: [config.WalletId], scripts: [script], cancellationToken: cancellationToken);
+            if (!contracts.Any())
                 return RedirectWithError(nameof(Contracts), "Contract not found.", new { storeId });
 
             // Check if contract has any pending swaps
-            var hasPendingSwaps = contract.Swaps?.Any(s => s.Status == ArkSwapStatus.Pending) ?? false;
-            if (hasPendingSwaps)
+            var swaps = await swapStorage.GetSwaps(walletId: config.WalletId, contractScripts: [script], status: ArkSwapStatus.Pending, cancellationToken: cancellationToken);
+            if (swaps.Any())
                 return RedirectWithError(nameof(Contracts), "Cannot delete contract: It has pending swaps.", new { storeId });
 
             // Delete the contract (cascade will delete related swaps)
-            await contractStorage.DeleteContractAsync(config.WalletId, script, cancellationToken);
+            await contractStorage.DeleteContract(config.WalletId, script, cancellationToken);
             return RedirectWithSuccess(nameof(Contracts), "Contract deleted successfully.", new { storeId });
         }
         catch (Exception ex)
@@ -1959,17 +2114,17 @@ public class ArkController(
             var scriptHex = script.ToHex();
 
             // Check if contract already exists
-            var contractExists = await contractStorage.ContractExistsAsync(config.WalletId, scriptHex, cancellationToken);
-            if (contractExists)
+            var existingContracts = await contractStorage.GetContracts(walletIds: [config.WalletId], scripts: [scriptHex], cancellationToken: cancellationToken);
+            if (existingContracts.Any())
                 return RedirectWithError(nameof(Contracts), "Contract already exists in this wallet.", new { storeId });
 
             // Create the contract using ToEntity and save via storage
             var contractEntity = arkContract.ToEntity(config.WalletId);
-            await contractStorage.SaveContract( contractEntity, cancellationToken);
+            await contractStorage.SaveContract(contractEntity, cancellationToken);
 
             // Sync the wallet to detect any VTXOs for this contract
-            var allScripts = await contractStorage.GetContractScriptsAsync(config.WalletId, cancellationToken);
-            await vtxoPollingService.PollScriptsForVtxos(allScripts.ToHashSet(), cancellationToken);
+            var allContracts = await contractStorage.GetContracts(walletIds: [config.WalletId], cancellationToken: cancellationToken);
+            await vtxoSyncService.PollScriptsForVtxos(allContracts.Select(c => c.Script).ToHashSet(), cancellationToken);
 
             return RedirectWithSuccess(nameof(Contracts), $"Contract imported successfully: {arkContract.GetArkAddress().ToString(terms.Network.ChainName == ChainName.Mainnet)}", new { storeId });
         }
@@ -2102,39 +2257,37 @@ public class ArkController(
         await tcs.Task;
         return RedirectToAction(nameof(ConfigurePayoutProcessor), "Ark", new { storeId });
     }
-
-    private async Task<ArkBalancesViewModel> GetArkBalances(string walletId, CancellationToken cancellationToken)
+[NonAction]
+    public async Task<ArkBalancesViewModel> GetArkBalances(string walletId, CancellationToken cancellationToken)
     {
         // Get all contract scripts for the wallet
-        var contractScripts = await contractStorage.GetContractScriptsAsync(walletId, cancellationToken);
+        // var contracts = await contractStorage.GetContracts(walletIds: [walletId], cancellationToken: cancellationToken);
+        // var contractScripts = contracts.Select(c => c.Script).ToList();
 
         // Get unspent VTXOs for those contracts
-        var vtxos = await vtxoStorage.GetVtxos(VtxoFilter.ByScripts(contractScripts.ToList()), cancellationToken);
-
+        // var vtxos = await vtxoStorage.GetVtxos(scripts: contractScripts, cancellationToken: cancellationToken);
+        var currentTime = await bitcoinTimeChainProvider.GetChainTime(cancellationToken); 
         var allCoins = await arkadeSpender.GetAvailableCoins(walletId, cancellationToken);
 
-        var coinsByRecoverableStatus = allCoins.ToLookup(coin => coin.IsRecoverable());
-        var spendableOutpoints = coinsByRecoverableStatus[false].Select(coin => coin.Outpoint).ToHashSet();
-        var recoverableOutpoints = coinsByRecoverableStatus[true].Select(coin => coin.Outpoint).ToHashSet();
+        var coinsByRecoverableStatus = allCoins.ToLookup(coin => coin.IsRecoverable(currentTime));
+        // var spendableOutpoints = coinsByRecoverableStatus[false].Select(coin => coin.Outpoint).ToHashSet();
+        // var recoverableOutpoints = coinsByRecoverableStatus[true].Select(coin => coin.Outpoint).ToHashSet();
 
         // Available: actually spendable right now (not recoverable, passes contract conditions)
-        var availableBalance = vtxos
-            .Where(vtxo => spendableOutpoints.Contains(vtxo.OutPoint))
-            .Sum(vtxo => (long)vtxo.Amount);
-
-        // Recoverable: spendable but marked as recoverable
-        var recoverableBalance = vtxos
-            .Where(vtxo => recoverableOutpoints.Contains(vtxo.OutPoint))
-            .Sum(vtxo => (long)vtxo.Amount);
+        // var availableBalance = vtxos
+        //     .Where(vtxo => spendableOutpoints.Contains(vtxo.OutPoint))
+        //     .Sum(vtxo => (long)vtxo.Amount);
+        //
+        // // Recoverable: spendable but marked as recoverable
+        // var recoverableBalance = vtxos
+        //     .Where(vtxo => recoverableOutpoints.Contains(vtxo.OutPoint))
+        //     .Sum(vtxo => (long)vtxo.Amount);
 
         // Locked: VTXOs that are linked to pending intents
-        var lockedVtxoOutpoints = await efCoreIntentStorage.GetLockedVtxoOutpointsAsync(walletId, cancellationToken);
+        var lockedVtxoOutpoints = await intentStorage.GetLockedVtxoOutpoints(walletId, cancellationToken);
+        var lockedOutpointSet = lockedVtxoOutpoints.ToHashSet();
 
-        var lockedBalance = vtxos
-            .Where(vtxo => lockedVtxoOutpoints.Any(iv =>
-                iv.TransactionId == vtxo.TransactionId &&
-                iv.OutputIndex == (int)vtxo.TransactionOutputIndex))
-            .Sum(vtxo => (long)vtxo.Amount);
+       
 
         // Unspendable: unspent VTXOs that don't pass contract conditions yet (e.g., HTLC timelock not reached)
         // These are not recoverable, not locked, but also not spendable
@@ -2142,16 +2295,25 @@ public class ArkController(
             .Select(coin => coin.Outpoint)
             .ToHashSet();
 
-        var unspendableBalance = vtxos
-            .Where(vtxo =>
+        var all = (await vtxoStorage
+            .GetVtxos(walletIds: [walletId],
+                includeSpent: false, cancellationToken: cancellationToken));
+        
+        var lockedBalance = all
+            .Where(vtxo => lockedOutpointSet.Contains(vtxo.OutPoint))
+            .Sum(vtxo => (long)vtxo.Amount);
+        
+        var unspendableBalance = 
+            all.Where(vtxo =>
             {
-                var isLocked = lockedVtxoOutpoints.Any(iv =>
-                    iv.TransactionId == vtxo.TransactionId &&
-                    iv.OutputIndex == (int)vtxo.TransactionOutputIndex);
+                var isLocked = lockedOutpointSet.Contains(vtxo.OutPoint);
                 return !allSpendableOutpoints.Contains(vtxo.OutPoint) && !isLocked;
             })
             .Sum(vtxo => (long)vtxo.Amount);
 
+        var availableBalance = coinsByRecoverableStatus[false].Sum(coin => coin.Amount.Satoshi);
+        var recoverableBalance = coinsByRecoverableStatus[true].Sum(coin => coin.Amount.Satoshi);
+        
         return new ArkBalancesViewModel
         {
             AvailableBalance = availableBalance,
@@ -2194,7 +2356,8 @@ public class ArkController(
 
         // Get the default/active contract address
         string? defaultAddress = null;
-        var adminActiveContract = await contractStorage.GetFirstActiveContractAsync(walletId, cancellationToken);
+        var adminActiveContracts = await contractStorage.GetContracts(walletIds: [walletId], isActive: true, take: 1, cancellationToken: cancellationToken);
+        var adminActiveContract = adminActiveContracts.FirstOrDefault();
         if (adminActiveContract != null)
         {
             var terms = await clientTransport.GetServerInfoAsync(cancellationToken);
@@ -2360,16 +2523,16 @@ public class ArkController(
     /// <summary>
     /// Gets Boltz connection status and cached limits.
     /// </summary>
-    private async Task<(bool connected, string? error, BoltzLimitsCache? limits)> GetBoltzConnectionStatusAsync(
+    private async Task<(bool connected, string? error, BoltzAllLimits? limits)> GetBoltzConnectionStatusAsync(
         CancellationToken cancellationToken)
     {
-        if (boltzLimitsService == null)
+        if (boltzLimitsValidator == null)
             return (false, null, null);
 
         try
         {
-            var limits = await boltzLimitsService.GetLimitsAsync(cancellationToken);
-            return (true, null, limits);
+            var limits = await boltzLimitsValidator.GetAllLimitsAsync(cancellationToken);
+            return (limits != null, limits == null ? "Boltz instance does not support Ark" : null, limits);
         }
         catch (Exception ex)
         {
@@ -2402,8 +2565,8 @@ public class ArkController(
 
                 case "refresh-state":
                     // Get wallet scripts and poll for updates
-                    var scripts = await contractStorage.GetContractScriptsAsync(config!.WalletId, cancellationToken);
-                    await vtxoPollingService.PollScriptsForVtxos(scripts.ToHashSet(), cancellationToken);
+                    var contracts = await contractStorage.GetContracts(walletIds: [config!.WalletId], cancellationToken: cancellationToken);
+                    await vtxoSyncService.PollScriptsForVtxos(contracts.Select(c => c.Script).ToHashSet(), cancellationToken);
                     return RedirectWithSuccess(nameof(Vtxos), $"Refreshed state for {selectedItems.Length} VTXOs.", new { storeId });
 
                 default:
@@ -2435,17 +2598,24 @@ public class ArkController(
                         return RedirectWithError(nameof(Swaps), "Boltz client is not configured.", new { storeId });
 
                     var updatedCount = 0;
+                    // Batch fetch all swaps at once for efficiency
+                    var swapsToCheck = await swapStorage.GetSwaps(
+                        walletId: config!.WalletId!,
+                        swapIds: selectedItems,
+                        cancellationToken: cancellationToken);
+                    var swapsDict = swapsToCheck.ToDictionary(s => s.SwapId);
+
                     foreach (var swapId in selectedItems)
                     {
-                        var swap = await swapStorage.GetSwapByIdAsync(config!.WalletId!, swapId, cancellationToken);
-                        if (swap == null) continue;
+                        if (!swapsDict.TryGetValue(swapId, out var swap))
+                            continue;
 
                         var statusResponse = await boltzClient.GetSwapStatusAsync(swapId, cancellationToken);
                         var newStatus = MapBoltzStatus(statusResponse.Status);
 
                         if (swap.Status != newStatus)
                         {
-                            await swapStorage.UpdateSwapStatusAsync(config.WalletId!, swapId, newStatus, cancellationToken);
+                            await swapStorage.UpdateSwapStatus(config.WalletId!, swapId, newStatus, cancellationToken: cancellationToken);
                             updatedCount++;
                         }
                     }
@@ -2477,27 +2647,27 @@ public class ArkController(
             {
                 case "sync-selected":
                     // Poll all scripts for VTXO updates
-                    await vtxoPollingService.PollScriptsForVtxos(selectedItems.ToHashSet(), cancellationToken);
+                    await vtxoSyncService.PollScriptsForVtxos(selectedItems.ToHashSet(), cancellationToken);
                     return RedirectWithSuccess(nameof(Contracts), $"Synced {selectedItems.Length} contracts.", new { storeId });
 
                 case "set-active":
                     foreach (var script in selectedItems)
                     {
-                        await contractStorage.SetContractActivityStateAsync(config!.WalletId, script, ContractActivityState.Active, cancellationToken);
+                        await contractStorage.UpdateContractActivityState(config!.WalletId, script, ContractActivityState.Active, cancellationToken);
                     }
                     return RedirectWithSuccess(nameof(Contracts), $"Set {selectedItems.Length} contracts to Active.", new { storeId });
 
                 case "set-inactive":
                     foreach (var script in selectedItems)
                     {
-                        await contractStorage.SetContractActivityStateAsync(config!.WalletId, script, ContractActivityState.Inactive, cancellationToken);
+                        await contractStorage.UpdateContractActivityState(config!.WalletId, script, ContractActivityState.Inactive, cancellationToken);
                     }
                     return RedirectWithSuccess(nameof(Contracts), $"Set {selectedItems.Length} contracts to Inactive.", new { storeId });
 
                 case "set-awaiting":
                     foreach (var script in selectedItems)
                     {
-                        await contractStorage.SetContractActivityStateAsync(config!.WalletId, script, ContractActivityState.AwaitingFundsBeforeDeactivate, cancellationToken);
+                        await contractStorage.UpdateContractActivityState(config!.WalletId, script, ContractActivityState.AwaitingFundsBeforeDeactivate, cancellationToken);
                     }
                     return RedirectWithSuccess(nameof(Contracts), $"Set {selectedItems.Length} contracts to Awaiting Funds.", new { storeId });
 
@@ -2557,22 +2727,29 @@ public class ArkController(
                     if (boltzClient == null)
                         return RedirectWithError(nameof(Contracts), "Boltz client is not configured.", new { storeId });
 
-                    var updatedCount = 0;
+                    var updatedSwapCount = 0;
+                    // Batch fetch all swaps at once for efficiency
+                    var swapsForContracts = await swapStorage.GetSwaps(
+                        walletId: config!.WalletId!,
+                        swapIds: selectedItems,
+                        cancellationToken: cancellationToken);
+                    var contractSwapsDict = swapsForContracts.ToDictionary(s => s.SwapId);
+
                     foreach (var swapId in selectedItems)
                     {
-                        var swap = await swapStorage.GetSwapByIdAsync(config!.WalletId!, swapId, cancellationToken);
-                        if (swap == null) continue;
+                        if (!contractSwapsDict.TryGetValue(swapId, out var swap))
+                            continue;
 
                         var statusResponse = await boltzClient.GetSwapStatusAsync(swapId, cancellationToken);
                         var newStatus = MapBoltzStatus(statusResponse.Status);
 
                         if (swap.Status != newStatus)
                         {
-                            await swapStorage.UpdateSwapStatusAsync(config.WalletId!, swapId, newStatus, cancellationToken);
-                            updatedCount++;
+                            await swapStorage.UpdateSwapStatus(config.WalletId!, swapId, newStatus, cancellationToken: cancellationToken);
+                            updatedSwapCount++;
                         }
                     }
-                    return RedirectWithSuccess(nameof(Contracts), $"Polled {selectedItems.Length} swaps. {updatedCount} status updates.", new { storeId });
+                    return RedirectWithSuccess(nameof(Contracts), $"Polled {selectedItems.Length} swaps. {updatedSwapCount} status updates.", new { storeId });
 
                 default:
                     return RedirectWithError(nameof(Contracts), $"Unknown command: {command}", new { storeId });
@@ -2599,6 +2776,672 @@ public class ArkController(
             }
         }
         return outpoints;
+    }
+
+    #endregion
+
+    #region Send2 - Simplified Send (No JavaScript)
+
+    /// <summary>
+    /// Send2 - Simplified send page. No JavaScript, offchain only.
+    /// </summary>
+    [HttpGet("stores/{storeId}/send2")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> Send2(
+        string storeId,
+        string? destinations = null,
+        CancellationToken token = default)
+    {
+        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: false);
+        if (errorResult != null)
+            return errorResult;
+
+        var model = await BuildSend2ViewModel(storeId, config!.WalletId!, token);
+
+        // Handle pre-filled destinations from payout handler
+        // Format can be: full BIP21 URIs (comma-separated), or addr:amt pairs
+        if (!string.IsNullOrEmpty(destinations))
+        {
+            var serverInfo = await clientTransport.GetServerInfoAsync(token);
+            var parsedDestinations = ParseDestinationsParam(destinations, serverInfo.Network);
+
+            model.MultipleDestinationsMode = parsedDestinations.Count > 1;
+
+            foreach (var parsed in parsedDestinations)
+            {
+                model.Destinations.Add(parsed);
+            }
+
+            // Estimate fees for all destinations
+            await EstimateSend2Fees(model, config.WalletId!, token);
+        }
+
+        return View("Send2", model);
+    }
+
+    /// <summary>
+    /// Send2 - Add a destination.
+    /// </summary>
+    [HttpPost("stores/{storeId}/send2/add")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> Send2Add(
+        string storeId,
+        [FromForm] Send2ViewModel model,
+        CancellationToken token = default)
+    {
+        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: false);
+        if (errorResult != null)
+            return errorResult;
+
+        // Restore state
+        var newModel = await BuildSend2ViewModel(storeId, config!.WalletId!, token);
+        newModel.MultipleDestinationsMode = model.MultipleDestinationsMode;
+        RestoreSend2Destinations(newModel, model.SerializedDestinations);
+        RestoreSend2CoinSelection(newModel, model.SerializedSelectedCoins, model.ShowCoinSelection);
+
+        // Parse and add new destination
+        if (!string.IsNullOrWhiteSpace(model.NewDestination))
+        {
+            var serverInfo = await clientTransport.GetServerInfoAsync(token);
+            var parsed = ParseSend2Destination(model.NewDestination.Trim(), model.NewAmountBtc, serverInfo.Network);
+
+            if (!parsed.IsValid)
+            {
+                newModel.Errors.Add(parsed.Error ?? "Invalid destination");
+            }
+            else
+            {
+                parsed.Index = newModel.Destinations.Count;
+                newModel.Destinations.Add(parsed);
+
+                // Estimate fees for all destinations
+                await EstimateSend2Fees(newModel, config.WalletId!, token);
+            }
+        }
+        else
+        {
+            newModel.Errors.Add("Please enter a destination");
+        }
+
+        // Serialize state for next round-trip
+        newModel.SerializedDestinations = SerializeSend2Destinations(newModel.Destinations);
+        newModel.SerializedSelectedCoins = string.Join(",", newModel.SelectedCoinOutpoints);
+
+        return View("Send2", newModel);
+    }
+
+    /// <summary>
+    /// Send2 - Remove a destination by index.
+    /// </summary>
+    [HttpPost("stores/{storeId}/send2/remove")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> Send2Remove(
+        string storeId,
+        [FromForm] Send2ViewModel model,
+        [FromForm] int removeIndex,
+        CancellationToken token = default)
+    {
+        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: false);
+        if (errorResult != null)
+            return errorResult;
+
+        // Restore state
+        var newModel = await BuildSend2ViewModel(storeId, config!.WalletId!, token);
+        newModel.MultipleDestinationsMode = model.MultipleDestinationsMode;
+        RestoreSend2Destinations(newModel, model.SerializedDestinations);
+        RestoreSend2CoinSelection(newModel, model.SerializedSelectedCoins, model.ShowCoinSelection);
+
+        // Remove destination
+        if (removeIndex >= 0 && removeIndex < newModel.Destinations.Count)
+        {
+            newModel.Destinations.RemoveAt(removeIndex);
+
+            // Re-index remaining destinations
+            for (int i = 0; i < newModel.Destinations.Count; i++)
+            {
+                newModel.Destinations[i].Index = i;
+            }
+
+            // Re-estimate fees
+            if (newModel.Destinations.Count > 0)
+            {
+                await EstimateSend2Fees(newModel, config.WalletId!, token);
+            }
+        }
+
+        // Serialize state
+        newModel.SerializedDestinations = SerializeSend2Destinations(newModel.Destinations);
+        newModel.SerializedSelectedCoins = string.Join(",", newModel.SelectedCoinOutpoints);
+
+        return View("Send2", newModel);
+    }
+
+    /// <summary>
+    /// Send2 - Toggle coin selection visibility.
+    /// </summary>
+    [HttpPost("stores/{storeId}/send2/toggle-coins")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> Send2ToggleCoins(
+        string storeId,
+        [FromForm] Send2ViewModel model,
+        CancellationToken token = default)
+    {
+        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: false);
+        if (errorResult != null)
+            return errorResult;
+
+        var newModel = await BuildSend2ViewModel(storeId, config!.WalletId!, token);
+        newModel.MultipleDestinationsMode = model.MultipleDestinationsMode;
+        RestoreSend2Destinations(newModel, model.SerializedDestinations);
+        RestoreSend2CoinSelection(newModel, model.SerializedSelectedCoins, !model.ShowCoinSelection);
+
+        if (newModel.Destinations.Count > 0)
+            await EstimateSend2Fees(newModel, config.WalletId!, token);
+
+        newModel.SerializedDestinations = SerializeSend2Destinations(newModel.Destinations);
+        newModel.SerializedSelectedCoins = string.Join(",", newModel.SelectedCoinOutpoints);
+
+        return View("Send2", newModel);
+    }
+
+    /// <summary>
+    /// Send2 - Toggle selection of a single coin.
+    /// </summary>
+    [HttpPost("stores/{storeId}/send2/toggle-coin")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> Send2ToggleCoin(
+        string storeId,
+        [FromForm] Send2ViewModel model,
+        [FromForm] string outpoint,
+        CancellationToken token = default)
+    {
+        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: false);
+        if (errorResult != null)
+            return errorResult;
+
+        var newModel = await BuildSend2ViewModel(storeId, config!.WalletId!, token);
+        newModel.MultipleDestinationsMode = model.MultipleDestinationsMode;
+        RestoreSend2Destinations(newModel, model.SerializedDestinations);
+        RestoreSend2CoinSelection(newModel, model.SerializedSelectedCoins, model.ShowCoinSelection);
+
+        // Toggle the coin
+        if (newModel.SelectedCoinOutpoints.Contains(outpoint))
+            newModel.SelectedCoinOutpoints.Remove(outpoint);
+        else
+            newModel.SelectedCoinOutpoints.Add(outpoint);
+
+        if (newModel.Destinations.Count > 0)
+            await EstimateSend2Fees(newModel, config.WalletId!, token);
+
+        newModel.SerializedDestinations = SerializeSend2Destinations(newModel.Destinations);
+        newModel.SerializedSelectedCoins = string.Join(",", newModel.SelectedCoinOutpoints);
+
+        return View("Send2", newModel);
+    }
+
+    /// <summary>
+    /// Send2 - Execute the transaction.
+    /// </summary>
+    [HttpPost("stores/{storeId}/send2/execute")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> Send2Execute(
+        string storeId,
+        [FromForm] Send2ViewModel model,
+        CancellationToken token = default)
+    {
+        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: false);
+        if (errorResult != null)
+            return errorResult;
+
+        // Restore state
+        var newModel = await BuildSend2ViewModel(storeId, config!.WalletId!, token);
+        newModel.MultipleDestinationsMode = model.MultipleDestinationsMode;
+        RestoreSend2Destinations(newModel, model.SerializedDestinations);
+        RestoreSend2CoinSelection(newModel, model.SerializedSelectedCoins, model.ShowCoinSelection);
+
+        if (newModel.Destinations.Count == 0)
+        {
+            newModel.Errors.Add("No destinations to send to");
+            newModel.SerializedSelectedCoins = string.Join(",", newModel.SelectedCoinOutpoints);
+            return View("Send2", newModel);
+        }
+
+        // Re-estimate fees to ensure we have current values
+        await EstimateSend2Fees(newModel, config.WalletId!, token);
+
+        // Validate we have enough balance
+        if (newModel.RemainingSats < 0)
+        {
+            newModel.Errors.Add($"Insufficient balance. Need {newModel.GrandTotalSats:#,0} sats, have {newModel.SelectedBalanceSats:#,0} sats");
+            newModel.SerializedDestinations = SerializeSend2Destinations(newModel.Destinations);
+            newModel.SerializedSelectedCoins = string.Join(",", newModel.SelectedCoinOutpoints);
+            return View("Send2", newModel);
+        }
+
+        try
+        {
+            // Check for Lightning destinations
+            var lightningDests = newModel.Destinations
+                .Where(d => d.Type == Send2DestinationType.LightningInvoice || d.Type == Send2DestinationType.Bip21Lightning)
+                .ToList();
+
+            if (lightningDests.Count > 0)
+            {
+                if (newModel.Destinations.Count > 1)
+                {
+                    newModel.Errors.Add("Lightning payments can only be sent one at a time");
+                    newModel.SerializedDestinations = SerializeSend2Destinations(newModel.Destinations);
+                    newModel.SerializedSelectedCoins = string.Join(",", newModel.SelectedCoinOutpoints);
+                    return View("Send2", newModel);
+                }
+
+                // Execute Lightning payment via ArkadeSpendingService
+                var lnDest = lightningDests[0];
+                var lnDestination = lnDest.ResolvedAddress ?? lnDest.RawDestination;
+                await arkadeSpendingService.Spend(store!, lnDestination, token);
+
+                TempData[WellKnownTempData.SuccessMessage] = $"Lightning payment of {lnDest.AmountSats:#,0} sats initiated";
+                return RedirectToAction(nameof(StoreOverview), new { storeId });
+            }
+
+            // Build Ark outputs
+            var outputs = new List<ArkTxOut>();
+            foreach (var dest in newModel.Destinations)
+            {
+                if (dest.Type == Send2DestinationType.ArkAddress || dest.Type == Send2DestinationType.Bip21Ark)
+                {
+                    var arkAddr = ArkAddress.Parse(dest.ResolvedAddress!);
+                    outputs.Add(new ArkTxOut(ArkTxOutType.Vtxo, Money.Satoshis(dest.AmountSats), arkAddr));
+                }
+                else
+                {
+                    newModel.Errors.Add($"Unsupported destination type: {dest.Type}");
+                    newModel.SerializedDestinations = SerializeSend2Destinations(newModel.Destinations);
+                    newModel.SerializedSelectedCoins = string.Join(",", newModel.SelectedCoinOutpoints);
+                    return View("Send2", newModel);
+                }
+            }
+
+            // Execute Ark spend
+            if (outputs.Count > 0)
+            {
+                uint256 txId;
+
+                // If coin selection is active and coins are selected, use manual coin selection
+                if (newModel.ShowCoinSelection && newModel.SelectedCoinOutpoints.Any())
+                {
+                    // Get actual coins from storage that match selected outpoints
+                    var allCoins = await arkadeSpender.GetAvailableCoins(config.WalletId!, token);
+                    var selectedCoins = allCoins
+                        .Where(c => newModel.SelectedCoinOutpoints.Contains(c.Outpoint.ToString()))
+                        .ToArray();
+
+                    if (selectedCoins.Length == 0)
+                    {
+                        newModel.Errors.Add("No valid coins selected");
+                        newModel.SerializedDestinations = SerializeSend2Destinations(newModel.Destinations);
+                        newModel.SerializedSelectedCoins = string.Join(",", newModel.SelectedCoinOutpoints);
+                        return View("Send2", newModel);
+                    }
+
+                    txId = await arkadeSpender.Spend(
+                        config.WalletId!,
+                        selectedCoins,
+                        outputs.ToArray(),
+                        token);
+                }
+                else
+                {
+                    // Auto coin selection
+                    txId = await arkadeSpender.Spend(
+                        config.WalletId!,
+                        outputs.ToArray(),
+                        token);
+                }
+
+                // Poll for VTXO updates
+                var activeContracts = await contractStorage.GetContracts(walletIds: [config.WalletId!], isActive: true, cancellationToken: token);
+                await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), token);
+
+                TempData[WellKnownTempData.SuccessMessage] = $"Sent {newModel.TotalSendingSats:#,0} sats to {outputs.Count} destination(s). TxId: {txId}";
+            }
+
+            return RedirectToAction(nameof(StoreOverview), new { storeId });
+        }
+        catch (Exception ex)
+        {
+            newModel.Errors.Add($"Transaction failed: {ex.Message}");
+            newModel.SerializedDestinations = SerializeSend2Destinations(newModel.Destinations);
+            newModel.SerializedSelectedCoins = string.Join(",", newModel.SelectedCoinOutpoints);
+            return View("Send2", newModel);
+        }
+    }
+
+    private async Task<Send2ViewModel> BuildSend2ViewModel(string storeId, string walletId, CancellationToken token)
+    {
+        // Get spendable offchain coins only (not recoverable)
+        var currTime = await bitcoinTimeChainProvider.GetChainTime(token);
+        var allCoins = await arkadeSpender.GetAvailableCoins(walletId, token);
+        var spendableCoins = allCoins.Where(c => !c.IsRecoverable(currTime)).ToList();
+
+        return new Send2ViewModel
+        {
+            StoreId = storeId,
+            AvailableBalanceSats = spendableCoins.Sum(c => c.TxOut.Value.Satoshi),
+            SpendableCoinsCount = spendableCoins.Count,
+            AvailableCoins = spendableCoins.Select(c => new Send2CoinViewModel
+            {
+                Outpoint = c.Outpoint.ToString(),
+                AmountSats = c.TxOut.Value.Satoshi,
+                IsSwept = c.Swept,
+                CreatedAt = c.Birth.DateTime
+            }).OrderByDescending(c => c.AmountSats).ToList()
+        };
+    }
+
+    private Send2DestinationViewModel ParseSend2Destination(string rawDestination, decimal? amountBtc, Network network)
+    {
+        var result = new Send2DestinationViewModel
+        {
+            RawDestination = rawDestination
+        };
+
+        // Convert amount to sats if provided
+        var amountSats = amountBtc.HasValue ? (long)(amountBtc.Value * 100_000_000m) : 0L;
+
+        // Try direct Ark address
+        if (ArkAddress.TryParse(rawDestination, out var arkAddress))
+        {
+            result.Type = Send2DestinationType.ArkAddress;
+            result.ResolvedAddress = rawDestination;
+            result.AmountSats = amountSats;
+            result.IsValid = amountSats > 0;
+            if (!result.IsValid)
+                result.Error = "Amount is required for Ark address";
+            return result;
+        }
+
+        // Try BOLT11 Lightning invoice
+        if (rawDestination.StartsWith("ln", StringComparison.OrdinalIgnoreCase) ||
+            rawDestination.StartsWith("lightning:", StringComparison.OrdinalIgnoreCase))
+        {
+            var invoiceStr = rawDestination.StartsWith("lightning:", StringComparison.OrdinalIgnoreCase)
+                ? rawDestination[10..]
+                : rawDestination;
+
+            try
+            {
+                var invoice = BOLT11PaymentRequest.Parse(invoiceStr, network);
+                result.Type = Send2DestinationType.LightningInvoice;
+                result.ResolvedAddress = invoiceStr;
+                result.AmountSats = amountSats > 0 ? amountSats : (long)(invoice.MinimumAmount?.ToUnit(LightMoneyUnit.Satoshi) ?? 0);
+                result.IsValid = result.AmountSats > 0;
+                if (!result.IsValid)
+                    result.Error = "Invoice amount could not be determined";
+                return result;
+            }
+            catch
+            {
+                result.Error = "Invalid Lightning invoice";
+                return result;
+            }
+        }
+
+        // Try BIP21 URI
+        if (Uri.TryCreate(rawDestination, UriKind.Absolute, out var uri) &&
+            uri.Scheme.Equals("bitcoin", StringComparison.OrdinalIgnoreCase))
+        {
+            var host = uri.AbsoluteUri[(uri.Scheme.Length + 1)..].Split('?')[0];
+            var qs = uri.ParseQueryString();
+
+            // Extract amount from BIP21 if not provided
+            if (amountSats == 0 && qs["amount"] is { } amountStr &&
+                decimal.TryParse(amountStr, System.Globalization.CultureInfo.InvariantCulture, out var amountDec))
+            {
+                amountSats = (long)(amountDec * 100_000_000m);
+            }
+
+            // Check for ark= parameter first (preferred)
+            if (qs["ark"] is { } arkQs && ArkAddress.TryParse(arkQs, out var qsArkAddress))
+            {
+                result.Type = Send2DestinationType.Bip21Ark;
+                result.ResolvedAddress = arkQs;
+                result.AmountSats = amountSats;
+                result.IsValid = amountSats > 0;
+                if (!result.IsValid)
+                    result.Error = "Amount is required";
+                return result;
+            }
+
+            // Check for lightning= parameter
+            if (qs["lightning"] is { } lnQs)
+            {
+                try
+                {
+                    var invoice = BOLT11PaymentRequest.Parse(lnQs, network);
+                    result.Type = Send2DestinationType.Bip21Lightning;
+                    result.ResolvedAddress = lnQs;
+                    result.AmountSats = amountSats > 0 ? amountSats : (long)(invoice.MinimumAmount?.ToUnit(LightMoneyUnit.Satoshi) ?? 0);
+                    result.IsValid = result.AmountSats > 0;
+                    if (!result.IsValid)
+                        result.Error = "Invoice amount could not be determined";
+                    return result;
+                }
+                catch
+                {
+                    // Invalid lightning invoice in BIP21
+                }
+            }
+
+            // Try host as Ark address
+            if (ArkAddress.TryParse(host, out var hostArkAddress))
+            {
+                result.Type = Send2DestinationType.Bip21Ark;
+                result.ResolvedAddress = host;
+                result.AmountSats = amountSats;
+                result.IsValid = amountSats > 0;
+                if (!result.IsValid)
+                    result.Error = "Amount is required";
+                return result;
+            }
+
+            // Bitcoin address without ark/lightning is not supported in Send2 (offchain only)
+            result.Error = "BIP21 URI does not contain an Ark address or Lightning invoice. Send2 only supports offchain transfers.";
+            return result;
+        }
+
+        // LNURL support (future)
+        if (rawDestination.StartsWith("lnurl", StringComparison.OrdinalIgnoreCase))
+        {
+            result.Type = Send2DestinationType.Lnurl;
+            result.Error = "LNURL support coming soon";
+            return result;
+        }
+
+        result.Error = "Unrecognized destination format. Use an Ark address, Lightning invoice, or BIP21 URI with ark/lightning parameter.";
+        return result;
+    }
+
+    private async Task EstimateSend2Fees(Send2ViewModel model, string walletId, CancellationToken token)
+    {
+        var currentTime = await bitcoinTimeChainProvider.GetChainTime(token);
+        foreach (var dest in model.Destinations)
+        {
+            if (!dest.IsValid) continue;
+
+            try
+            {
+                if (dest.Type == Send2DestinationType.ArkAddress || dest.Type == Send2DestinationType.Bip21Ark)
+                {
+                    // Ark fee estimation
+                    var arkAddr = ArkAddress.Parse(dest.ResolvedAddress!);
+                    var outputs = new[] { new ArkTxOut(ArkTxOutType.Vtxo, Money.Satoshis(dest.AmountSats), arkAddr) };
+
+                    var coins = await arkadeSpender.GetAvailableCoins(walletId, token);
+                    var spendableCoins = coins.Where(c => !c.IsRecoverable(currentTime)).ToArray();
+
+                    if (spendableCoins.Length > 0)
+                    {
+                        var fee = await feeEstimator.EstimateFeeAsync(spendableCoins, outputs, token);
+                        dest.FeeSats = fee;
+                        dest.FeeDescription = "Ark service fee";
+                    }
+                }
+                else if (dest.Type == Send2DestinationType.LightningInvoice || dest.Type == Send2DestinationType.Bip21Lightning)
+                {
+                    // Lightning swap fee estimation via Boltz
+                    if (boltzLimitsValidator != null)
+                    {
+                        var limits = await boltzLimitsValidator.GetAllLimitsAsync(token);
+                        if (limits != null)
+                        {
+                            var percentFee = (long)(dest.AmountSats * limits.SubmarineFeePercentage / 100m);
+                            var minerFee = limits.SubmarineMinerFee;
+                            dest.FeeSats = percentFee + minerFee;
+                            dest.FeeDescription = $"Swap fee ({limits.SubmarineFeePercentage:0.##}% + {minerFee:#,0} sat miner)";
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                dest.FeeDescription = "Fee estimation unavailable";
+            }
+        }
+    }
+
+    private static string SerializeSend2Destinations(List<Send2DestinationViewModel> destinations)
+    {
+        // Simple serialization: rawDest|type|resolvedAddr|amountSats|feeSats|isValid|error;;...
+        var parts = destinations.Select(d =>
+            $"{d.RawDestination}|{(int)d.Type}|{d.ResolvedAddress ?? ""}|{d.AmountSats}|{d.FeeSats}|{d.IsValid}|{d.Error ?? ""}");
+        return string.Join(";;", parts);
+    }
+
+    private static void RestoreSend2Destinations(Send2ViewModel model, string? serialized)
+    {
+        if (string.IsNullOrEmpty(serialized)) return;
+
+        var parts = serialized.Split(";;", StringSplitOptions.RemoveEmptyEntries);
+        int index = 0;
+        foreach (var part in parts)
+        {
+            var segments = part.Split('|');
+            if (segments.Length >= 6)
+            {
+                model.Destinations.Add(new Send2DestinationViewModel
+                {
+                    Index = index++,
+                    RawDestination = segments[0],
+                    Type = Enum.TryParse<Send2DestinationType>(segments[1], out var t) ? t : Send2DestinationType.Unknown,
+                    ResolvedAddress = string.IsNullOrEmpty(segments[2]) ? null : segments[2],
+                    AmountSats = long.TryParse(segments[3], out var amt) ? amt : 0,
+                    FeeSats = long.TryParse(segments[4], out var fee) ? fee : 0,
+                    IsValid = bool.TryParse(segments[5], out var valid) && valid,
+                    Error = segments.Length > 6 && !string.IsNullOrEmpty(segments[6]) ? segments[6] : null
+                });
+            }
+        }
+    }
+
+    private static void RestoreSend2CoinSelection(Send2ViewModel model, string? serializedCoins, bool showCoinSelection)
+    {
+        model.ShowCoinSelection = showCoinSelection;
+        if (string.IsNullOrEmpty(serializedCoins)) return;
+
+        model.SelectedCoinOutpoints = serializedCoins.Split(',', StringSplitOptions.RemoveEmptyEntries).ToList();
+    }
+
+    /// <summary>
+    /// Parses the destinations query parameter which can contain:
+    /// - Full BIP21 URIs (comma-separated, may contain colons in scheme)
+    /// - Simple format: addr:amount pairs (comma-separated)
+    /// </summary>
+    private List<Send2DestinationViewModel> ParseDestinationsParam(string destinations, Network network)
+    {
+        var result = new List<Send2DestinationViewModel>();
+
+        // Smart split: don't split on commas inside BIP21 URIs
+        // BIP21 URIs start with "bitcoin:" and may contain query params with commas
+        var parts = new List<string>();
+        var currentPart = "";
+        var inUri = false;
+
+        foreach (var c in destinations)
+        {
+            if (c == 'b' && currentPart == "" && destinations.IndexOf("bitcoin:", destinations.IndexOf(c.ToString()), StringComparison.OrdinalIgnoreCase) == destinations.IndexOf(c.ToString()))
+            {
+                inUri = true;
+            }
+
+            if (c == ',' && !inUri)
+            {
+                if (!string.IsNullOrWhiteSpace(currentPart))
+                    parts.Add(currentPart.Trim());
+                currentPart = "";
+                continue;
+            }
+
+            // End of URI detection (space or next bitcoin:)
+            if (inUri && (c == ' ' || (c == ',' && currentPart.Contains('?'))))
+            {
+                if (!string.IsNullOrWhiteSpace(currentPart))
+                    parts.Add(currentPart.Trim());
+                currentPart = "";
+                inUri = c != ',';
+                continue;
+            }
+
+            currentPart += c;
+        }
+
+        if (!string.IsNullOrWhiteSpace(currentPart))
+            parts.Add(currentPart.Trim());
+
+        int index = 0;
+        foreach (var part in parts)
+        {
+            // Check if this is a BIP21 URI
+            if (part.StartsWith("bitcoin:", StringComparison.OrdinalIgnoreCase))
+            {
+                var parsed = ParseSend2Destination(part, null, network);
+                parsed.Index = index++;
+                result.Add(parsed);
+            }
+            // Check if this is a Lightning invoice
+            else if (part.StartsWith("ln", StringComparison.OrdinalIgnoreCase) ||
+                     part.StartsWith("lightning:", StringComparison.OrdinalIgnoreCase))
+            {
+                var parsed = ParseSend2Destination(part, null, network);
+                parsed.Index = index++;
+                result.Add(parsed);
+            }
+            // Check if this is an Ark address (no colon, or ark1 prefix)
+            else if (part.StartsWith("ark1", StringComparison.OrdinalIgnoreCase) ||
+                     ArkAddress.TryParse(part.Split(':')[0], out _))
+            {
+                // Could be addr:amount format
+                var segments = part.Split(':', 2);
+                var rawDest = segments[0].Trim();
+                decimal? amount = segments.Length > 1 &&
+                                  decimal.TryParse(segments[1], System.Globalization.CultureInfo.InvariantCulture, out var amt)
+                    ? amt
+                    : null;
+
+                var parsed = ParseSend2Destination(rawDest, amount, network);
+                parsed.Index = index++;
+                result.Add(parsed);
+            }
+            else
+            {
+                // Unknown format, try to parse anyway
+                var parsed = ParseSend2Destination(part, null, network);
+                parsed.Index = index++;
+                result.Add(parsed);
+            }
+        }
+
+        return result;
     }
 
     #endregion

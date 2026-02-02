@@ -21,49 +21,69 @@ public class EfCoreContractStorage : IContractStorage
         _dbContextFactory = dbContextFactory;
     }
 
-    public async Task<IReadOnlySet<ArkContractEntity>> LoadAllContractsByWallet(
-        string walletIdentifier,
+    public async Task<IReadOnlyCollection<ArkContractEntity>> GetContracts(
+        string[]? walletIds = null,
+        string[]? scripts = null,
+        bool? isActive = null,
+        string[]? contractTypes = null,
+        string? searchText = null,
+        int? skip = null,
+        int? take = null,
         CancellationToken cancellationToken = default)
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
-        var entities = await db.WalletContracts
-            .Where(c => c.WalletId == walletIdentifier)
-            .ToListAsync(cancellationToken);
+        var query = db.WalletContracts.AsQueryable();
 
-        return entities.Select(MapToArkContractEntity).ToHashSet();
-    }
-
-    public async Task<IReadOnlySet<ArkContractEntity>> LoadActiveContracts(
-        IReadOnlyCollection<string>? walletIdentifiers = null,
-        CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        var query = db.WalletContracts.Where(c => c.ActivityState != ContractActivityState.Inactive);
-
-        if (walletIdentifiers != null && walletIdentifiers.Count > 0)
+        // Filter by wallet IDs
+        if (walletIds is {  })
         {
-            var walletSet = walletIdentifiers.ToHashSet();
-            query = query.Where(c => walletSet.Contains(c.WalletId));
+            query = query.Where(c => walletIds.Contains(c.WalletId));
         }
 
-        var entities = await query.ToListAsync(cancellationToken);
-        return entities.Select(MapToArkContractEntity).ToHashSet();
-    }
+        // Filter by scripts
+        if (scripts is {  })
+        {
+            var scriptSet = scripts.ToHashSet();
+            query = query.Where(c => scriptSet.Contains(c.Script));
+        }
 
-    public async Task<IReadOnlySet<ArkContractEntity>> LoadContractsByScripts(string[] scripts, IReadOnlyCollection<string>? walletIdentifiers = null,
-        CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        // Filter by activity state
+        if (isActive.HasValue)
+        {
+            query = isActive.Value
+                ? query.Where(c => c.ActivityState != ContractActivityState.Inactive)
+                : query.Where(c => c.ActivityState == ContractActivityState.Inactive);
+        }
 
-        var scriptSet = scripts.ToHashSet();
-        var entities = await db.WalletContracts
-            .Where(c => scriptSet.Contains(c.Script))
-            .Where(contract => walletIdentifiers == null || walletIdentifiers.Contains(contract.WalletId))
-            .ToListAsync(cancellationToken);
+        // Filter by contract types
+        if (contractTypes is {  })
+        {
+            query = query.Where(c => contractTypes.Contains(c.Type));
+        }
 
-        return entities.Select(MapToArkContractEntity).ToHashSet();
+        // Filter by search text (searches script)
+        if (!string.IsNullOrEmpty(searchText))
+        {
+            query = query.Where(c => c.Script.Contains(searchText));
+        }
+
+        // Order by creation date for consistent pagination
+        query = query.OrderByDescending(c => c.CreatedAt);
+
+        // Pagination
+        if (skip.HasValue)
+        {
+            query = query.Skip(skip.Value);
+        }
+
+        if (take.HasValue)
+        {
+            query = query.Take(take.Value);
+        }
+
+        var entities = await query.AsNoTracking().ToListAsync(cancellationToken);
+        return entities.Select(MapToArkContractEntity).ToList();
     }
 
     public async Task SaveContract(
@@ -104,119 +124,7 @@ public class EfCoreContractStorage : IContractStorage
 
     }
 
-    private static ArkContractEntity MapToArkContractEntity(ArkWalletContract entity)
-    {
-        return new ArkContractEntity(
-            Script: entity.Script,
-            ActivityState: entity.ActivityState,
-            Type: entity.Type,
-            AdditionalData: entity.ContractData,
-            WalletIdentifier: entity.WalletId,
-            CreatedAt: entity.CreatedAt
-        );
-    }
-
-    #region Plugin-specific methods (wallet-guarded)
-
-    /// <summary>
-    /// Gets the first active contract for a wallet. Used for displaying default address.
-    /// </summary>
-    public async Task<ArkWalletContract?> GetFirstActiveContractAsync(
-        string walletId,
-        CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        return await db.WalletContracts
-            .Where(c => c.WalletId == walletId && c.ActivityState != ContractActivityState.Inactive)
-            .OrderBy(c => c.CreatedAt)
-            .FirstOrDefaultAsync(cancellationToken);
-    }
-
-    /// <summary>
-    /// Gets a contract with its swaps included. Wallet ID guards ownership.
-    /// </summary>
-    public async Task<ArkWalletContract?> GetContractWithSwapsAsync(
-        string walletId,
-        string script,
-        CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        return await db.WalletContracts
-            .Include(c => c.Swaps)
-            .FirstOrDefaultAsync(c => c.WalletId == walletId && c.Script == script, cancellationToken);
-    }
-
-    /// <summary>
-    /// Checks if a contract with the given script exists for the wallet.
-    /// </summary>
-    public async Task<bool> ContractExistsAsync(
-        string walletId,
-        string script,
-        CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        return await db.WalletContracts
-            .AnyAsync(c => c.WalletId == walletId && c.Script == script, cancellationToken);
-    }
-
-    /// <summary>
-    /// Deletes a contract by script. Wallet ID guards ownership.
-    /// </summary>
-    public async Task<bool> DeleteContractAsync(
-        string walletId,
-        string script,
-        CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        var contract = await db.WalletContracts
-            .FirstOrDefaultAsync(c => c.WalletId == walletId && c.Script == script, cancellationToken);
-
-        if (contract == null)
-            return false;
-
-        db.WalletContracts.Remove(contract);
-        await db.SaveChangesAsync(cancellationToken);
-        return true;
-    }
-
-    /// <summary>
-    /// Gets all contract scripts for a wallet.
-    /// </summary>
-    public async Task<IReadOnlyList<string>> GetContractScriptsAsync(
-        string walletId,
-        CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        return await db.WalletContracts
-            .Where(c => c.WalletId == walletId)
-            .Select(c => c.Script)
-            .ToListAsync(cancellationToken);
-    }
-
-    /// <summary>
-    /// Gets contract scripts for active contracts only.
-    /// </summary>
-    public async Task<IReadOnlyList<string>> GetActiveContractScriptsAsync(
-        string walletId,
-        CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        return await db.WalletContracts
-            .Where(c => c.WalletId == walletId && c.ActivityState != ContractActivityState.Inactive)
-            .Select(c => c.Script)
-            .ToListAsync(cancellationToken);
-    }
-
-    /// <summary>
-    /// Sets contract activity state.
-    /// </summary>
-    public async Task<bool> SetContractActivityStateAsync(
+    public async Task<bool> UpdateContractActivityState(
         string walletId,
         string script,
         ContractActivityState activityState,
@@ -233,125 +141,39 @@ public class EfCoreContractStorage : IContractStorage
 
         contract.ActivityState = activityState;
         await db.SaveChangesAsync(cancellationToken);
+        ActiveScriptsChanged?.Invoke(this, EventArgs.Empty);
         return true;
     }
 
-    /// <summary>
-    /// Upserts a contract.
-    /// </summary>
-    public async Task<bool> UpsertContractAsync(
-        ArkWalletContract contract,
-        CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        var existing = await db.WalletContracts.FirstOrDefaultAsync(
-            c => c.Script == contract.Script && c.WalletId == contract.WalletId,
-            cancellationToken);
-
-        if (existing != null)
-        {
-            existing.ActivityState = contract.ActivityState;
-            existing.ContractData = contract.ContractData;
-        }
-        else
-        {
-            await db.WalletContracts.AddAsync(contract, cancellationToken);
-        }
-
-        return await db.SaveChangesAsync(cancellationToken) > 0;
-    }
-
-    /// <summary>
-    /// Gets contracts with pagination and optional filtering.
-    /// </summary>
-    /// <param name="walletId">The wallet to get contracts for</param>
-    /// <param name="skip">Number of contracts to skip</param>
-    /// <param name="count">Number of contracts to return</param>
-    /// <param name="searchText">Optional search text to filter by script</param>
-    /// <param name="filterIsActive">If true, returns only active contracts (not Inactive); if false, returns only Inactive contracts; if null, returns all</param>
-    /// <param name="includeSwaps">Whether to include swaps in the result</param>
-    /// <param name="cancellationToken">Cancellation token</param>
-    public async Task<IReadOnlyList<ArkWalletContract>> GetContractsWithPaginationAsync(
+    public async Task<bool> DeleteContract(
         string walletId,
-        int skip = 0,
-        int count = 10,
-        string? searchText = null,
-        bool? filterIsActive = null,
-        bool includeSwaps = false,
+        string script,
         CancellationToken cancellationToken = default)
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
-        var query = includeSwaps
-            ? db.WalletContracts.Include(c => c.Swaps)
-            : db.WalletContracts.AsQueryable();
+        var contract = await db.WalletContracts
+            .FirstOrDefaultAsync(c => c.WalletId == walletId && c.Script == script, cancellationToken);
 
-        query = query.Where(c => c.WalletId == walletId);
+        if (contract == null)
+            return false;
 
-        if (!string.IsNullOrEmpty(searchText))
-        {
-            query = query.Where(c => c.Script.Contains(searchText));
-        }
-
-        if (filterIsActive.HasValue)
-        {
-            // Active = not Inactive (includes Active and AwaitingFundsBeforeDeactivate)
-            query = filterIsActive.Value
-                ? query.Where(c => c.ActivityState != ContractActivityState.Inactive)
-                : query.Where(c => c.ActivityState == ContractActivityState.Inactive);
-        }
-
-        return await query
-            .OrderByDescending(c => c.CreatedAt)
-            .Skip(skip)
-            .Take(count)
-            .AsNoTracking()
-            .ToListAsync(cancellationToken);
+        db.WalletContracts.Remove(contract);
+        await db.SaveChangesAsync(cancellationToken);
+        ActiveScriptsChanged?.Invoke(this, EventArgs.Empty);
+        return true;
     }
 
-    /// <summary>
-    /// Gets contracts for multiple wallets with optional filtering.
-    /// </summary>
-    /// <param name="walletIds">Optional list of wallet IDs to filter by</param>
-    /// <param name="searchText">Optional search text to filter by script</param>
-    /// <param name="filterIsActive">If true, returns only active contracts; if false, returns only Inactive contracts; if null, returns all</param>
-    /// <param name="includeSwaps">Whether to include swaps in the result</param>
-    /// <param name="cancellationToken">Cancellation token</param>
-    public async Task<IReadOnlyList<ArkWalletContract>> GetContractsForWalletsAsync(
-        string[]? walletIds = null,
-        string? searchText = null,
-        bool? filterIsActive = null,
-        bool includeSwaps = false,
-        CancellationToken cancellationToken = default)
+    private static ArkContractEntity MapToArkContractEntity(ArkWalletContract entity)
     {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        var query = includeSwaps
-            ? db.WalletContracts.Include(c => c.Swaps)
-            : db.WalletContracts.AsQueryable();
-
-        if (walletIds != null && walletIds.Length > 0)
-        {
-            query = query.Where(c => walletIds.Contains(c.WalletId));
-        }
-
-        if (!string.IsNullOrEmpty(searchText))
-        {
-            query = query.Where(c => c.Script.Contains(searchText));
-        }
-
-        if (filterIsActive.HasValue)
-        {
-            query = filterIsActive.Value
-                ? query.Where(c => c.ActivityState != ContractActivityState.Inactive)
-                : query.Where(c => c.ActivityState == ContractActivityState.Inactive);
-        }
-
-        return await query
-            .OrderByDescending(c => c.CreatedAt)
-            .AsNoTracking()
-            .ToListAsync(cancellationToken);
+        return new ArkContractEntity(
+            Script: entity.Script,
+            ActivityState: entity.ActivityState,
+            Type: entity.Type,
+            AdditionalData: entity.ContractData,
+            WalletIdentifier: entity.WalletId,
+            CreatedAt: entity.CreatedAt
+        );
     }
 
     /// <summary>
@@ -386,7 +208,4 @@ public class EfCoreContractStorage : IContractStorage
 
         return count;
     }
-
-    #endregion
-
 }

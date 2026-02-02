@@ -1,0 +1,36 @@
+@model BTCPayServer.Plugins.ArkPayServer.Models.StoreOverviewViewModel
+
+@if (!string.IsNullOrEmpty(Model.WalletId))
+{
+    <div class="widget store-wallet-balance" data-testid="ark-dashboard-widget">
+        <header>
+            <h3 class="widget-title" data-testid="widget-title">
+                <a asp-controller="Ark" asp-action="StoreOverview" asp-route-storeId="@Model.StoreId">
+                    Arkade Wallet
+                </a>
+            </h3>
+        </header>
+        <div class="widget-body">
+            <!-- Wallet Balances - reusing _ArkBalances partial in compact mode -->
+            @if (Model.Balances != null)
+            {
+                <partial name="_ArkBalances" model="Model.Balances" view-data='new ViewDataDictionary(ViewData) { { "CompactMode", true }, { "NoContainer", true } }' />
+            }
+
+            <!-- Service Status - reusing _ServiceConnections partial in compact mode -->
+            <div class="mt-3 pt-3 border-top">
+                <partial name="_ServiceConnections" model="Model" view-data='new ViewDataDictionary(ViewData) { { "CompactMode", true } }' />
+            </div>
+
+            <!-- Quick links -->
+            <div class="mt-3 pt-3 border-top d-flex justify-content-between align-items-center">
+                <a asp-controller="Ark" asp-action="Vtxos" asp-route-storeId="@Model.StoreId" class="btn btn-sm btn-outline-secondary">
+                    View VTXOs
+                </a>
+                <a asp-controller="Ark" asp-action="Send" asp-route-storeId="@Model.StoreId" class="btn btn-sm btn-primary">
+                    Send
+                </a>
+            </div>
+        </div>
+    </div>
+}

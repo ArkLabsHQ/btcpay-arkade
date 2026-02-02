@@ -41,6 +41,12 @@ public class SendWizardViewModel
     public int SelectedCount => SelectedVtxos.Count;
     public bool HasPreselectedCoins => !string.IsNullOrEmpty(VtxoOutpoints);
     public bool HasPrefilledDestination => !string.IsNullOrEmpty(Destinations) || !string.IsNullOrEmpty(Destination);
+
+    // Total available balance
+    public long TotalAvailableSats => AvailableVtxos.Sum(v => (long)v.Amount);
+    public decimal TotalAvailableBtc => TotalAvailableSats / 100_000_000m;
+    public int InstantCoinsCount => AvailableVtxos.Count(v => !v.Swept);
+    public int BatchOnlyCoinsCount => AvailableVtxos.Count(v => v.Swept);
 }
 
 public class SendOutputViewModel

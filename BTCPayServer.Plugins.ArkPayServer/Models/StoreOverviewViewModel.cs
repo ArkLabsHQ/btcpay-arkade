@@ -1,9 +1,13 @@
 using BTCPayServer.Plugins.ArkPayServer.Wallet;
+using NArk.Abstractions.Contracts;
+using NArk.Abstractions.VTXOs;
+using NBitcoin;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Models;
 
 public class StoreOverviewViewModel
 {
+    public string? StoreId { get; set; }
     public bool IsLightningEnabled { get; set; }
     public bool IsDestinationSweepEnabled { get; set; }
     public ArkBalancesViewModel? Balances { get; set; }
@@ -45,4 +49,10 @@ public class StoreOverviewViewModel
     public long? BoltzSubmarineMaxAmount { get; set; }
     public decimal? BoltzSubmarineFeePercentage { get; set; }
     public long? BoltzSubmarineMinerFee { get; set; }
+
+    // VTXOs for the overview (recent unspent)
+    public IReadOnlyCollection<ArkVtxo> RecentVtxos { get; set; } = [];
+    public HashSet<OutPoint> SpendableOutpoints { get; set; } = [];
+    public Dictionary<string, ArkContractEntity> VtxoContracts { get; set; } = new();
+    public int TotalVtxoCount { get; set; }
 }

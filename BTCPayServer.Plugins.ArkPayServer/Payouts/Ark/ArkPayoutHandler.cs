@@ -350,9 +350,9 @@ public class ArkPayoutHandler : IPayoutHandler, IHasNetwork, IActiveScriptsProvi
                 bip21s.Add(bip21);
         }
 
-        // Redirect to unified Send wizard with destinations query param
-        // Format: addr1:amt1,addr2:amt2,...
-        return new RedirectToActionResult("Send", "Ark", new { storeId = storeId, destinations = string.Join(",", bip21s) });
+        // Redirect to simplified Send2 wizard with destinations query param
+        // Format: bip21Uri1,bip21Uri2,... (BIP21 URIs with ark= or lightning= parameters)
+        return new RedirectToActionResult("Send2", "Ark", new { storeId = storeId, destinations = string.Join(",", bip21s) });
     }
 
     public async Task<string?> TryGenerateBip21(PayoutData payout, (IClaimDestination destination, string error) claim)

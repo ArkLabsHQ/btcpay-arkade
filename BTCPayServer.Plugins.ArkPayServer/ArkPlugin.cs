@@ -26,6 +26,7 @@ using NArk.Hosting;
 using NArk.Core.Models.Options;
 using NArk.Core.Services;
 using NArk.Swaps.Abstractions;
+using NArk.Swaps.Boltz;
 using NArk.Swaps.Boltz.Client;
 using NArk.Swaps.Services;
 using NBitcoin;
@@ -166,16 +167,15 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
             options.Threshold = TimeSpan.FromDays(1));
         services.AddSingleton<IIntentScheduler, SimpleIntentScheduler>();
 
-        // Core services and network config
+        // Core services and network config (includes caching transport by default)
         services.AddArkCoreServices();
         services.AddArkNetwork(networkConfig, configureBoltz: !string.IsNullOrWhiteSpace(networkConfig.BoltzUri));
     }
 
     private static void RegisterPluginServices(IServiceCollection services)
     {
-        services.AddSingleton<VtxoPollingService>();
         services.AddSingleton<ArkadeSpendingService>();
-        
+
         services.AddSingleton<ISweepPolicy, DestinationSweepPolicy>();
 
         services.AddSingleton<ArkadeCheckoutModelExtension>();
@@ -195,6 +195,7 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         services.AddUIExtension("store-invoices-payments", "/Views/Ark/ArkPaymentData.cshtml");
         services.AddUIExtension("store-wallets-nav", "/Views/Ark/ArkWalletNav.cshtml");
         services.AddUIExtension("ln-payment-method-setup-tab", "/Views/Lightning/LNPaymentMethodSetupTab.cshtml");
+        services.AddUIExtension("dashboard", "/Views/Ark/ArkDashboardWidget.cshtml");
     }
 
     private static void RegisterBoltzServices(IServiceCollection services, ArkNetworkConfig networkConfig)
@@ -202,8 +203,8 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         if (!string.IsNullOrWhiteSpace(networkConfig.BoltzUri))
         {
             services.AddHttpClient<BoltzClient>();
+            services.AddHttpClient<CachedBoltzClient>();
             services.AddArkSwapServices();
-            services.AddSingleton<BoltzLimitsService>();
 
             services.AddUIExtension("ln-payment-method-setup-tabhead", "/Views/Ark/ArkLNSetupTabhead.cshtml");
 
@@ -214,8 +215,9 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         {
             // Null implementations for optional dependencies
             services.AddSingleton<BoltzClient>(_ => null!);
+            services.AddSingleton<CachedBoltzClient>(_ => null!);
             services.AddSingleton<SwapsManagementService>(_ => null!);
-            services.AddSingleton<BoltzLimitsService>(_ => null!);
+            services.AddSingleton<BoltzLimitsValidator>(_ => null!);
         }
     }
 
