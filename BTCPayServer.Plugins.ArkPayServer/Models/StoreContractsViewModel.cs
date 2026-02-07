@@ -13,6 +13,7 @@ public class StoreContractsViewModel : StoreCollectionViewModelBase
     public bool Debug { get; set; }
     public HashSet<string> CachedSwapScripts { get; set; } = new();
     public HashSet<string> CachedContractScripts { get; set; } = new();
+    public HashSet<string> ListenedScripts { get; set; } = new();
 
     public override int CurrentPageCount => Contracts.Count;
 }

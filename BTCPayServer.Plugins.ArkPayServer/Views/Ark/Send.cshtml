@@ -14,7 +14,7 @@
 
 @section PageHeadContent
 {
-    <link rel="stylesheet" href="~/plugins/ArkPayServer/css/ark-plugin.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/Resources/css/ark-plugin.css" asp-append-version="true" />
     <style>
         /* Wizard section tiles - BTCPay modern style */
         .wizard-section {
@@ -112,10 +112,6 @@
 
 @if (!Model.AvailableVtxos.Any())
 {
-    <div class="alert alert-warning">
-        <p class="mb-0" text-translate="true">No spendable coins available. Receive some funds first.</p>
-    </div>
-
     @if (Model.Balances != null)
     {
         <partial name="_ArkBalances" model="Model.Balances" />

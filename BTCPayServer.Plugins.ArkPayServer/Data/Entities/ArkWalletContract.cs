@@ -18,6 +18,9 @@ public class ArkWalletContract
     [Column(TypeName = "jsonb")]
     public Dictionary<string, string> ContractData { get; set; }
 
+    [Column(TypeName = "jsonb")]
+    public Dictionary<string, string>? Metadata { get; set; }
+
     public ArkWallet Wallet { get; set; }
     public string WalletId { get; set; }
 
@@ -37,6 +40,12 @@ public class ArkWalletContract
             .HasConversion(
                 v => JsonConvert.SerializeObject(v),
                 v => JsonConvert.DeserializeObject<Dictionary<string, string>>(v) ?? new Dictionary<string, string>())
+            .HasColumnType("jsonb");
+
+        entity.Property(e => e.Metadata)
+            .HasConversion(
+                v => v == null ? null : JsonConvert.SerializeObject(v),
+                v => v == null ? null : JsonConvert.DeserializeObject<Dictionary<string, string>>(v))
             .HasColumnType("jsonb");
 
         entity.HasOne(w => w.Wallet)

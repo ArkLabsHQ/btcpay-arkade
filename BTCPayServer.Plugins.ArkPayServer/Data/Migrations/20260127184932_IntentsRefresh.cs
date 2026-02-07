@@ -85,6 +85,13 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
                 schema: "BTCPayServer.Plugins.Ark",
                 table: "WalletContracts");
 
+            migrationBuilder.AddColumn<string>(
+                name: "Metadata",
+                schema: "BTCPayServer.Plugins.Ark",
+                table: "WalletContracts",
+                type: "jsonb",
+                nullable: true);
+
             // === Intents tables: drop and recreate with new schema ===
             // Drop IntentVtxos first (has FK to Intents)
             migrationBuilder.DropTable(
@@ -105,8 +112,8 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
                     IntentId = table.Column<string>(type: "text", nullable: true),
                     WalletId = table.Column<string>(type: "text", nullable: false),
                     State = table.Column<int>(type: "integer", nullable: false),
-                    ValidFrom = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
-                    ValidUntil = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
+                    ValidFrom = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
+                    ValidUntil = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
                     CreatedAt = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
                     UpdatedAt = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
                     RegisterProof = table.Column<string>(type: "text", nullable: false),
@@ -269,6 +276,11 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
 
             migrationBuilder.DropColumn(
                 name: "ActivityState",
+                schema: "BTCPayServer.Plugins.Ark",
+                table: "WalletContracts");
+
+            migrationBuilder.DropColumn(
+                name: "Metadata",
                 schema: "BTCPayServer.Plugins.Ark",
                 table: "WalletContracts");
 

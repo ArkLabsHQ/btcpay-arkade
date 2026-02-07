@@ -75,10 +75,10 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<DateTimeOffset>("ValidFrom")
+                    b.Property<DateTimeOffset?>("ValidFrom")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<DateTimeOffset>("ValidUntil")
+                    b.Property<DateTimeOffset?>("ValidUntil")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("WalletId")
@@ -215,6 +215,9 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Metadata")
+                        .HasColumnType("jsonb");
 
                     b.Property<string>("Type")
                         .IsRequired()

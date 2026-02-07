@@ -4,6 +4,7 @@ using NArk.Abstractions;
 using NArk.Abstractions.Contracts;
 using NArk.Abstractions.Safety;
 using NArk.Abstractions.Wallets;
+using NArk.Core;
 using NArk.Core.Contracts;
 using NArk.Swaps.Helpers;
 using NArk.Core.Transport;
@@ -55,7 +56,7 @@ public class HierarchicalDeterministicAddressProvider(
 
         return descriptor;
     }
-    
+
     private static OutputDescriptor GetDescriptorFromIndex(Network network, string descriptor, int index)
     {
         //TODO: the checksum may need to be recomputed?
@@ -65,19 +66,37 @@ public class HierarchicalDeterministicAddressProvider(
     public async Task<(ArkContract contract, ArkContractEntity entity)> GetNextContract(
         NextContractPurpose purpose,
         ContractActivityState activityState,
+        ArkContract[]? inputContracts = null,
         CancellationToken cancellationToken = default)
     {
         var info = await transport.GetServerInfoAsync(cancellationToken);
         ArkContract? result = null;
+
         if (purpose == NextContractPurpose.SendToSelf && sweepDestination is not null)
         {
-            // Static sweeping address is reusable - always keep it Active
+            // Static sweeping address is reusable - always keep it Inactive
             result = new UnknownArkContract(sweepDestination, info.SignerKey, info.Network.ChainName == ChainName.Mainnet);
             activityState = ContractActivityState.Inactive;
         }
         else if (purpose == NextContractPurpose.SendToSelf)
         {
-            activityState = ContractActivityState.AwaitingFundsBeforeDeactivate;
+            // For SendToSelf (change), try to recycle a descriptor from inputs to avoid index bloat
+            var recycledDescriptor = inputContracts is not null
+                ? await TryGetRecyclableDescriptor(inputContracts, cancellationToken)
+                : null;
+
+            if (recycledDescriptor is not null)
+            {
+                // Recycling from inputs - mark as Inactive since we control this transaction
+                result = new ArkPaymentContract(info.SignerKey, info.UnilateralExit, recycledDescriptor);
+                activityState = ContractActivityState.Inactive;
+            }
+            else
+            {
+                // No recycling possible, will use new descriptor below
+                // Mark as AwaitingFundsBeforeDeactivate so it's tracked until funded
+                activityState = ContractActivityState.AwaitingFundsBeforeDeactivate;
+            }
         }
 
         result ??= new ArkPaymentContract(
@@ -85,7 +104,38 @@ public class HierarchicalDeterministicAddressProvider(
             info.UnilateralExit,
             await GetNextSigningDescriptor(cancellationToken)
         );
-        
+
         return (result, result.ToEntity(wallet.Id, info.SignerKey, null, activityState));
+    }
+
+    /// <summary>
+    /// Tries to find a reusable descriptor from the input contracts.
+    /// This avoids HD index bloat when creating change outputs.
+    /// </summary>
+    private async Task<OutputDescriptor?> TryGetRecyclableDescriptor(ArkContract[] inputs, CancellationToken cancellationToken)
+    {
+        // Check ArkPaymentContracts first (most common)
+        foreach (var payment in inputs.OfType<ArkPaymentContract>())
+        {
+            if (await IsOurs(payment.User, cancellationToken))
+            {
+                return payment.User;
+            }
+        }
+
+        // Check VHTLCContracts (from swaps)
+        foreach (var htlc in inputs.OfType<VHTLCContract>())
+        {
+            if (await IsOurs(htlc.Receiver, cancellationToken))
+            {
+                return htlc.Receiver;
+            }
+            if (await IsOurs(htlc.Sender, cancellationToken))
+            {
+                return htlc.Sender;
+            }
+        }
+
+        return null;
     }
 }

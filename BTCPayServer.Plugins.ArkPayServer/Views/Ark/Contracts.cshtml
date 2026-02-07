@@ -33,7 +33,7 @@
     }
 
     var statusFilterCount = GetFilterCount(Model.Search, "status");
-    var mainColumnCount = Model.Debug ? 8 : 7;
+    var mainColumnCount = Model.Debug ? 11 : 9;
 
     // URLs for sublist mass actions
     var vtxoSublistAction = Url.Action("MassActionVtxosSublist", "Ark", new { storeId = Model.StoreId });
@@ -42,7 +42,7 @@
 
 @section PageHeadContent
 {
-    <link rel="stylesheet" href="~/plugins/ArkPayServer/css/ark-plugin.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/Resources/css/ark-plugin.css" asp-append-version="true" />
 }
 
 <div class="sticky-header">
@@ -81,9 +81,10 @@
     <div class="alert alert-info d-flex align-items-center gap-2 mb-4">
         <vc:icon symbol="info" />
         <div>
-            <strong>Debug Mode Active</strong> - Showing cache status.<br/>
+            <strong>Debug Mode Active</strong> - Showing cache and listening status.<br/>
             Tracked contracts cache: <strong>@Model.CachedContractScripts.Count</strong> active contracts<br/>
-            Boltz swaps cache: <strong>@Model.CachedSwapScripts.Count</strong> active swaps
+            Boltz swaps cache: <strong>@Model.CachedSwapScripts.Count</strong> active swaps<br/>
+            VtxoSyncService listening: <strong>@Model.ListenedScripts.Count</strong> scripts
         </div>
     </div>
 }
@@ -91,7 +92,7 @@
 <form class="d-flex flex-wrap flex-sm-nowrap align-items-center gap-3 mb-4 col-xxl-8" asp-action="Contracts" asp-route-storeId="@Model.StoreId" method="get">
     <input asp-for="Count" type="hidden" />
     <input asp-for="SearchTerm" type="hidden" value="@(Model.Search?.WithoutSearchText() ?? "")"/>
-    <input asp-for="SearchText" class="form-control" placeholder="Search Address or Contract Type…" />
+    <input asp-for="SearchText" class="form-control" placeholder="Search…" />
 
     <div class="dropdown">
         <button id="StatusOptionsToggle" class="btn btn-secondary dropdown-toggle dropdown-toggle-custom-caret" type="button" data-bs-toggle="dropdown" aria-expanded="false">
@@ -141,12 +142,14 @@
                         <th text-translate="true" class="text-nowrap">Address</th>
                         <th text-translate="true" class="text-nowrap">Contract Type</th>
                         <th text-translate="true" class="text-nowrap">Contract Data</th>
+                        <th text-translate="true">Source</th>
                         <th text-translate="true">Status</th>
                         <th text-translate="true">VTXOs</th>
                         <th text-translate="true">Swaps</th>
                         @if (Model.Debug)
                         {
                             <th text-translate="true">Cache</th>
+                            <th text-translate="true">Listening</th>
                         }
                         <th text-translate="true" class="text-end">Actions</th>
                     </tr>
@@ -201,7 +204,7 @@
                         ArkSwap[]? swaps = [];
                         var hasSwaps = Model.ContractSwaps.TryGetValue(contract.Script, out swaps) && swaps.Any();
 
-                        var sublistColspan = Model.Debug ? 9 : 8;
+                        var sublistColspan = Model.Debug ? 11 : 9;
 
                         <tr id="contract_@contract.Script.GetHashCode()" class="mass-action-row">
                             <td class="only-for-js align-middle">
@@ -222,6 +225,35 @@
                             </td>
                             <td class="align-middle">
                                 <vc:truncate-center text="@arkContract.ToString()" classes="truncate-center-id"/>
+                            </td>
+                            <td class="align-middle">
+                                @{
+                                    var source = contract.Metadata?.GetValueOrDefault("Source");
+                                }
+                                @if (source != null && source.StartsWith("invoice:"))
+                                {
+                                    var invoiceId = source.Substring("invoice:".Length);
+                                    <a asp-controller="UIInvoice" asp-action="Invoice" asp-route-invoiceId="@invoiceId"
+                                       class="badge text-bg-info text-decoration-none">
+                                        Invoice
+                                    </a>
+                                }
+                                else if (source != null && source.StartsWith("swap:"))
+                                {
+                                    <span class="badge text-bg-warning">Swap</span>
+                                }
+                                else if (source == "manual")
+                                {
+                                    <span class="badge text-bg-secondary">Manual</span>
+                                }
+                                else if (source != null)
+                                {
+                                    <span class="badge text-bg-light">@source</span>
+                                }
+                                else
+                                {
+                                    <span class="text-muted">-</span>
+                                }
                             </td>
                             <td class="align-middle">
                                 @switch (contract.ActivityState)
@@ -271,6 +303,16 @@
                                     @if (Model.CachedSwapScripts.Contains(contract.Script))
                                     {
                                         <span class="badge text-bg-info ms-1" title="In active swaps cache">🔄</span>
+                                    }
+                                </td>
+                                <td class="align-middle text-center">
+                                    @if (Model.ListenedScripts.Contains(contract.Script))
+                                    {
+                                        <span class="text-success" title="VtxoSyncService is actively listening for updates on this script">✓</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted">-</span>
                                     }
                                 </td>
                             }

@@ -33,6 +33,7 @@ public class SingleKeyAddressProvider(
     public async Task<(ArkContract contract, ArkContractEntity entity)> GetNextContract(
         NextContractPurpose purpose,
         ContractActivityState activityState,
+        ArkContract[]? inputContracts = null,
         CancellationToken cancellationToken = default)
     {
         var info = await transport.GetServerInfoAsync(cancellationToken);

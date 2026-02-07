@@ -44,7 +44,11 @@ public class ArkadePaymentMethodHandler(
             throw new PaymentMethodUnavailableException("Amount too small");
         }
 
-        var contract = await contractService.DeriveContract(arkadePaymentMethodConfig.WalletId, NextContractPurpose.Receive, cancellationToken: CancellationToken.None);
+        var contract = await contractService.DeriveContract(
+            arkadePaymentMethodConfig.WalletId,
+            NextContractPurpose.Receive,
+            metadata: new Dictionary<string, string> { ["Source"] = $"invoice:{context.InvoiceEntity.Id}" },
+            cancellationToken: CancellationToken.None);
         var details = new ArkadePromptDetails(arkadePaymentMethodConfig.WalletId, contract);
         var address = contract.GetArkAddress();
 

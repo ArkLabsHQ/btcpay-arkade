@@ -305,12 +305,14 @@ else
 
 @section PageHeadContent
 {
-    <link rel="stylesheet" href="~/plugins/ArkPayServer/css/ark-plugin.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/Resources/css/ark-plugin.css" asp-append-version="true" />
     <link href="~/vendor/vue-qrcode-reader/vue-qrcode-reader.css" rel="stylesheet" asp-append-version="true"/>
     <style>
         .buttons .btn { flex: 1 0 45%; }
     </style>
 }
+
+<partial name="CameraScanner"/>
 
 @section PageFootContent
 {
@@ -318,21 +320,17 @@ else
     <script src="~/vendor/ur-registry/urlib.min.js" asp-append-version="true"></script>
     <script src="~/vendor/vue-qrcode-reader/VueQrcodeReader.umd.min.js" asp-append-version="true"></script>
     <script>
-        // Send2 camera scanner - initialize after scripts are loaded
-        (function() {
-            if (typeof initCameraScanningApp === 'function') {
-                initCameraScanningApp('Scan address or payment link', function(data) {
-                    // Set the scanned data into the destination input
-                    var destInput = document.querySelector('[name="NewDestination"]');
-                    if (destInput) {
-                        destInput.value = data;
-                        // Auto-submit to add the destination
-                        destInput.form.submit();
-                    }
-                }, 'scanModal', false);
-            }
-        })();
+        // Send2 camera scanner - initialize after page loads
+        window.addEventListener('load', function() {
+            initCameraScanningApp('Scan address or payment link', function(data) {
+                // Set the scanned data into the destination input
+                var destInput = document.querySelector('[name="NewDestination"]');
+                if (destInput) {
+                    destInput.value = data;
+                    // Auto-submit to add the destination
+                    destInput.form.submit();
+                }
+            }, 'scanModal', false);
+        });
     </script>
 }
-
-<partial name="CameraScanner"/>

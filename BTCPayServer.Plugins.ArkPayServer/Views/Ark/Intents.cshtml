@@ -19,7 +19,7 @@
 
 @section PageHeadContent
 {
-    <link rel="stylesheet" href="~/plugins/ArkPayServer/css/ark-plugin.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/Resources/css/ark-plugin.css" asp-append-version="true" />
 }
 
 <div class="sticky-header">
@@ -119,6 +119,10 @@
                             {
                                 <vc:truncate-center text="@intent.IntentId" classes="truncate-center-id"/>
                             }
+                            else if (intent.State == ArkIntentState.Cancelled || intent.State == ArkIntentState.BatchFailed)
+                            {
+                                <span class="text-muted">-</span>
+                            }
                             else
                             {
                                 <span class="text-muted">Pending</span>
@@ -140,10 +144,10 @@
                                     <span class="badge text-bg-success">Batch Succeeded</span>
                                     break;
                                 case ArkIntentState.BatchFailed:
-                                    <span class="badge text-bg-danger">Batch Failed</span>
+                                    <span class="badge text-bg-danger" title="@intent.CancellationReason">Batch Failed</span>
                                     break;
                                 case ArkIntentState.Cancelled:
-                                    <span class="badge text-bg-dark">Cancelled</span>
+                                    <span class="badge text-bg-dark" title="@intent.CancellationReason">Cancelled</span>
                                     break;
                             }
                         </td>

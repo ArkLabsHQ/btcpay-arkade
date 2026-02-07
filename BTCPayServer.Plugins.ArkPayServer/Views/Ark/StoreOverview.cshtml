@@ -31,7 +31,7 @@
                     <label class="text-muted small">Receive Address</label>
                     <div class="input-group input-group-sm">
                         <input type="text" class="form-control form-control-sm font-monospace" value="@Model.DefaultAddress" readonly data-testid="receive-address" />
-                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="copyAddress()" data-testid="copy-address-btn" title="Copy to clipboard">
+                        <button type="button" class="btn btn-outline-secondary btn-sm" data-clipboard="@Model.DefaultAddress" data-testid="copy-address-btn" title="Copy to clipboard">
                             <vc:icon symbol="copy" />
                         </button>
                     </div>
@@ -175,6 +175,9 @@
                     <a asp-action="Send2" asp-route-storeId="@storeId" class="btn btn-primary" data-testid="send-btn">
                         <vc:icon symbol="actions-send" /> Send
                     </a>
+                    <a asp-action="Receive" asp-route-storeId="@storeId" class="btn btn-outline-primary" data-testid="receive-btn">
+                        <vc:icon symbol="actions-receive" /> Receive
+                    </a>
                 }
                 <form asp-action="SyncWallet" method="post" asp-route-storeId="@storeId">
                     <button type="submit" class="btn btn-outline-secondary w-100" data-testid="sync-wallet-btn">
@@ -298,14 +301,3 @@
     </div>
 </div>
 
-
-<script>
-    function copyAddress() {
-        const input = document.querySelector('input[data-testid="receive-address"]');
-        if (input) {
-            navigator.clipboard.writeText(input.value).then(() => {
-                alert('Address copied to clipboard!');
-            });
-        }
-    }
-</script>

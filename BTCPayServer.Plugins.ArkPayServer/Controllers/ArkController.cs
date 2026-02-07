@@ -122,7 +122,7 @@ public class ArkController(
                     
                     if (wallet.WalletType == WalletType.SingleKey)
                     {
-                       await  contractService.DeriveContract(wallet.Id, NextContractPurpose.SendToSelf, ContractActivityState.Active, HttpContext.RequestAborted);
+                       await  contractService.DeriveContract(wallet.Id, NextContractPurpose.SendToSelf, ContractActivityState.Active, cancellationToken: HttpContext.RequestAborted);
                     }
                     
                     walletSettings = walletSettings with { WalletId = wallet.Id };
@@ -313,6 +313,82 @@ public class ArkController(
             VtxoContracts = vtxoContracts,
             TotalVtxoCount = totalVtxoCount
         });
+    }
+
+    /// <summary>
+    /// Receive page: shows existing manual receive address or prompts to generate one.
+    /// </summary>
+    [HttpGet("stores/{storeId}/receive")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> Receive(string storeId, CancellationToken cancellationToken)
+    {
+        var (store, config, errorResult) = ValidateStoreAndConfig();
+        if (errorResult != null) return errorResult;
+
+        var model = new ArkReceiveViewModel();
+
+        try
+        {
+            var existingAddress = await FindManualReceiveAddress(config!.WalletId!, cancellationToken);
+            if (existingAddress != null)
+                model.Address = existingAddress;
+        }
+        catch (Exception ex)
+        {
+            TempData[WellKnownTempData.ErrorMessage] = $"Failed to check receive address: {ex.Message}";
+        }
+
+        return View(model);
+    }
+
+    [HttpPost("stores/{storeId}/receive")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> Receive(string storeId, string command, CancellationToken cancellationToken)
+    {
+        var (store, config, errorResult) = ValidateStoreAndConfig();
+        if (errorResult != null) return errorResult;
+
+        try
+        {
+            var contract = await contractService.DeriveContract(
+                config!.WalletId!,
+                NextContractPurpose.Receive,
+                ContractActivityState.AwaitingFundsBeforeDeactivate,
+                metadata: new Dictionary<string, string> { ["Source"] = "manual" },
+                cancellationToken: cancellationToken);
+
+            var terms = await clientTransport.GetServerInfoAsync(cancellationToken);
+            var address = contract.GetArkAddress().ToString(terms.Network.ChainName == ChainName.Mainnet);
+
+            return View(new ArkReceiveViewModel { Address = address });
+        }
+        catch (Exception ex)
+        {
+            TempData[WellKnownTempData.ErrorMessage] = $"Failed to generate receive address: {ex.Message}";
+        }
+
+        return RedirectToAction(nameof(Receive), new { storeId });
+    }
+
+    private async Task<string?> FindManualReceiveAddress(string walletId, CancellationToken cancellationToken)
+    {
+        var existingContracts = await contractStorage.GetContracts(
+            walletIds: [walletId],
+            isActive: true,
+            cancellationToken: cancellationToken);
+
+        var manualContract = existingContracts
+            .FirstOrDefault(c =>
+                c.ActivityState == ContractActivityState.AwaitingFundsBeforeDeactivate &&
+                c.Metadata?.GetValueOrDefault("Source") == "manual");
+
+        if (manualContract == null) return null;
+
+        var terms = await clientTransport.GetServerInfoAsync(cancellationToken);
+        var script = Script.FromHex(manualContract.Script);
+        var serverKey = terms.SignerKey.Extract().XOnlyPubKey;
+        var arkAddr = ArkAddress.FromScriptPubKey(script, serverKey);
+        return arkAddr.ToString(terms.Network.ChainName == ChainName.Mainnet);
     }
 
     /// <summary>
@@ -785,13 +861,17 @@ public class ArkController(
         {
             var allCoins = await arkadeSpender.GetAvailableCoins(config!.WalletId!, token);
 
-            // Filter out excluded outpoints
+            // Exclude VTXOs locked by pending intents
+            var lockedOutpoints = await intentStorage.GetLockedVtxoOutpoints(config.WalletId!, token);
+            var lockedSet = new HashSet<NBitcoin.OutPoint>(lockedOutpoints);
+
+            // Filter out excluded outpoints and locked VTXOs
             var excludeSet = request.ExcludeOutpoints?
                 .Select(o => o.Trim())
                 .ToHashSet() ?? new HashSet<string>();
 
             var availableCoins = allCoins
-                .Where(c => !excludeSet.Contains($"{c.Outpoint.Hash}:{c.Outpoint.N}"))
+                .Where(c => !lockedSet.Contains(c.Outpoint) && !excludeSet.Contains($"{c.Outpoint.Hash}:{c.Outpoint.N}"))
                 .ToList();
 
             if (!availableCoins.Any())
@@ -1013,13 +1093,16 @@ public class ArkController(
 
         // Load available (spendable) coins - get outpoints from ArkCoin, then fetch ArkVtxo details
         var allCoins = await arkadeSpender.GetAvailableCoins(config.WalletId!, token);
-        var spendableOutpoints = allCoins.Select(c => c.Outpoint).ToList();
+
+        // Exclude VTXOs locked by pending intents
+        var lockedOutpoints = await intentStorage.GetLockedVtxoOutpoints(config.WalletId!, token);
+        var lockedSet = new HashSet<NBitcoin.OutPoint>(lockedOutpoints);
+        var spendableOutpoints = allCoins
+            .Where(c => !lockedSet.Contains(c.Outpoint))
+            .Select(c => c.Outpoint).ToList();
 
         if (!spendableOutpoints.Any())
-        {
-            model.Errors.Add("No spendable coins available");
             return View("Send", model);
-        }
 
         // Fetch full ArkVtxo details for the spendable coins
         var availableVtxos = await vtxoStorage.GetVtxos(
@@ -1030,10 +1113,7 @@ public class ArkController(
         model.AvailableVtxos = availableVtxos.ToList();
 
         if (!model.AvailableVtxos.Any())
-        {
-            model.Errors.Add("No spendable coins available");
             return View("Send", model);
-        }
 
         // Handle pre-selected VTXOs from query param
         if (!string.IsNullOrEmpty(vtxos))
@@ -1125,9 +1205,12 @@ public class ArkController(
         // User's spend type preference (Arkade = offchain, Batch = onchain intent)
         var preferBatch = string.Equals(SpendType, "Batch", StringComparison.OrdinalIgnoreCase);
 
-        // Re-load available coins for validation
+        // Re-load available coins for validation (excluding locked VTXOs)
         var allCoins = await arkadeSpender.GetAvailableCoins(config.WalletId!, token);
-        var spendableOutpoints = allCoins.Select(c => c.Outpoint).ToList();
+        var lockedOutpoints = await intentStorage.GetLockedVtxoOutpoints(config.WalletId!, token);
+        var lockedSet = new HashSet<NBitcoin.OutPoint>(lockedOutpoints);
+        var unlocked = allCoins.Where(c => !lockedSet.Contains(c.Outpoint)).ToList();
+        var spendableOutpoints = unlocked.Select(c => c.Outpoint).ToList();
         var availableVtxos = await vtxoStorage.GetVtxos(
             outpoints: spendableOutpoints,
             walletIds: [config.WalletId!],
@@ -1143,7 +1226,7 @@ public class ArkController(
         }
 
         var selectedSet = selectedVtxoOutpoints.ToHashSet();
-        var selectedCoins = allCoins
+        var selectedCoins = unlocked
             .Where(c => selectedSet.Contains($"{c.Outpoint.Hash}:{c.Outpoint.N}"))
             .ToList();
 
@@ -1179,7 +1262,7 @@ public class ArkController(
                 }
 
                 // Get the wallet's own Ark address for consolidation
-                var contractOutput = await contractService.DeriveContract(config.WalletId!, NextContractPurpose.SendToSelf, ContractActivityState.AwaitingFundsBeforeDeactivate, token);
+                var contractOutput = await contractService.DeriveContract(config.WalletId!, NextContractPurpose.SendToSelf, ContractActivityState.AwaitingFundsBeforeDeactivate, cancellationToken: token);
                 var selfDest = contractOutput.GetArkAddress();
 
                 // For recoverable coins OR user chose Batch, create an intent (batch transaction)
@@ -1207,7 +1290,7 @@ public class ArkController(
                         Money.Satoshis(outputAmount),
                         selfDest);
 
-                    // Create intent for batch
+                    // Create intent for batch (automatically cancels any overlapping intents)
                     var intentTxId = await intentGenerationService.GenerateManualIntent(
                         config.WalletId!,
                         new ArkIntentSpec(
@@ -1216,7 +1299,6 @@ public class ArkController(
                             DateTimeOffset.UtcNow,
                             DateTimeOffset.UtcNow.AddHours(1)
                         ),
-                        force: true,
                         cancellationToken: token);
 
                     var message = hasRecoverableCoins
@@ -1552,7 +1634,8 @@ public class ArkController(
             Debug = debug,
             CachedSwapScripts = [], // Active swap scripts tracked by SwapsManagementService internally
             CachedContractScripts = (await contractStorage.GetContracts(walletIds: [config.WalletId], isActive: true, cancellationToken: HttpContext.RequestAborted))
-                .Select(c => c.Script).ToHashSet()
+                .Select(c => c.Script).ToHashSet(),
+            ListenedScripts = debug ? vtxoSyncService.ListenedScripts.ToHashSet() : []
         };
 
         return View(model);
@@ -1940,7 +2023,7 @@ public class ArkController(
                 refreshWallet.Id,
                 NextContractPurpose.SendToSelf,
                 ContractActivityState.AwaitingFundsBeforeDeactivate,
-                cancellationToken);
+                cancellationToken: cancellationToken);
             var totalAmount = coins.Sum(c => c.TxOut.Value);
 
 
@@ -1952,11 +2035,10 @@ public class ArkController(
                 DateTimeOffset.UtcNow.AddMinutes(5)
             );
 
-            // Create intent via NNark
+            // Create intent via NNark (automatically cancels any overlapping intents)
             var intentTxId = await intentGenerationService.GenerateManualIntent(
                 config.WalletId,
                 arkIntentSpec,
-                force: true,
                 cancellationToken);
 
             TempData[WellKnownTempData.SuccessMessage] = $"Refresh intent {intentTxId} created with {coins.Count} VTXOs. Intent will be submitted automatically.";
@@ -2283,10 +2365,6 @@ public class ArkController(
         //     .Where(vtxo => recoverableOutpoints.Contains(vtxo.OutPoint))
         //     .Sum(vtxo => (long)vtxo.Amount);
 
-        // Locked: VTXOs that are linked to pending intents
-        var lockedVtxoOutpoints = await intentStorage.GetLockedVtxoOutpoints(walletId, cancellationToken);
-        var lockedOutpointSet = lockedVtxoOutpoints.ToHashSet();
-
        
 
         // Unspendable: unspent VTXOs that don't pass contract conditions yet (e.g., HTLC timelock not reached)
@@ -2299,27 +2377,26 @@ public class ArkController(
             .GetVtxos(walletIds: [walletId],
                 includeSpent: false, cancellationToken: cancellationToken));
         
-        var lockedBalance = all
-            .Where(vtxo => lockedOutpointSet.Contains(vtxo.OutPoint))
-            .Sum(vtxo => (long)vtxo.Amount);
-        
-        var unspendableBalance = 
-            all.Where(vtxo =>
-            {
-                var isLocked = lockedOutpointSet.Contains(vtxo.OutPoint);
-                return !allSpendableOutpoints.Contains(vtxo.OutPoint) && !isLocked;
-            })
+        var unspendableBalance =
+            all.Where(vtxo => !allSpendableOutpoints.Contains(vtxo.OutPoint))
             .Sum(vtxo => (long)vtxo.Amount);
 
         var availableBalance = coinsByRecoverableStatus[false].Sum(coin => coin.Amount.Satoshi);
         var recoverableBalance = coinsByRecoverableStatus[true].Sum(coin => coin.Amount.Satoshi);
-        
+
+        // Locked: VTXOs committed to active intents (WaitingToSubmit, WaitingForBatch)
+        var lockedOutpoints = await intentStorage.GetLockedVtxoOutpoints(walletId, cancellationToken);
+        var lockedSet = new HashSet<NBitcoin.OutPoint>(lockedOutpoints);
+        var lockedBalance = coinsByRecoverableStatus[false]
+            .Where(coin => lockedSet.Contains(coin.Outpoint))
+            .Sum(coin => coin.Amount.Satoshi);
+
         return new ArkBalancesViewModel
         {
-            AvailableBalance = availableBalance,
+            AvailableBalance = availableBalance - lockedBalance,
+            LockedBalance = lockedBalance,
             RecoverableBalance = recoverableBalance,
             UnspendableBalance = unspendableBalance,
-            LockedBalance = lockedBalance
         };
     }
 
@@ -2837,7 +2914,6 @@ public class ArkController(
         var newModel = await BuildSend2ViewModel(storeId, config!.WalletId!, token);
         newModel.MultipleDestinationsMode = model.MultipleDestinationsMode;
         RestoreSend2Destinations(newModel, model.SerializedDestinations);
-        RestoreSend2CoinSelection(newModel, model.SerializedSelectedCoins, model.ShowCoinSelection);
 
         // Parse and add new destination
         if (!string.IsNullOrWhiteSpace(model.NewDestination))
@@ -2865,7 +2941,6 @@ public class ArkController(
 
         // Serialize state for next round-trip
         newModel.SerializedDestinations = SerializeSend2Destinations(newModel.Destinations);
-        newModel.SerializedSelectedCoins = string.Join(",", newModel.SelectedCoinOutpoints);
 
         return View("Send2", newModel);
     }
@@ -2889,7 +2964,6 @@ public class ArkController(
         var newModel = await BuildSend2ViewModel(storeId, config!.WalletId!, token);
         newModel.MultipleDestinationsMode = model.MultipleDestinationsMode;
         RestoreSend2Destinations(newModel, model.SerializedDestinations);
-        RestoreSend2CoinSelection(newModel, model.SerializedSelectedCoins, model.ShowCoinSelection);
 
         // Remove destination
         if (removeIndex >= 0 && removeIndex < newModel.Destinations.Count)
@@ -2911,70 +2985,6 @@ public class ArkController(
 
         // Serialize state
         newModel.SerializedDestinations = SerializeSend2Destinations(newModel.Destinations);
-        newModel.SerializedSelectedCoins = string.Join(",", newModel.SelectedCoinOutpoints);
-
-        return View("Send2", newModel);
-    }
-
-    /// <summary>
-    /// Send2 - Toggle coin selection visibility.
-    /// </summary>
-    [HttpPost("stores/{storeId}/send2/toggle-coins")]
-    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
-    public async Task<IActionResult> Send2ToggleCoins(
-        string storeId,
-        [FromForm] Send2ViewModel model,
-        CancellationToken token = default)
-    {
-        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: false);
-        if (errorResult != null)
-            return errorResult;
-
-        var newModel = await BuildSend2ViewModel(storeId, config!.WalletId!, token);
-        newModel.MultipleDestinationsMode = model.MultipleDestinationsMode;
-        RestoreSend2Destinations(newModel, model.SerializedDestinations);
-        RestoreSend2CoinSelection(newModel, model.SerializedSelectedCoins, !model.ShowCoinSelection);
-
-        if (newModel.Destinations.Count > 0)
-            await EstimateSend2Fees(newModel, config.WalletId!, token);
-
-        newModel.SerializedDestinations = SerializeSend2Destinations(newModel.Destinations);
-        newModel.SerializedSelectedCoins = string.Join(",", newModel.SelectedCoinOutpoints);
-
-        return View("Send2", newModel);
-    }
-
-    /// <summary>
-    /// Send2 - Toggle selection of a single coin.
-    /// </summary>
-    [HttpPost("stores/{storeId}/send2/toggle-coin")]
-    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
-    public async Task<IActionResult> Send2ToggleCoin(
-        string storeId,
-        [FromForm] Send2ViewModel model,
-        [FromForm] string outpoint,
-        CancellationToken token = default)
-    {
-        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: false);
-        if (errorResult != null)
-            return errorResult;
-
-        var newModel = await BuildSend2ViewModel(storeId, config!.WalletId!, token);
-        newModel.MultipleDestinationsMode = model.MultipleDestinationsMode;
-        RestoreSend2Destinations(newModel, model.SerializedDestinations);
-        RestoreSend2CoinSelection(newModel, model.SerializedSelectedCoins, model.ShowCoinSelection);
-
-        // Toggle the coin
-        if (newModel.SelectedCoinOutpoints.Contains(outpoint))
-            newModel.SelectedCoinOutpoints.Remove(outpoint);
-        else
-            newModel.SelectedCoinOutpoints.Add(outpoint);
-
-        if (newModel.Destinations.Count > 0)
-            await EstimateSend2Fees(newModel, config.WalletId!, token);
-
-        newModel.SerializedDestinations = SerializeSend2Destinations(newModel.Destinations);
-        newModel.SerializedSelectedCoins = string.Join(",", newModel.SelectedCoinOutpoints);
 
         return View("Send2", newModel);
     }
@@ -2997,12 +3007,10 @@ public class ArkController(
         var newModel = await BuildSend2ViewModel(storeId, config!.WalletId!, token);
         newModel.MultipleDestinationsMode = model.MultipleDestinationsMode;
         RestoreSend2Destinations(newModel, model.SerializedDestinations);
-        RestoreSend2CoinSelection(newModel, model.SerializedSelectedCoins, model.ShowCoinSelection);
 
         if (newModel.Destinations.Count == 0)
         {
             newModel.Errors.Add("No destinations to send to");
-            newModel.SerializedSelectedCoins = string.Join(",", newModel.SelectedCoinOutpoints);
             return View("Send2", newModel);
         }
 
@@ -3012,9 +3020,8 @@ public class ArkController(
         // Validate we have enough balance
         if (newModel.RemainingSats < 0)
         {
-            newModel.Errors.Add($"Insufficient balance. Need {newModel.GrandTotalSats:#,0} sats, have {newModel.SelectedBalanceSats:#,0} sats");
+            newModel.Errors.Add($"Insufficient balance. Need {newModel.GrandTotalSats:#,0} sats, have {newModel.AvailableBalanceSats:#,0} sats");
             newModel.SerializedDestinations = SerializeSend2Destinations(newModel.Destinations);
-            newModel.SerializedSelectedCoins = string.Join(",", newModel.SelectedCoinOutpoints);
             return View("Send2", newModel);
         }
 
@@ -3031,7 +3038,6 @@ public class ArkController(
                 {
                     newModel.Errors.Add("Lightning payments can only be sent one at a time");
                     newModel.SerializedDestinations = SerializeSend2Destinations(newModel.Destinations);
-                    newModel.SerializedSelectedCoins = string.Join(",", newModel.SelectedCoinOutpoints);
                     return View("Send2", newModel);
                 }
 
@@ -3039,6 +3045,12 @@ public class ArkController(
                 var lnDest = lightningDests[0];
                 var lnDestination = lnDest.ResolvedAddress ?? lnDest.RawDestination;
                 await arkadeSpendingService.Spend(store!, lnDestination, token);
+
+                // Mark payout as paid if this was initiated from payout handler
+                if (!string.IsNullOrEmpty(lnDest.PayoutId))
+                {
+                    await MarkPayoutPaid(lnDest.PayoutId, null, token);
+                }
 
                 TempData[WellKnownTempData.SuccessMessage] = $"Lightning payment of {lnDest.AmountSats:#,0} sats initiated";
                 return RedirectToAction(nameof(StoreOverview), new { storeId });
@@ -3057,51 +3069,27 @@ public class ArkController(
                 {
                     newModel.Errors.Add($"Unsupported destination type: {dest.Type}");
                     newModel.SerializedDestinations = SerializeSend2Destinations(newModel.Destinations);
-                    newModel.SerializedSelectedCoins = string.Join(",", newModel.SelectedCoinOutpoints);
                     return View("Send2", newModel);
                 }
             }
 
-            // Execute Ark spend
+            // Execute Ark spend (auto coin selection)
             if (outputs.Count > 0)
             {
-                uint256 txId;
-
-                // If coin selection is active and coins are selected, use manual coin selection
-                if (newModel.ShowCoinSelection && newModel.SelectedCoinOutpoints.Any())
-                {
-                    // Get actual coins from storage that match selected outpoints
-                    var allCoins = await arkadeSpender.GetAvailableCoins(config.WalletId!, token);
-                    var selectedCoins = allCoins
-                        .Where(c => newModel.SelectedCoinOutpoints.Contains(c.Outpoint.ToString()))
-                        .ToArray();
-
-                    if (selectedCoins.Length == 0)
-                    {
-                        newModel.Errors.Add("No valid coins selected");
-                        newModel.SerializedDestinations = SerializeSend2Destinations(newModel.Destinations);
-                        newModel.SerializedSelectedCoins = string.Join(",", newModel.SelectedCoinOutpoints);
-                        return View("Send2", newModel);
-                    }
-
-                    txId = await arkadeSpender.Spend(
-                        config.WalletId!,
-                        selectedCoins,
-                        outputs.ToArray(),
-                        token);
-                }
-                else
-                {
-                    // Auto coin selection
-                    txId = await arkadeSpender.Spend(
-                        config.WalletId!,
-                        outputs.ToArray(),
-                        token);
-                }
+                var txId = await arkadeSpender.Spend(
+                    config.WalletId!,
+                    outputs.ToArray(),
+                    token);
 
                 // Poll for VTXO updates
                 var activeContracts = await contractStorage.GetContracts(walletIds: [config.WalletId!], isActive: true, cancellationToken: token);
                 await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), token);
+
+                // Mark payouts as paid if this was initiated from payout handler
+                foreach (var dest in newModel.Destinations.Where(d => !string.IsNullOrEmpty(d.PayoutId)))
+                {
+                    await MarkPayoutPaid(dest.PayoutId!, txId, token);
+                }
 
                 TempData[WellKnownTempData.SuccessMessage] = $"Sent {newModel.TotalSendingSats:#,0} sats to {outputs.Count} destination(s). TxId: {txId}";
             }
@@ -3112,30 +3100,48 @@ public class ArkController(
         {
             newModel.Errors.Add($"Transaction failed: {ex.Message}");
             newModel.SerializedDestinations = SerializeSend2Destinations(newModel.Destinations);
-            newModel.SerializedSelectedCoins = string.Join(",", newModel.SelectedCoinOutpoints);
             return View("Send2", newModel);
+        }
+    }
+
+    private async Task MarkPayoutPaid(string payoutId, uint256? txId, CancellationToken token)
+    {
+        try
+        {
+            using var disposable = await arkPayoutHandler.PayoutLocker.LockOrNullAsync(payoutId, 0, token);
+            if (disposable is null) return;
+
+            var proof = new ArkPayoutProof
+            {
+                TransactionId = txId ?? uint256.Zero,
+                DetectedInBackground = false
+            };
+            await pullPaymentHostedService.MarkPaid(new MarkPayoutRequest
+            {
+                PayoutId = payoutId,
+                Proof = arkPayoutHandler.SerializeProof(proof)
+            });
+        }
+        catch
+        {
+            // Best-effort: if marking fails, background detection will catch it
         }
     }
 
     private async Task<Send2ViewModel> BuildSend2ViewModel(string storeId, string walletId, CancellationToken token)
     {
-        // Get spendable offchain coins only (not recoverable)
+        // Get spendable offchain coins only (not recoverable, not locked by pending intents)
         var currTime = await bitcoinTimeChainProvider.GetChainTime(token);
         var allCoins = await arkadeSpender.GetAvailableCoins(walletId, token);
-        var spendableCoins = allCoins.Where(c => !c.IsRecoverable(currTime)).ToList();
+        var lockedOutpoints = await intentStorage.GetLockedVtxoOutpoints(walletId, token);
+        var lockedSet = new HashSet<NBitcoin.OutPoint>(lockedOutpoints);
+        var spendableCoins = allCoins.Where(c => !c.IsRecoverable(currTime) && !lockedSet.Contains(c.Outpoint)).ToList();
 
         return new Send2ViewModel
         {
             StoreId = storeId,
             AvailableBalanceSats = spendableCoins.Sum(c => c.TxOut.Value.Satoshi),
             SpendableCoinsCount = spendableCoins.Count,
-            AvailableCoins = spendableCoins.Select(c => new Send2CoinViewModel
-            {
-                Outpoint = c.Outpoint.ToString(),
-                AmountSats = c.TxOut.Value.Satoshi,
-                IsSwept = c.Swept,
-                CreatedAt = c.Birth.DateTime
-            }).OrderByDescending(c => c.AmountSats).ToList()
         };
     }
 
@@ -3193,6 +3199,9 @@ public class ArkController(
         {
             var host = uri.AbsoluteUri[(uri.Scheme.Length + 1)..].Split('?')[0];
             var qs = uri.ParseQueryString();
+
+            // Extract payout ID if present (from payout handler redirect)
+            result.PayoutId = qs["payout"];
 
             // Extract amount from BIP21 if not provided
             if (amountSats == 0 && qs["amount"] is { } amountStr &&
@@ -3278,7 +3287,9 @@ public class ArkController(
                     var outputs = new[] { new ArkTxOut(ArkTxOutType.Vtxo, Money.Satoshis(dest.AmountSats), arkAddr) };
 
                     var coins = await arkadeSpender.GetAvailableCoins(walletId, token);
-                    var spendableCoins = coins.Where(c => !c.IsRecoverable(currentTime)).ToArray();
+                    var feeLockedOps = await intentStorage.GetLockedVtxoOutpoints(walletId, token);
+                    var feeLockedSet = new HashSet<NBitcoin.OutPoint>(feeLockedOps);
+                    var spendableCoins = coins.Where(c => !c.IsRecoverable(currentTime) && !feeLockedSet.Contains(c.Outpoint)).ToArray();
 
                     if (spendableCoins.Length > 0)
                     {
@@ -3312,9 +3323,9 @@ public class ArkController(
 
     private static string SerializeSend2Destinations(List<Send2DestinationViewModel> destinations)
     {
-        // Simple serialization: rawDest|type|resolvedAddr|amountSats|feeSats|isValid|error;;...
+        // Simple serialization: rawDest|type|resolvedAddr|amountSats|feeSats|isValid|error|payoutId;;...
         var parts = destinations.Select(d =>
-            $"{d.RawDestination}|{(int)d.Type}|{d.ResolvedAddress ?? ""}|{d.AmountSats}|{d.FeeSats}|{d.IsValid}|{d.Error ?? ""}");
+            $"{d.RawDestination}|{(int)d.Type}|{d.ResolvedAddress ?? ""}|{d.AmountSats}|{d.FeeSats}|{d.IsValid}|{d.Error ?? ""}|{d.PayoutId ?? ""}");
         return string.Join(";;", parts);
     }
 
@@ -3338,18 +3349,11 @@ public class ArkController(
                     AmountSats = long.TryParse(segments[3], out var amt) ? amt : 0,
                     FeeSats = long.TryParse(segments[4], out var fee) ? fee : 0,
                     IsValid = bool.TryParse(segments[5], out var valid) && valid,
-                    Error = segments.Length > 6 && !string.IsNullOrEmpty(segments[6]) ? segments[6] : null
+                    Error = segments.Length > 6 && !string.IsNullOrEmpty(segments[6]) ? segments[6] : null,
+                    PayoutId = segments.Length > 7 && !string.IsNullOrEmpty(segments[7]) ? segments[7] : null
                 });
             }
         }
-    }
-
-    private static void RestoreSend2CoinSelection(Send2ViewModel model, string? serializedCoins, bool showCoinSelection)
-    {
-        model.ShowCoinSelection = showCoinSelection;
-        if (string.IsNullOrEmpty(serializedCoins)) return;
-
-        model.SelectedCoinOutpoints = serializedCoins.Split(',', StringSplitOptions.RemoveEmptyEntries).ToList();
     }
 
     /// <summary>

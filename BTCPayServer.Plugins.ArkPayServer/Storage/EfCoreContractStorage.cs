@@ -62,10 +62,13 @@ public class EfCoreContractStorage : IContractStorage
             query = query.Where(c => contractTypes.Contains(c.Type));
         }
 
-        // Filter by search text (searches script)
+        // Filter by search text (searches script, type, and metadata values)
         if (!string.IsNullOrEmpty(searchText))
         {
-            query = query.Where(c => c.Script.Contains(searchText));
+            query = query.Where(c =>
+                c.Script.Contains(searchText) ||
+                c.Type.Contains(searchText) ||
+                (c.Metadata != null && c.Metadata.Values.Any(v => v.Contains(searchText))));
         }
 
         // Order by creation date for consistent pagination
@@ -101,6 +104,7 @@ public class EfCoreContractStorage : IContractStorage
             existing.ActivityState = walletEntity.ActivityState;
             existing.Type = walletEntity.Type;
             existing.ContractData = walletEntity.AdditionalData;
+            existing.Metadata = walletEntity.Metadata ?? existing.Metadata;
         }
         else
         {
@@ -111,6 +115,7 @@ public class EfCoreContractStorage : IContractStorage
                 ActivityState = walletEntity.ActivityState,
                 Type = walletEntity.Type,
                 ContractData = walletEntity.AdditionalData,
+                Metadata = walletEntity.Metadata,
                 CreatedAt = walletEntity.CreatedAt
             };
             db.WalletContracts.Add(entity);
@@ -173,7 +178,10 @@ public class EfCoreContractStorage : IContractStorage
             AdditionalData: entity.ContractData,
             WalletIdentifier: entity.WalletId,
             CreatedAt: entity.CreatedAt
-        );
+        )
+        {
+            Metadata = entity.Metadata
+        };
     }
 
     /// <summary>
