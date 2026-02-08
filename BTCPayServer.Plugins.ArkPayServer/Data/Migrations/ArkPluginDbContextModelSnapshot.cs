@@ -208,15 +208,17 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
                     b.Property<int>("ActivityState")
                         .HasColumnType("integer");
 
-                    b.Property<string>("ContractData")
+                    b.Property<string>("ContractDataJson")
                         .IsRequired()
-                        .HasColumnType("jsonb");
+                        .HasColumnType("jsonb")
+                        .HasColumnName("ContractData");
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<string>("Metadata")
-                        .HasColumnType("jsonb");
+                    b.Property<string>("MetadataJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("Metadata");
 
                     b.Property<string>("Type")
                         .IsRequired()

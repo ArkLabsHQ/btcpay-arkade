@@ -33,7 +33,21 @@ public class EfCoreContractStorage : IContractStorage
     {
         await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
-        var query = db.WalletContracts.AsQueryable();
+        IQueryable<ArkWalletContract> query;
+
+        // When searching, use raw SQL as the base to cast jsonb Metadata to text for ILIKE.
+        // PostgreSQL has no LIKE/ILIKE operator for jsonb, so the cast is required.
+        // All other filters compose on top via LINQ as usual.
+        if (!string.IsNullOrEmpty(searchText))
+        {
+            var pattern = $"%{searchText}%";
+            query = db.WalletContracts
+                .FromSqlInterpolated($@"SELECT * FROM ""BTCPayServer.Plugins.Ark"".""WalletContracts"" WHERE ""Script"" ILIKE {pattern} OR ""Type"" ILIKE {pattern} OR ""Metadata""::text ILIKE {pattern}");
+        }
+        else
+        {
+            query = db.WalletContracts.AsQueryable();
+        }
 
         // Filter by wallet IDs
         if (walletIds is {  })
@@ -60,15 +74,6 @@ public class EfCoreContractStorage : IContractStorage
         if (contractTypes is {  })
         {
             query = query.Where(c => contractTypes.Contains(c.Type));
-        }
-
-        // Filter by search text (searches script, type, and metadata values)
-        if (!string.IsNullOrEmpty(searchText))
-        {
-            query = query.Where(c =>
-                c.Script.Contains(searchText) ||
-                c.Type.Contains(searchText) ||
-                (c.Metadata != null && c.Metadata.Values.Any(v => v.Contains(searchText))));
         }
 
         // Order by creation date for consistent pagination
