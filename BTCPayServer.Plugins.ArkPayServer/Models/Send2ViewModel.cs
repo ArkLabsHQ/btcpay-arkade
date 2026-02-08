@@ -1,7 +1,7 @@
 namespace BTCPayServer.Plugins.ArkPayServer.Models;
 
 /// <summary>
-/// Simplified ViewModel for Send2 - no JavaScript, offchain only.
+/// Simplified ViewModel for Send2 - no JavaScript, offchain only, auto coin selection.
 /// Form posts add/remove destinations; final submit executes transaction.
 /// </summary>
 public class Send2ViewModel
@@ -20,21 +20,6 @@ public class Send2ViewModel
     // Toggle for multiple destinations mode
     public bool MultipleDestinationsMode { get; set; }
 
-    // Coin selection
-    public bool ShowCoinSelection { get; set; }
-    public List<Send2CoinViewModel> AvailableCoins { get; set; } = new();
-    public List<string> SelectedCoinOutpoints { get; set; } = new();
-    public string? SerializedSelectedCoins { get; set; }
-
-    // Selected coins balance (when coin selection is active)
-    public long SelectedBalanceSats => ShowCoinSelection && SelectedCoinOutpoints.Any()
-        ? AvailableCoins.Where(c => SelectedCoinOutpoints.Contains(c.Outpoint)).Sum(c => c.AmountSats)
-        : AvailableBalanceSats;
-    public decimal SelectedBalanceBtc => SelectedBalanceSats / 100_000_000m;
-    public int SelectedCoinsCount => ShowCoinSelection && SelectedCoinOutpoints.Any()
-        ? SelectedCoinOutpoints.Count
-        : SpendableCoinsCount;
-
     // Added destinations with calculated fees
     public List<Send2DestinationViewModel> Destinations { get; set; } = new();
 
@@ -46,8 +31,8 @@ public class Send2ViewModel
     public long GrandTotalSats => TotalSendingSats + TotalFeesSats;
     public decimal GrandTotalBtc => GrandTotalSats / 100_000_000m;
 
-    // Remaining after send (uses selected balance when coin selection is active)
-    public long RemainingSats => SelectedBalanceSats - GrandTotalSats;
+    // Remaining after send
+    public long RemainingSats => AvailableBalanceSats - GrandTotalSats;
     public decimal RemainingBtc => RemainingSats / 100_000_000m;
 
     // Validation
@@ -62,20 +47,6 @@ public class Send2ViewModel
 
     // Serialized state for form round-trips
     public string? SerializedDestinations { get; set; }
-}
-
-public class Send2CoinViewModel
-{
-    public string Outpoint { get; set; } = "";
-    public long AmountSats { get; set; }
-    public decimal AmountBtc => AmountSats / 100_000_000m;
-    public bool IsSwept { get; set; }
-    public DateTime? CreatedAt { get; set; }
-
-    // Display helpers
-    public string ShortOutpoint => Outpoint.Length > 20
-        ? $"{Outpoint[..8]}...{Outpoint[^8..]}"
-        : Outpoint;
 }
 
 public class Send2DestinationViewModel
@@ -95,6 +66,9 @@ public class Send2DestinationViewModel
     public long FeeSats { get; set; }
     public decimal FeeBtc => FeeSats / 100_000_000m;
     public string? FeeDescription { get; set; }
+
+    // Payout tracking (when initiated from payout handler)
+    public string? PayoutId { get; set; }
 
     // Validation
     public bool IsValid { get; set; }

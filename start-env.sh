@@ -219,6 +219,10 @@ if [ "$CLEAN" = true ]; then
   $NIGIRI stop --delete
 
  fi
+
+log "Pulling latest Nigiri images..."
+$NIGIRI update || log "Nigiri update failed, continuing with existing images..."
+
 log "Starting Nigiri with Ark support..."
 # Start nigiri, but don't fail if it's already running
 
@@ -232,7 +236,7 @@ $NIGIRI start --ark || {
 }
 
 # Use docker-compose.ark.yml for custom ark configuration
-log "Pulling latest images..."
+log "Pulling latest custom Ark stack images..."
 docker compose -f docker-compose.ark.yml pull
 
 log "Starting ark stack with docker-compose.ark.yml..."

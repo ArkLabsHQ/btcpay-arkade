@@ -3,7 +3,7 @@
 @{
     var compactMode = ViewData["CompactMode"] as bool? ?? false;
     var noContainer = ViewData["NoContainer"] as bool? ?? false;
-    var totalBalance = (Model?.AvailableBalance ?? 0) + (Model?.RecoverableBalance ?? 0) + (Model?.UnspendableBalance ?? 0) + (Model?.LockedBalance ?? 0);
+    var totalBalance = (Model?.AvailableBalance ?? 0) + (Model?.LockedBalance ?? 0) + (Model?.RecoverableBalance ?? 0) + (Model?.UnspendableBalance ?? 0);
 }
 
 @if (Model != null)
@@ -16,6 +16,13 @@
                 <span class="text-muted small">Available:</span>
                 <span class="fw-semibold text-primary" data-testid="wallet-balance">@Model.AvailableBalance sats</span>
             </div>
+            @if (Model.LockedBalance > 0)
+            {
+                <div class="d-flex align-items-center gap-2">
+                    <span class="text-muted small">Locked:</span>
+                    <span class="fw-semibold text-info" data-testid="locked-balance">@Model.LockedBalance sats</span>
+                </div>
+            }
             @if (Model.RecoverableBalance > 0)
             {
                 <div class="d-flex align-items-center gap-2">
@@ -28,13 +35,6 @@
                 <div class="d-flex align-items-center gap-2">
                     <span class="text-muted small">Unspendable:</span>
                     <span class="fw-semibold text-secondary" data-testid="unspendable-balance">@Model.UnspendableBalance sats</span>
-                </div>
-            }
-            @if (Model.LockedBalance > 0)
-            {
-                <div class="d-flex align-items-center gap-2">
-                    <span class="text-muted small">Locked:</span>
-                    <span class="fw-semibold text-info" data-testid="locked-balance">@Model.LockedBalance sats</span>
                 </div>
             }
         </div>
@@ -60,6 +60,18 @@
                 <span class="fw-semibold" data-testid="wallet-balance">@Model.AvailableBalance sats</span>
             </div>
 
+            @if (Model.LockedBalance > 0)
+            {
+                <div class="d-flex justify-content-between align-items-center py-2 border-top">
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="badge rounded-pill bg-info" style="width: 10px; height: 10px; padding: 0;"></span>
+                        <span>Locked</span>
+                        <small class="text-muted">Committed to pending intent</small>
+                    </div>
+                    <span class="fw-semibold" data-testid="locked-balance">@Model.LockedBalance sats</span>
+                </div>
+            }
+
             @if (Model.RecoverableBalance > 0)
             {
                 <div class="d-flex justify-content-between align-items-center py-2 border-top">
@@ -84,18 +96,6 @@
                 </div>
             }
 
-            @if (Model.LockedBalance > 0)
-            {
-                <div class="d-flex justify-content-between align-items-center py-2 border-top">
-                    <div class="d-flex align-items-center gap-2">
-                        <span class="badge rounded-pill bg-info" style="width: 10px; height: 10px; padding: 0;"></span>
-                        <span>Locked</span>
-                        <small class="text-muted">In pending intents</small>
-                    </div>
-                    <span class="fw-semibold" data-testid="locked-balance">@Model.LockedBalance sats</span>
-                </div>
-            }
-
             @if (totalBalance > Model.AvailableBalance)
             {
                 <div class="d-flex justify-content-between align-items-center py-2 border-top mt-1">
@@ -107,6 +107,12 @@
                     <div class="progress-bar bg-primary" role="progressbar"
                          style="width: @((Model.AvailableBalance * 100m / totalBalance).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))%"
                          title="Available"></div>
+                    @if (Model.LockedBalance > 0)
+                    {
+                        <div class="progress-bar bg-info" role="progressbar"
+                             style="width: @((Model.LockedBalance * 100m / totalBalance).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))%"
+                             title="Locked"></div>
+                    }
                     @if (Model.RecoverableBalance > 0)
                     {
                         <div class="progress-bar bg-warning" role="progressbar"
@@ -118,12 +124,6 @@
                         <div class="progress-bar bg-secondary" role="progressbar"
                              style="width: @((Model.UnspendableBalance * 100m / totalBalance).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))%"
                              title="Unspendable"></div>
-                    }
-                    @if (Model.LockedBalance > 0)
-                    {
-                        <div class="progress-bar bg-info" role="progressbar"
-                             style="width: @((Model.LockedBalance * 100m / totalBalance).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))%"
-                             title="Locked"></div>
                     }
                 </div>
             }

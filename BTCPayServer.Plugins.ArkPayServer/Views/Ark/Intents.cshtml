@@ -151,7 +151,7 @@
                                     break;
                             }
                         </td>
-                        <td class="align-middle">@intent.ValidUntil.ToTimeAgo()</td>
+                        <td class="align-middle">@(intent.ValidUntil.HasValue ? intent.ValidUntil.Value.ToTimeAgo() : "-")</td>
                         <td class="align-middle">
                             @if (!string.IsNullOrEmpty(intent.BatchId))
                             {

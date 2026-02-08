@@ -14,8 +14,8 @@ public class ArkIntent
     public string WalletId { get; set; }
     public ArkIntentState State { get; set; }
 
-    public DateTimeOffset ValidFrom { get; set; }
-    public DateTimeOffset ValidUntil { get; set; }
+    public DateTimeOffset? ValidFrom { get; set; }
+    public DateTimeOffset? ValidUntil { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 
