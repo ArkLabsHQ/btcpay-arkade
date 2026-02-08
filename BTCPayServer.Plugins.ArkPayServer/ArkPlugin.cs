@@ -169,7 +169,7 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
         // Core services and network config (includes caching transport by default)
         services.AddArkCoreServices();
-        services.AddArkNetwork(networkConfig, configureBoltz: !string.IsNullOrWhiteSpace(networkConfig.BoltzUri));
+        services.AddArkNetwork(networkConfig);
     }
 
     private static void RegisterPluginServices(IServiceCollection services)

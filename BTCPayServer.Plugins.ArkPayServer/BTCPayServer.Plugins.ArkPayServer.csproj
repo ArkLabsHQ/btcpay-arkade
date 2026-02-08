@@ -36,12 +36,8 @@
         </ProjectReference>
         <!-- NNark submodule projects -->
         <ProjectReference Include="..\submodules\NNark\NArk.Abstractions\NArk.Abstractions.csproj" />
-        <ProjectReference Include="..\submodules\NNark\NArk.Blockchain.NBXplorer\NArk.Blockchain.NBXplorer.csproj" />
         <ProjectReference Include="..\submodules\NNark\NArk.Core\NArk.Core.csproj" />
-        <ProjectReference Include="..\submodules\NNark\NArk.Hosting\NArk.Hosting.csproj" />
-        <ProjectReference Include="..\submodules\NNark\NArk.Safety.AsyncKeyedLock\NArk.Safety.AsyncKeyedLock.csproj" />
         <ProjectReference Include="..\submodules\NNark\NArk.Swaps\NArk.Swaps.csproj" />
-        <ProjectReference Include="..\submodules\NNark\NArk.Transport.GrpcClient\NArk.Transport.GrpcClient.csproj" />
         <!-- NNark transitive dependencies (must be explicit for plugin publish) -->
         <PackageReference Include="AsyncKeyedLock" Version="8.0.1" />
         <PackageReference Include="BTCPayServer.Lightning.Common" Version="1.5.2" />
