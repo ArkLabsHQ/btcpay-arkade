@@ -1,7 +1,7 @@
 using NArk.Core;
 using NArk.Abstractions;
+using NArk.Abstractions.Extensions;
 using NArk.Core.Extensions;
-using NArk.Swaps.Helpers;
 using NBitcoin;
 using NBitcoin.DataEncoders;
 using NBitcoin.Secp256k1;

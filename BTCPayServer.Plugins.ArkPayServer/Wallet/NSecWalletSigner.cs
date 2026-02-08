@@ -1,5 +1,5 @@
+using NArk.Abstractions.Extensions;
 using NArk.Abstractions.Wallets;
-using NArk.Swaps.Helpers;
 using NBitcoin;
 using NBitcoin.DataEncoders;
 using NBitcoin.Scripting;
@@ -18,38 +18,12 @@ public class NSecWalletSigner(ECPrivKey privateKey) : IArkadeWalletSigner
     /// </summary>
     public static NSecWalletSigner FromNsec(string nsec)
     {
-        // nsec1... is bech32 encoding (not bech32m), with 5-bit groups
-        // Decode using NBitcoin's Bech32 facilities
-        var encoder = Encoders.Bech32("nsec");
-        // The DecodeDataRaw returns 5-bit groups, need to convert to 8-bit bytes
-        var decoded = encoder.DecodeDataRaw(nsec, out _);
-        // Convert from 5-bit to 8-bit
-        var bytes = ConvertBits(decoded, 5, 8, false);
-        var privKey = ECPrivKey.Create(bytes);
+        var encoder2 = Bech32Encoder.ExtractEncoderFromString(nsec);
+        encoder2.StrictLength = false;
+        encoder2.SquashBytes = true;
+        var keyData2 = encoder2.DecodeDataRaw(nsec, out _);
+        var privKey = ECPrivKey.Create(keyData2);
         return new NSecWalletSigner(privKey);
-    }
-    
-    private static byte[] ConvertBits(byte[] data, int fromBits, int toBits, bool pad)
-    {
-        var acc = 0;
-        var bits = 0;
-        var result = new List<byte>();
-        var maxv = (1 << toBits) - 1;
-        foreach (var value in data)
-        {
-            acc = (acc << fromBits) | value;
-            bits += fromBits;
-            while (bits >= toBits)
-            {
-                bits -= toBits;
-                result.Add((byte)((acc >> bits) & maxv));
-            }
-        }
-        if (pad && bits > 0)
-        {
-            result.Add((byte)((acc << (toBits - bits)) & maxv));
-        }
-        return result.ToArray();
     }
     
     public Task<MusigPartialSignature> SignMusig(OutputDescriptor descriptor, MusigContext context, MusigPrivNonce nonce,
@@ -60,7 +34,7 @@ public class NSecWalletSigner(ECPrivKey privateKey) : IArkadeWalletSigner
 
     public Task<(ECXOnlyPubKey, SecpSchnorrSignature)> Sign(OutputDescriptor descriptor, uint256 hash, CancellationToken cancellationToken = default)
     {
-        if (descriptor.Extract().PubKey! != _publicKey)
+        if (!descriptor.Extract().XOnlyPubKey.ToBytes().SequenceEqual(_publicKey.ToXOnlyPubKey().ToBytes()))
             throw new InvalidOperationException("Descriptor does not belong to this wallet");
         
         if (!privateKey.TrySignBIP340(hash.ToBytes(), null, out var sig))

@@ -1,6 +1,6 @@
 using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
+using NArk.Abstractions.Extensions;
 using NArk.Abstractions.Wallets;
-using NArk.Swaps.Helpers;
 using NBitcoin;
 using NBitcoin.Scripting;
 using NBitcoin.Secp256k1;

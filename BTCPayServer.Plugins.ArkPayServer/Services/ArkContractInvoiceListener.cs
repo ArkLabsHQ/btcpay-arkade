@@ -11,13 +11,13 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NArk.Abstractions.VTXOs;
 using NArk.Swaps.Abstractions;
-using NArk.Swaps.Helpers;
 using NArk.Core.Transport;
 using NBitcoin;
 using NBXplorer;
 using Newtonsoft.Json.Linq;
 using NArk.Abstractions;
 using NArk.Abstractions.Contracts;
+using NArk.Abstractions.Extensions;
 using NArk.Swaps.Services;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services;

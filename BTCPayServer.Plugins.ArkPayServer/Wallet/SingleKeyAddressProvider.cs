@@ -1,10 +1,10 @@
 using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using NArk.Abstractions;
 using NArk.Abstractions.Contracts;
+using NArk.Abstractions.Extensions;
 using NArk.Abstractions.Wallets;
 using NArk.Core.Contracts;
 using NArk.Core.Enums;
-using NArk.Swaps.Helpers;
 using NArk.Core.Transport;
 using NBitcoin;
 using NBitcoin.Scripting;
