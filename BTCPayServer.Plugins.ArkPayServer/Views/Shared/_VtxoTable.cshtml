@@ -100,7 +100,7 @@
                             </td>
                         }
                         <td class="text-end">
-                            <span class="font-monospace small">@Money.Satoshis((long)vtxo.Amount).ToDecimal(MoneyUnit.BTC) BTC</span>
+                            <span class="font-monospace small" data-sensitive>@Money.Satoshis((long)vtxo.Amount).ToDecimal(MoneyUnit.BTC) BTC</span>
                         </td>
                         <td class="text-end">
                             @if (vtxo.ExpiresAt.HasValue)

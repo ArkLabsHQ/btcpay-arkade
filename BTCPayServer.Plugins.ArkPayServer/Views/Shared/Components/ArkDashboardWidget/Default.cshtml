@@ -4,11 +4,8 @@
 {
     <div class="widget store-wallet-balance" data-testid="ark-dashboard-widget">
         <header>
-            <h3 class="widget-title" data-testid="widget-title">
-                <a asp-controller="Ark" asp-action="StoreOverview" asp-route-storeId="@Model.StoreId">
-                    Arkade Wallet
-                </a>
-            </h3>
+            <h3 text-translate="true">Arkade Wallet</h3>
+            <a asp-controller="Ark" asp-action="StoreOverview" asp-route-storeId="@Model.StoreId" text-translate="true">View</a>
         </header>
         <div class="widget-body">
             <!-- Wallet Balances - reusing _ArkBalances partial in compact mode -->

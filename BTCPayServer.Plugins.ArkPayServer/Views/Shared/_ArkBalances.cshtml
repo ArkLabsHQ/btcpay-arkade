@@ -1,9 +1,15 @@
+@using BTCPayServer.Services
+@using NBitcoin
 @model BTCPayServer.Plugins.ArkPayServer.Models.ArkBalancesViewModel
+@inject DisplayFormatter DisplayFormatter
 
 @{
     var compactMode = ViewData["CompactMode"] as bool? ?? false;
     var noContainer = ViewData["NoContainer"] as bool? ?? false;
     var totalBalance = (Model?.AvailableBalance ?? 0) + (Model?.LockedBalance ?? 0) + (Model?.RecoverableBalance ?? 0) + (Model?.UnspendableBalance ?? 0);
+
+    string FormatBtc(decimal sats) =>
+        DisplayFormatter.Currency(Money.Satoshis((long)sats).ToDecimal(MoneyUnit.BTC), "BTC");
 }
 
 @if (Model != null)
@@ -14,27 +20,27 @@
         <div class="d-flex flex-wrap align-items-center gap-3" data-testid="wallet-balances-compact">
             <div class="d-flex align-items-center gap-2">
                 <span class="text-muted small">Available:</span>
-                <span class="fw-semibold text-primary" data-testid="wallet-balance">@Model.AvailableBalance sats</span>
+                <span class="fw-semibold text-primary" data-testid="wallet-balance" data-sensitive>@FormatBtc(Model.AvailableBalance)</span>
             </div>
             @if (Model.LockedBalance > 0)
             {
                 <div class="d-flex align-items-center gap-2">
                     <span class="text-muted small">Locked:</span>
-                    <span class="fw-semibold text-info" data-testid="locked-balance">@Model.LockedBalance sats</span>
+                    <span class="fw-semibold text-info" data-testid="locked-balance" data-sensitive>@FormatBtc(Model.LockedBalance)</span>
                 </div>
             }
             @if (Model.RecoverableBalance > 0)
             {
                 <div class="d-flex align-items-center gap-2">
                     <span class="text-muted small">Recoverable:</span>
-                    <span class="fw-semibold text-warning" data-testid="recoverable-balance">@Model.RecoverableBalance sats</span>
+                    <span class="fw-semibold text-warning" data-testid="recoverable-balance" data-sensitive>@FormatBtc(Model.RecoverableBalance)</span>
                 </div>
             }
             @if (Model.UnspendableBalance > 0)
             {
                 <div class="d-flex align-items-center gap-2">
                     <span class="text-muted small">Unspendable:</span>
-                    <span class="fw-semibold text-secondary" data-testid="unspendable-balance">@Model.UnspendableBalance sats</span>
+                    <span class="fw-semibold text-secondary" data-testid="unspendable-balance" data-sensitive>@FormatBtc(Model.UnspendableBalance)</span>
                 </div>
             }
         </div>
@@ -57,7 +63,7 @@
                     <span>Available</span>
                     <small class="text-muted">Ready to spend</small>
                 </div>
-                <span class="fw-semibold" data-testid="wallet-balance">@Model.AvailableBalance sats</span>
+                <span class="fw-semibold" data-testid="wallet-balance" data-sensitive>@FormatBtc(Model.AvailableBalance)</span>
             </div>
 
             @if (Model.LockedBalance > 0)
@@ -68,7 +74,7 @@
                         <span>Locked</span>
                         <small class="text-muted">Committed to pending intent</small>
                     </div>
-                    <span class="fw-semibold" data-testid="locked-balance">@Model.LockedBalance sats</span>
+                    <span class="fw-semibold" data-testid="locked-balance" data-sensitive>@FormatBtc(Model.LockedBalance)</span>
                 </div>
             }
 
@@ -80,7 +86,7 @@
                         <span>Recoverable</span>
                         <small class="text-muted">Needs batch recovery</small>
                     </div>
-                    <span class="fw-semibold" data-testid="recoverable-balance">@Model.RecoverableBalance sats</span>
+                    <span class="fw-semibold" data-testid="recoverable-balance" data-sensitive>@FormatBtc(Model.RecoverableBalance)</span>
                 </div>
             }
 
@@ -92,7 +98,7 @@
                         <span>Unspendable</span>
                         <small class="text-muted">Waiting for conditions</small>
                     </div>
-                    <span class="fw-semibold" data-testid="unspendable-balance">@Model.UnspendableBalance sats</span>
+                    <span class="fw-semibold" data-testid="unspendable-balance" data-sensitive>@FormatBtc(Model.UnspendableBalance)</span>
                 </div>
             }
 
@@ -100,7 +106,7 @@
             {
                 <div class="d-flex justify-content-between align-items-center py-2 border-top mt-1">
                     <span class="fw-semibold">Total</span>
-                    <span class="fw-bold">@totalBalance sats</span>
+                    <span class="fw-bold" data-sensitive>@FormatBtc(totalBalance)</span>
                 </div>
                 <!-- Progress bar showing balance composition -->
                 <div class="progress mt-2" style="height: 4px;">

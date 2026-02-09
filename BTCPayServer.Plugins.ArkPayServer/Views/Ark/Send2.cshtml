@@ -1,6 +1,8 @@
 @using BTCPayServer.Abstractions.Extensions
 @using BTCPayServer.Plugins.ArkPayServer.Models
+@using BTCPayServer.Services
 @model Send2ViewModel
+@inject DisplayFormatter DisplayFormatter
 
 @{
     ViewData.SetActivePage(category: "Ark", activePage: "Send2", title: "Ark - Send");
@@ -13,7 +15,7 @@
     @if (Model.SpendableCoinsCount > 0)
     {
         <div class="text-muted">
-            <span>Available: <strong>@Model.AvailableBalanceSats.ToString("#,0")</strong> sats (@Model.SpendableCoinsCount coin@(Model.SpendableCoinsCount != 1 ? "s" : ""))</span>
+            <span data-sensitive>Available: <strong>@DisplayFormatter.Currency(Model.AvailableBalanceBtc, "BTC")</strong> (@Model.SpendableCoinsCount coin@(Model.SpendableCoinsCount != 1 ? "s" : ""))</span>
         </div>
     }
 </div>
@@ -70,10 +72,10 @@ else
                             }
                         </div>
                         <div class="text-end ms-3">
-                            <div class="fw-semibold">@dest.AmountSats.ToString("#,0") <span class="text-muted">sats</span></div>
+                            <div class="fw-semibold" data-sensitive>@DisplayFormatter.Currency(dest.AmountBtc, "BTC")</div>
                             @if (dest.FeeSats > 0)
                             {
-                                <div class="text-muted small">+@dest.FeeSats.ToString("#,0") fee</div>
+                                <div class="text-muted small" data-sensitive>+@DisplayFormatter.Currency(dest.FeeBtc, "BTC") fee</div>
                             }
                         </div>
                         <form method="post" asp-action="Send2Remove" asp-route-storeId="@Model.StoreId" class="ms-3">
@@ -93,22 +95,22 @@ else
         <div class="bg-tile rounded p-3 mb-4">
             <div class="d-flex justify-content-between mb-1">
                 <span>Amount</span>
-                <span>@Model.TotalSendingSats.ToString("#,0") sats</span>
+                <span data-sensitive>@DisplayFormatter.Currency(Model.TotalSendingBtc, "BTC")</span>
             </div>
             <div class="d-flex justify-content-between text-muted mb-1">
                 <span>Fees</span>
-                <span>+@Model.TotalFeesSats.ToString("#,0") sats</span>
+                <span data-sensitive>+@DisplayFormatter.Currency(Model.TotalFeesBtc, "BTC")</span>
             </div>
             <hr class="my-2" />
             <div class="d-flex justify-content-between fw-semibold">
                 <span>Total</span>
-                <span class="@(Model.RemainingSats < 0 ? "text-danger" : "")">@Model.GrandTotalSats.ToString("#,0") sats</span>
+                <span class="@(Model.RemainingSats < 0 ? "text-danger" : "")" data-sensitive>@DisplayFormatter.Currency(Model.GrandTotalBtc, "BTC")</span>
             </div>
             @if (Model.RemainingSats >= 0)
             {
                 <div class="d-flex justify-content-between text-muted small mt-1">
                     <span>Remaining</span>
-                    <span>@Model.RemainingSats.ToString("#,0") sats</span>
+                    <span data-sensitive>@DisplayFormatter.Currency(Model.RemainingBtc, "BTC")</span>
                 </div>
             }
         </div>
@@ -151,7 +153,7 @@ else
                 {
                     <div class="form-text">
                         <a href="#" id="sendAllLink" class="text-primary" onclick="document.getElementById('NewAmountBtc').value = '@Model.AvailableBalanceBtc.ToString("0.00000000", System.Globalization.CultureInfo.InvariantCulture)'; return false;">
-                            Send all (@Model.AvailableBalanceSats.ToString("#,0") sats)
+                            Send all (<span data-sensitive>@DisplayFormatter.Currency(Model.AvailableBalanceBtc, "BTC")</span>)
                         </a>
                     </div>
                 }
@@ -161,7 +163,7 @@ else
                     {
                         <div class="form-text">
                             <a href="#" id="sendRemainingLink" class="text-primary" onclick="document.getElementById('NewAmountBtc').value = '@Model.RemainingBtc.ToString("0.00000000", System.Globalization.CultureInfo.InvariantCulture)'; return false;">
-                                Send remaining (@Model.RemainingSats.ToString("#,0") sats)
+                                Send remaining (<span data-sensitive>@DisplayFormatter.Currency(Model.RemainingBtc, "BTC")</span>)
                             </a>
                         </div>
                     }
@@ -194,7 +196,7 @@ else
                 <div class="alert alert-warning">
                     @if (Model.RemainingSats < 0)
                     {
-                        <span>Insufficient balance. Need @(Model.GrandTotalSats - Model.AvailableBalanceSats).ToString("#,0") more sats.</span>
+                        <span>Insufficient balance. Need <span data-sensitive>@DisplayFormatter.Currency((Model.GrandTotalSats - Model.AvailableBalanceSats) / 100_000_000m, "BTC")</span> more.</span>
                     }
                     else if (Model.Destinations.Any(d => !d.IsValid))
                     {
@@ -205,7 +207,7 @@ else
 
             <div class="d-grid gap-3 buttons">
                 <button type="submit" class="btn btn-primary btn-lg" @(Model.CanExecute ? "" : "disabled")>
-                    Send @Model.TotalSendingSats.ToString("#,0") sats
+                    Send <span data-sensitive>@DisplayFormatter.Currency(Model.TotalSendingBtc, "BTC")</span>
                 </button>
             </div>
         </form>
