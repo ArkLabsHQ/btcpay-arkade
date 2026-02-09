@@ -34,10 +34,6 @@
 
     var statusFilterCount = GetFilterCount(Model.Search, "status");
     var mainColumnCount = Model.Debug ? 11 : 9;
-
-    // URLs for sublist mass actions
-    var vtxoSublistAction = Url.Action("MassActionVtxosSublist", "Ark", new { storeId = Model.StoreId });
-    var swapSublistAction = Url.Action("MassActionSwapsSublist", "Ark", new { storeId = Model.StoreId });
 }
 
 @section PageHeadContent
@@ -352,11 +348,7 @@
                                             <partial name="_VtxoTable" model="vtxos" view-data='new ViewDataDictionary(ViewData) {
                                                 { "ShowLinks", true },
                                                 { "UseTimeAgo", true },
-                                                { "TimeColumnLabel", "Seen" },
-                                                { "ShowMassSelect", true },
-                                                { "FormAction", vtxoSublistAction },
-                                                { "StoreId", Model.StoreId },
-                                                { "ContractScript", contract.Script }
+                                                { "TimeColumnLabel", "Seen" }
                                             }' />
                                         </div>
                                     }
@@ -366,11 +358,7 @@
                                         <h6 class="mb-3">Swaps</h6>
                                         <partial name="_SwapTable" model="swaps" view-data='new ViewDataDictionary(ViewData) {
                                             { "UseTimeAgo", true },
-                                            { "TimeColumnLabel", "Created" },
-                                            { "ShowMassSelect", true },
-                                            { "FormAction", swapSublistAction },
-                                            { "StoreId", Model.StoreId },
-                                            { "ContractScript", contract.Script }
+                                            { "TimeColumnLabel", "Created" }
                                         }' />
                                     }
                                 </td>
