@@ -1,6 +1,7 @@
 using BTCPayServer.Abstractions.Constants;
 using BTCPayServer.Abstractions.Extensions;
 using BTCPayServer.Abstractions.Models;
+using BTCPayServer.Models.StoreViewModels;
 using BTCPayServer.Client;
 using BTCPayServer.Data;
 using BTCPayServer.HostedServices;
@@ -170,7 +171,7 @@ public class ArkController(
             // If a new HD wallet was generated, redirect to seed backup page
             if (walletSettings is { IsNewlyGeneratedWallet: true, Wallet: not null })
             {
-                return RedirectToAction("RecoverySeedBackup", "UIHome", new
+                return this.RedirectToRecoverySeedBackup(new RecoverySeedBackupViewModel
                 {
                     ReturnUrl = Url.Action(nameof(StoreOverview), new { storeId }),
                     IsStored = true,
@@ -312,6 +313,27 @@ public class ArkController(
             SpendableOutpoints = spendableOutpoints,
             VtxoContracts = vtxoContracts,
             TotalVtxoCount = totalVtxoCount
+        });
+    }
+
+    [HttpPost("stores/{storeId}/show-private-key")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> ShowPrivateKey(string storeId)
+    {
+        var (store, config, errorResult) = ValidateStoreAndConfig();
+        if (errorResult != null) return errorResult;
+
+        var wallet = await walletStorage.GetWalletByIdAsync(config!.WalletId);
+        if (wallet?.Wallet == null)
+            return NotFound();
+
+        return this.RedirectToRecoverySeedBackup(new RecoverySeedBackupViewModel
+        {
+            ReturnUrl = Url.Action(nameof(StoreOverview), new { storeId }),
+            IsStored = true,
+            RequireConfirm = false,
+            CryptoCode = "ARK",
+            Mnemonic = wallet.Wallet
         });
     }
 

@@ -186,15 +186,11 @@
                 </form>
                 @if (Model.SignerAvailable && !string.IsNullOrEmpty(Model.Wallet) && Model.CanManagePrivateKeys)
                 {
-                    <a asp-controller="UIHome" asp-action="RecoverySeedBackup"
-                       asp-route-ReturnUrl="@Url.Action("StoreOverview", "Ark", new { storeId })"
-                       asp-route-IsStored="true"
-                       asp-route-RequireConfirm="false"
-                       asp-route-CryptoCode="ARK"
-                       asp-route-Mnemonic="@Model.Wallet"
-                       class="btn btn-outline-secondary" data-testid="show-private-key-btn">
-                        <vc:icon symbol="key" /> @(Model.WalletType == WalletType.HD ? "Show Seed" : "Show Key")
-                    </a>
+                    <form method="post" asp-controller="Ark" asp-action="ShowPrivateKey" asp-route-storeId="@storeId" style="display:inline">
+                        <button type="submit" class="btn btn-outline-secondary" data-testid="show-private-key-btn">
+                            <vc:icon symbol="key" /> @(Model.WalletType == WalletType.HD ? "Show Seed" : "Show Key")
+                        </button>
+                    </form>
                 }
                 <button type="button" class="btn btn-outline-danger" data-bs-toggle="modal" data-bs-target="#clearWalletModal" data-testid="clear-wallet-btn">
                     <vc:icon symbol="cross" /> Clear Wallet
