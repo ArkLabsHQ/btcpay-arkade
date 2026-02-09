@@ -40,18 +40,23 @@ public class SingleKeyAddressProvider(
         ArkContract? result = null;
         if (purpose == NextContractPurpose.SendToSelf && sweepingAddress is not null)
         {
-            // Static sweeping address is reusable - always keep it Active
             result = new UnknownArkContract(sweepingAddress, info.SignerKey, info.Network.ChainName == ChainName.Mainnet);
             activityState =  ContractActivityState.Inactive;
         }
         var signingDescriptor = await GetNextSigningDescriptor(cancellationToken);
+        if (purpose == NextContractPurpose.SendToSelf)
+        {
+            // Static address is reusable - always keep it Active
+            result = new ArkPaymentContract( info.SignerKey, info.UnilateralExit, signingDescriptor);
+            activityState =  ContractActivityState.Active;
+        }
+        
         //TODO: lets actually make use of the LastUsedIndex and derives bytes deterministically
-        var bytes = RandomUtils.GetBytes(32);
         result ??= new HashLockedArkPaymentContract(
             info.SignerKey,
             info.UnilateralExit,
             signingDescriptor,
-            bytes,
+            RandomUtils.GetBytes(32),
             HashLockTypeOption.Hash160
         );
         return (result, result.ToEntity(wallet.Id, info.SignerKey, null, activityState));

@@ -187,7 +187,7 @@
                 @if (Model.SignerAvailable && !string.IsNullOrEmpty(Model.Wallet) && Model.CanManagePrivateKeys)
                 {
                     <form method="post" asp-controller="Ark" asp-action="ShowPrivateKey" asp-route-storeId="@storeId" style="display:inline">
-                        <button type="submit" class="btn btn-outline-secondary" data-testid="show-private-key-btn">
+                        <button type="submit" class="btn btn-outline-secondary w-100" data-testid="show-private-key-btn">
                             <vc:icon symbol="key" /> @(Model.WalletType == WalletType.HD ? "Show Seed" : "Show Key")
                         </button>
                     </form>

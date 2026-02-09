@@ -7,6 +7,7 @@ using BTCPayServer.Data;
 using BTCPayServer.HostedServices;
 using BTCPayServer.Payments.Bitcoin;
 using BTCPayServer.Payouts;
+using BTCPayServer.Plugins.ArkPayServer.Helpers;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Services;
 using BTCPayServer.Services.Invoices;
@@ -138,8 +139,7 @@ public class ArkPayoutHandler : IPayoutHandler, IHasNetwork, IActiveScriptsProvi
             var res = parseResult.Value.Object.ToObject<ArkPayoutProof>(
                 JsonSerializer.Create(_jsonSerializerSettings.GetSerializer(payoutMethodId))
             )!;
-
-            res.Link = $"{_arkNetworkConfig.ArkUri}/v1/indexer/vtxos?scripts={ArkAddress.Parse(payout.DedupId).ScriptPubKey.ToHex()}";
+            res.Link =  ArkadeLinkHelper.GetAddressLink(_arkNetworkConfig, ArkAddress.Parse(payout.DedupId).ToString());
             return res;
         }
 
