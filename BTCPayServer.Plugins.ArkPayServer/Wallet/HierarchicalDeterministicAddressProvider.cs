@@ -112,15 +112,16 @@ public class HierarchicalDeterministicAddressProvider(
     /// <summary>
     /// Tries to find a reusable descriptor from the input contracts.
     /// This avoids HD index bloat when creating change outputs.
-    /// Skips contracts in Active state (e.g. invoice addresses) to prevent
-    /// internal SendToSelf outputs from being misdetected as invoice payments.
+    /// Skips contracts assigned to invoices to prevent internal SendToSelf
+    /// outputs from being misdetected as invoice payments.
     /// </summary>
     private async Task<OutputDescriptor?> TryGetRecyclableDescriptor(
         ArkContract[] inputs, OutputDescriptor serverKey, CancellationToken cancellationToken)
     {
-        // Build a set of scripts that are currently Active (assigned to invoices/swaps).
-        // We must not recycle these — sending change back to an invoice address would
-        // trigger false overpayment detection.
+        // Look up stored contracts for these inputs so we can check metadata.
+        // Contracts created for invoices have Metadata["Source"] = "invoice:{id}".
+        // Recycling those as change addresses would cause BTCPay to register
+        // a false additional payment on the invoice.
         var inputScripts = inputs
             .Select(c => c.GetArkAddress(serverKey).ScriptPubKey.ToHex())
             .Distinct()
@@ -129,15 +130,16 @@ public class HierarchicalDeterministicAddressProvider(
             walletIds: [wallet.Id],
             scripts: inputScripts,
             cancellationToken: cancellationToken);
-        var activeScripts = storedContracts
-            .Where(c => c.ActivityState == ContractActivityState.Active)
+        var invoiceScripts = storedContracts
+            .Where(c => c.Metadata?.TryGetValue("Source", out var src) == true
+                        && src.StartsWith("invoice:", StringComparison.Ordinal))
             .Select(c => c.Script)
             .ToHashSet();
 
         // Check ArkPaymentContracts first (most common)
         foreach (var payment in inputs.OfType<ArkPaymentContract>())
         {
-            if (activeScripts.Contains(payment.GetArkAddress(serverKey).ScriptPubKey.ToHex()))
+            if (invoiceScripts.Contains(payment.GetArkAddress(serverKey).ScriptPubKey.ToHex()))
                 continue;
 
             if (await IsOurs(payment.User, cancellationToken))
@@ -149,7 +151,7 @@ public class HierarchicalDeterministicAddressProvider(
         // Check VHTLCContracts (from swaps)
         foreach (var htlc in inputs.OfType<VHTLCContract>())
         {
-            if (activeScripts.Contains(htlc.GetArkAddress(serverKey).ScriptPubKey.ToHex()))
+            if (invoiceScripts.Contains(htlc.GetArkAddress(serverKey).ScriptPubKey.ToHex()))
                 continue;
 
             if (await IsOurs(htlc.Receiver, cancellationToken))
