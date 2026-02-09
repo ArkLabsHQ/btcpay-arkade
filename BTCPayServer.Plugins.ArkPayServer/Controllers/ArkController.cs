@@ -123,7 +123,12 @@ public class ArkController(
                     
                     if (wallet.WalletType == WalletType.SingleKey)
                     {
-                       await  contractService.DeriveContract(wallet.Id, NextContractPurpose.SendToSelf, ContractActivityState.Active, cancellationToken: HttpContext.RequestAborted);
+                       await  contractService.DeriveContract(
+                           wallet.Id, 
+                           NextContractPurpose.SendToSelf, 
+                           ContractActivityState.Active, 
+                           metadata: new Dictionary<string, string> { ["Source"] = "Default" },
+                           cancellationToken: HttpContext.RequestAborted);
                     }
                     
                     walletSettings = walletSettings with { WalletId = wallet.Id };

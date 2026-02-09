@@ -117,7 +117,7 @@ public class ArkLightningClient(
             ExpiresAt = bolt11.ExpiryDate,
             BOLT11 = swap.Invoice,
             PaymentHash = bolt11.PaymentHash?.ToString(),
-            PaidAt = lightningStatus == LightningInvoiceStatus.Paid ? swap.UpdatedAt : null,
+            PaidAt = lightningStatus == LightningInvoiceStatus.Paid ? swap.UpdatedAt.ToUniversalTime() : null,
             // we have to comment this out because BTCPay will consider this invoice as partially paid..
             // AmountReceived = lightningStatus == LightningInvoiceStatus.Paid
             //     ? LightMoney.Satoshis(swap.ExpectedAmount)

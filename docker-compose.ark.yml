@@ -136,6 +136,8 @@ services:
         [ark]
         host = "boltz-fulmine"
         port = 7000
+        useLocktimeSeconds = true
+
 
         [api]
         host = "0.0.0.0"

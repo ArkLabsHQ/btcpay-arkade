@@ -36,6 +36,7 @@ public class ArkContractInvoiceListener(
     : IHostedService
 {
     private readonly Channel<string> _checkInvoices = Channel.CreateUnbounded<string>();
+    private readonly SemaphoreSlim _paymentLock = new(1, 1);
     private CompositeDisposable _leases = new();
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -123,34 +124,48 @@ public class ArkContractInvoiceListener(
     {
         var pmi = ArkadePlugin.ArkadePaymentMethodId;
         var details = new ArkadePaymentData($"{vtxo.TransactionId}:{vtxo.TransactionOutputIndex}");
-        var paymentData = new PaymentData
+
+        // Serialize payment registration to prevent duplicate inserts from concurrent VTXO events
+        await _paymentLock.WaitAsync();
+        try
         {
-            Status = PaymentStatus.Settled,
-            Amount = Money.Satoshis(vtxo.Amount).ToDecimal(MoneyUnit.BTC),
-            Created = vtxo.SeenAt,
-            Id = details.Outpoint,
-            Currency = "BTC",
-        }.Set(invoice, handler, details);
+            // Re-fetch the invoice inside the lock to get the latest payment state
+            var freshInvoice = await invoiceRepository.GetInvoice(invoice.Id);
+            if (freshInvoice is null)
+                return;
 
-
-        var alreadyExistingPaymentThatMatches = invoice
-            .GetPayments(false)
-            .SingleOrDefault(c => c.Id == paymentData.Id && c.PaymentMethodId == pmi);
-
-        if (alreadyExistingPaymentThatMatches == null)
-        {
-            var payment = await paymentService.AddPayment(paymentData);
-            if (payment != null)
+            var paymentData = new PaymentData
             {
-                await ReceivedPayment(invoice, payment);
+                Status = PaymentStatus.Settled,
+                Amount = Money.Satoshis(vtxo.Amount).ToDecimal(MoneyUnit.BTC),
+                Created = vtxo.SeenAt,
+                Id = details.Outpoint,
+                Currency = "BTC",
+            }.Set(freshInvoice, handler, details);
+
+            var alreadyExistingPaymentThatMatches = freshInvoice
+                .GetPayments(false)
+                .SingleOrDefault(c => c.Id == paymentData.Id && c.PaymentMethodId == pmi);
+
+            if (alreadyExistingPaymentThatMatches == null)
+            {
+                var payment = await paymentService.AddPayment(paymentData);
+                if (payment != null)
+                {
+                    await ReceivedPayment(freshInvoice, payment);
+                }
+            }
+            else
+            {
+                //else update it with the new data
+                alreadyExistingPaymentThatMatches.Status = PaymentStatus.Settled;
+                alreadyExistingPaymentThatMatches.Details = JToken.FromObject(details, handler.Serializer);
+                await paymentService.UpdatePayments([alreadyExistingPaymentThatMatches]);
             }
         }
-        else
+        finally
         {
-            //else update it with the new data
-            alreadyExistingPaymentThatMatches.Status = PaymentStatus.Settled;
-            alreadyExistingPaymentThatMatches.Details = JToken.FromObject(details, handler.Serializer);
-            await paymentService.UpdatePayments([alreadyExistingPaymentThatMatches]);
+            _paymentLock.Release();
         }
 
         eventAggregator.Publish(new InvoiceNeedUpdateEvent(invoice.Id));
