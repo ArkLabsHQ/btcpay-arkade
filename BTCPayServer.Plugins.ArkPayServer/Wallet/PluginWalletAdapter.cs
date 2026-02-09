@@ -1,5 +1,6 @@
 using BTCPayServer.Plugins.ArkPayServer.Storage;
 using NArk.Abstractions;
+using NArk.Abstractions.Contracts;
 using NArk.Abstractions.Safety;
 using NArk.Abstractions.Wallets;
 using NArk.Core.Transport;
@@ -13,7 +14,8 @@ namespace BTCPayServer.Plugins.ArkPayServer.Wallet;
 public class PluginWalletAdapter(
     IClientTransport clientTransport,
     ISafetyService safetyService,
-    EfCoreWalletStorage walletStorage)
+    EfCoreWalletStorage walletStorage,
+    IContractStorage contractStorage)
     : IWalletProvider
 {
     public async Task<IArkadeWalletSigner?> GetSignerAsync(string identifier, CancellationToken cancellationToken = default)
@@ -48,7 +50,7 @@ public class PluginWalletAdapter(
             }
             return wallet.WalletType switch
             {
-                WalletType.HD => new HierarchicalDeterministicAddressProvider(clientTransport,safetyService, walletStorage, wallet, network, sweepDestination),
+                WalletType.HD => new HierarchicalDeterministicAddressProvider(clientTransport, safetyService, walletStorage, contractStorage, wallet, network, sweepDestination),
                 WalletType.SingleKey => new SingleKeyAddressProvider(clientTransport,wallet, network,sweepDestination),
                 _ => throw new ArgumentOutOfRangeException(nameof(wallet.WalletType))
             };

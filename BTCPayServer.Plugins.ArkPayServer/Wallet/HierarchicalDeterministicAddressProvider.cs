@@ -17,6 +17,7 @@ public class HierarchicalDeterministicAddressProvider(
     IClientTransport transport,
     ISafetyService safetyService,
     EfCoreWalletStorage walletStorage,
+    IContractStorage contractStorage,
     ArkWallet wallet,
     Network network,
     ArkAddress? sweepDestination)
@@ -82,7 +83,7 @@ public class HierarchicalDeterministicAddressProvider(
         {
             // For SendToSelf (change), try to recycle a descriptor from inputs to avoid index bloat
             var recycledDescriptor = inputContracts is not null
-                ? await TryGetRecyclableDescriptor(inputContracts, cancellationToken)
+                ? await TryGetRecyclableDescriptor(inputContracts, info.SignerKey, cancellationToken)
                 : null;
 
             if (recycledDescriptor is not null)
@@ -111,12 +112,34 @@ public class HierarchicalDeterministicAddressProvider(
     /// <summary>
     /// Tries to find a reusable descriptor from the input contracts.
     /// This avoids HD index bloat when creating change outputs.
+    /// Skips contracts in Active state (e.g. invoice addresses) to prevent
+    /// internal SendToSelf outputs from being misdetected as invoice payments.
     /// </summary>
-    private async Task<OutputDescriptor?> TryGetRecyclableDescriptor(ArkContract[] inputs, CancellationToken cancellationToken)
+    private async Task<OutputDescriptor?> TryGetRecyclableDescriptor(
+        ArkContract[] inputs, OutputDescriptor serverKey, CancellationToken cancellationToken)
     {
+        // Build a set of scripts that are currently Active (assigned to invoices/swaps).
+        // We must not recycle these — sending change back to an invoice address would
+        // trigger false overpayment detection.
+        var inputScripts = inputs
+            .Select(c => c.GetArkAddress(serverKey).ScriptPubKey.ToHex())
+            .Distinct()
+            .ToArray();
+        var storedContracts = await contractStorage.GetContracts(
+            walletIds: [wallet.Id],
+            scripts: inputScripts,
+            cancellationToken: cancellationToken);
+        var activeScripts = storedContracts
+            .Where(c => c.ActivityState == ContractActivityState.Active)
+            .Select(c => c.Script)
+            .ToHashSet();
+
         // Check ArkPaymentContracts first (most common)
         foreach (var payment in inputs.OfType<ArkPaymentContract>())
         {
+            if (activeScripts.Contains(payment.GetArkAddress(serverKey).ScriptPubKey.ToHex()))
+                continue;
+
             if (await IsOurs(payment.User, cancellationToken))
             {
                 return payment.User;
@@ -126,6 +149,9 @@ public class HierarchicalDeterministicAddressProvider(
         // Check VHTLCContracts (from swaps)
         foreach (var htlc in inputs.OfType<VHTLCContract>())
         {
+            if (activeScripts.Contains(htlc.GetArkAddress(serverKey).ScriptPubKey.ToHex()))
+                continue;
+
             if (await IsOurs(htlc.Receiver, cancellationToken))
             {
                 return htlc.Receiver;
