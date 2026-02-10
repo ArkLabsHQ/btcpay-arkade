@@ -1,0 +1,76 @@
+@using System.Globalization
+@using BTCPayServer.Abstractions.Extensions
+@using BTCPayServer.Plugins.Arkade.Helpers
+@using BTCPayServer.Plugins.Arkade.Models
+@using BTCPayServer.Plugins.Arkade.PaymentHandler
+@using BTCPayServer.Services
+@using BTCPayServer.Services.Invoices
+@inject DisplayFormatter DisplayFormatter
+@model BTCPayServer.Models.InvoicingModels.InvoiceDetailsModel
+@inject TransactionLinkProviders TransactionLinkProviders
+@inject PaymentMethodHandlerDictionary handlers
+@inject ArkNetworkConfig ArkNetworkConfig
+
+
+@{
+	
+	
+	
+	var payments = Model.Payments.Select(payment =>
+	{
+		if (!handlers.TryGetValue(payment.PaymentMethodId, out var h) || h is not ArkadePaymentMethodHandler handler)
+			return null;
+		var paymentData = handler.ParsePaymentDetails(payment.Details);
+		var promptDetails = handler.ParsePaymentPromptDetails(Model.Entity.GetPaymentPrompt(payment.PaymentMethodId)?.Details);
+		var vm = new ArkPaymentDataViewModel
+		{
+			Address = payment.Destination,
+			Amount = payment.Value.ToString(CultureInfo.InvariantCulture),
+			Outpoint = paymentData.Outpoint,
+			ReceivedTime = payment.ReceivedTime,
+			Contract = promptDetails.ContractString,
+			Currency = payment.Currency
+		};
+		return vm;
+	}).Where(c => c != null).ToList();
+}
+
+@if (payments.Any())
+{
+    <section>
+        <h5>Arkade Payments</h5>
+        <table class="table table-hover">
+            <thead>
+            <tr>
+				<th text-translate="true">Address</th>
+				<th text-translate="true">Outpoint</th>
+				<th text-translate="true">Received Time</th>
+				<th text-translate="true">Contract</th>
+				<th text-translate="true" class="text-end">Amount</th>
+	            
+	            </tr>
+            </thead>
+            <tbody>
+            @foreach (var payment in payments)
+            {
+	            var addrLink = ArkadeLinkHelper.GetAddressLink(ArkNetworkConfig, payment.Address);
+	            var outpointLink = ArkadeLinkHelper.GetOutpointLink(ArkNetworkConfig, payment.Outpoint);
+                <tr >
+	                <td>
+		                <vc:truncate-center text="@payment.Address" link="@addrLink"  classes="truncate-center-id" />
+		                
+	                </td>
+	                <td><vc:truncate-center text="@payment.Outpoint" link="@outpointLink"  classes="truncate-center-id" /></td>
+	                <td>@payment.ReceivedTime.ToBrowserDate()</td>
+	                <td>  <vc:truncate-center text="@payment.Contract"  classes="truncate-center-id" /></td>
+	                
+                    
+                    <td class="payment-value text-end text-nowrap">
+                        <span data-sensitive class="text-success">@DisplayFormatter.Currency(payment.Amount, payment.Currency)</span>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </section>
+}

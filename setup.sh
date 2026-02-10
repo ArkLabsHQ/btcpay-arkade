@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 ROOT_DIR=$(pwd)
-PLUGIN_DIR="BTCPayServer.Plugins.ArkPayServer"
+PLUGIN_DIR="BTCPayServer.Plugins.Arkade"
 OUTPUT_DIR="$ROOT_DIR/$PLUGIN_DIR/bin/Debug/net8.0"
 
 # Remove old build artifacts
@@ -22,7 +22,7 @@ fi
 APPSETTINGS="submodules/btcpayserver/BTCPayServer/appsettings.dev.json"
 if [ ! -f "$APPSETTINGS" ]; then
   echo "Creating $APPSETTINGS"
-  echo '{ "DEBUG_PLUGINS": "../../../BTCPayServer.Plugins.ArkPayServer/bin/Debug/net8.0/BTCPayServer.Plugins.ArkPayServer.dll" }' > "$APPSETTINGS"
+  echo '{ "DEBUG_PLUGINS": "../../../BTCPayServer.Plugins.Arkade/bin/Debug/net8.0/BTCPayServer.Plugins.Arkade.dll" }' > "$APPSETTINGS"
 fi
 
 echo "Publishing plugin (includes NNark dependencies)..."

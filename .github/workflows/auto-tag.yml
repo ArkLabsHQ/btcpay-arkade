@@ -4,7 +4,7 @@ on:
   push:
     branches: [ "master" ]
     paths:
-      - 'BTCPayServer.Plugins.ArkPayServer/BTCPayServer.Plugins.ArkPayServer.csproj'
+      - 'BTCPayServer.Plugins.Arkade/BTCPayServer.Plugins.Arkade.csproj'
 
 jobs:
   build-and-tag:
@@ -19,7 +19,7 @@ jobs:
     - name: Extract version from csproj
       id: version
       run: |
-        VERSION=$(grep -oP '<Version>\K[^<]+' BTCPayServer.Plugins.ArkPayServer/BTCPayServer.Plugins.ArkPayServer.csproj)
+        VERSION=$(grep -oP '<Version>\K[^<]+' BTCPayServer.Plugins.Arkade/BTCPayServer.Plugins.Arkade.csproj)
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "Detected version: $VERSION"
         
@@ -46,7 +46,7 @@ jobs:
         BUILD_RESPONSE=$(curl -s --user "$BTCPAY_EMAIL:$BTCPAY_PASSWORD" \
           -X POST \
           -H "Content-Type: application/json" \
-          -d "{\"gitRepository\": \"https://github.com/${{ github.repository }}\", \"gitRef\": \"${{ github.ref_name }}\", \"pluginDirectory\": \"BTCPayServer.Plugins.ArkPayServer\", \"buildConfig\": \"Release\"}" \
+          -d "{\"gitRepository\": \"https://github.com/${{ github.repository }}\", \"gitRef\": \"${{ github.ref_name }}\", \"pluginDirectory\": \"BTCPayServer.Plugins.Arkade\", \"buildConfig\": \"Release\"}" \
           "https://plugin-builder.btcpayserver.org/api/v1/plugins/arkade/builds")
         
         echo "Build response: $BUILD_RESPONSE"
