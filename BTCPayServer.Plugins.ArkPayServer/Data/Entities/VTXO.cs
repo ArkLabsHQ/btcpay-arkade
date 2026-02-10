@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using NArk.Abstractions.VTXOs;
 using NBitcoin;
@@ -18,6 +19,10 @@ public class VTXO
     public bool Recoverable { get; set; }
     public DateTimeOffset ExpiresAt { get; set; }
     public uint? ExpiresAtHeight { get; set; }
+    public bool Preconfirmed { get; set; }
+    public bool Unrolled { get; set; }
+    public string? CommitmentTxids { get; set; }
+    public string? ArkTxid { get; set; }
 
     public virtual ICollection<ArkIntentVtxo> IntentVtxos { get; set; } = null!;
 
@@ -45,7 +50,11 @@ public class VTXO
             Swept: Recoverable,
             CreatedAt: SeenAt,
             ExpiresAt: ExpiresAt == DateTimeOffset.MaxValue ? null : ExpiresAt,
-            ExpiresAtHeight: ExpiresAtHeight
+            ExpiresAtHeight: ExpiresAtHeight,
+            Preconfirmed: Preconfirmed,
+            Unrolled: Unrolled,
+            CommitmentTxids: string.IsNullOrEmpty(CommitmentTxids) ? null : JsonSerializer.Deserialize<List<string>>(CommitmentTxids),
+            ArkTxid: ArkTxid
         );
     }
 
@@ -62,6 +71,10 @@ public class VTXO
         hash.Add(SpentByTransactionId);
         hash.Add(Script);
         hash.Add(SettledByTransactionId);
+        hash.Add(Preconfirmed);
+        hash.Add(Unrolled);
+        hash.Add(CommitmentTxids);
+        hash.Add(ArkTxid);
         return hash.ToHashCode();
     }
     

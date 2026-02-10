@@ -51,6 +51,36 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
                 type: "bigint",
                 nullable: true);
 
+            migrationBuilder.AddColumn<bool>(
+                name: "Preconfirmed",
+                schema: "BTCPayServer.Plugins.Ark",
+                table: "Vtxos",
+                type: "boolean",
+                nullable: false,
+                defaultValue: false);
+
+            migrationBuilder.AddColumn<bool>(
+                name: "Unrolled",
+                schema: "BTCPayServer.Plugins.Ark",
+                table: "Vtxos",
+                type: "boolean",
+                nullable: false,
+                defaultValue: false);
+
+            migrationBuilder.AddColumn<string>(
+                name: "CommitmentTxids",
+                schema: "BTCPayServer.Plugins.Ark",
+                table: "Vtxos",
+                type: "text",
+                nullable: true);
+
+            migrationBuilder.AddColumn<string>(
+                name: "ArkTxid",
+                schema: "BTCPayServer.Plugins.Ark",
+                table: "Vtxos",
+                type: "text",
+                nullable: true);
+
             // === Swaps table changes ===
             migrationBuilder.AddColumn<string>(
                 name: "Address",
@@ -298,6 +328,26 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
             // === Vtxos: remove columns ===
             migrationBuilder.DropColumn(
                 name: "ExpiresAtHeight",
+                schema: "BTCPayServer.Plugins.Ark",
+                table: "Vtxos");
+
+            migrationBuilder.DropColumn(
+                name: "Preconfirmed",
+                schema: "BTCPayServer.Plugins.Ark",
+                table: "Vtxos");
+
+            migrationBuilder.DropColumn(
+                name: "Unrolled",
+                schema: "BTCPayServer.Plugins.Ark",
+                table: "Vtxos");
+
+            migrationBuilder.DropColumn(
+                name: "CommitmentTxids",
+                schema: "BTCPayServer.Plugins.Ark",
+                table: "Vtxos");
+
+            migrationBuilder.DropColumn(
+                name: "ArkTxid",
                 schema: "BTCPayServer.Plugins.Ark",
                 table: "Vtxos");
 

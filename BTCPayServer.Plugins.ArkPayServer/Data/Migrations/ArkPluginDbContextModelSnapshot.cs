@@ -242,11 +242,20 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
                     b.Property<long>("Amount")
                         .HasColumnType("bigint");
 
+                    b.Property<string>("ArkTxid")
+                        .HasColumnType("text");
+
+                    b.Property<string>("CommitmentTxids")
+                        .HasColumnType("text");
+
                     b.Property<DateTimeOffset>("ExpiresAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<long?>("ExpiresAtHeight")
                         .HasColumnType("bigint");
+
+                    b.Property<bool>("Preconfirmed")
+                        .HasColumnType("boolean");
 
                     b.Property<bool>("Recoverable")
                         .HasColumnType("boolean");
@@ -263,6 +272,9 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
 
                     b.Property<string>("SpentByTransactionId")
                         .HasColumnType("text");
+
+                    b.Property<bool>("Unrolled")
+                        .HasColumnType("boolean");
 
                     b.HasKey("TransactionId", "TransactionOutputIndex");
 

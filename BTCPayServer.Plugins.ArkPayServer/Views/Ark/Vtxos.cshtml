@@ -120,6 +120,7 @@
                         <th text-translate="true">Amount</th>
                         <th text-translate="true">Expiry</th>
                         <th text-translate="true">Status</th>
+                        <th text-translate="true">Spent/Settled By</th>
                     </tr>
                 </thead>
                 <thead class="mass-action-actions">
@@ -127,7 +128,7 @@
                         <th class="mass-action-select-col only-for-js">
                             <input type="checkbox" class="form-check-input mass-action-select-all" />
                         </th>
-                        <th colspan="6">
+                        <th colspan="7">
                             <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
                                 <div>
                                     <strong class="mass-action-selected-count">0</strong>
@@ -200,6 +201,33 @@
                                 @if (isSpendable)
                                 {
                                     <span class="badge text-bg-info ms-1">Spendable</span>
+                                }
+                                @if (!vtxo.Preconfirmed)
+                                {
+                                    <span class="badge text-bg-light ms-1">Bitcoin finality</span>
+                                }
+                                @if (vtxo.Unrolled)
+                                {
+                                    <span class="badge text-bg-dark ms-1">Unrolled</span>
+                                }
+                            </td>
+                            <td class="align-middle">
+                                @if (!string.IsNullOrEmpty(vtxo.SpentByTransactionId))
+                                {
+                                    var spentByLink = ArkadeLinkHelper.GetTransactionLink(ArkNetworkConfig, vtxo.SpentByTransactionId);
+                                    <vc:truncate-center link="@spentByLink" text="@vtxo.SpentByTransactionId"
+                                                        classes="truncate-center-id"/>
+                                }
+                                @if (!string.IsNullOrEmpty(vtxo.SettledByTransactionId))
+                                {
+                                    var settledByLink = ArkadeLinkHelper.GetTransactionLink(ArkNetworkConfig, vtxo.SettledByTransactionId);
+                                    <span class="text-muted small">Settled:</span>
+                                    <vc:truncate-center link="@settledByLink" text="@vtxo.SettledByTransactionId"
+                                                        classes="truncate-center-id"/>
+                                }
+                                else
+                                {
+                                    <span class="text-muted">-</span>
                                 }
                             </td>
                         </tr>
