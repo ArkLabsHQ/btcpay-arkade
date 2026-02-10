@@ -1,0 +1,68 @@
+@using BTCPayServer.Abstractions.Contracts
+@using BTCPayServer.Abstractions.Extensions
+@inject IScopeProvider ScopeProvider
+@model BTCPayServer.Plugins.ArkPayServer.Models.SpendOverviewViewModel
+
+@{
+    Layout = "_Layout";
+    ViewData.SetActivePage(category: "Ark", activePage: "SpendOverview", title: "Ark - Transfer");
+    var storeId = ScopeProvider.GetCurrentStoreId()!;
+}
+
+<partial name="_StatusMessage" />
+
+<partial name="_ArkBalances" model="Model.Balances" />
+
+@if (Model.PrefilledDestination.Count is 0)
+{
+    <div class="card my-2">
+        <div class="card-body">
+            <h5 class="card-title">Transfer</h5>
+            <form asp-action="SpendOverview" method="post" asp-route-storeId="@storeId" data-testid="transfer-form">
+                <div class="form-group mb-3">
+                    <label asp-for="Destination" class="form-label">Destination</label>
+                    <div class="d-sm-flex">
+                        <input asp-for="Destination" class="form-control" required
+                               readonly="@(Model.Balances.AvailableBalance is 0)" data-testid="destination-input"/>
+                    </div>
+
+                    <span asp-validation-for="Destination" class="text-danger"></span>
+                    <div class="form-text">
+                        Enter BIP21/LN invoice to initiate transfer
+                    </div>
+                </div>
+                <button name="command" type="submit" value="transfer" class="btn btn-danger me-2" text-translate="true" data-testid="confirm-transfer-btn">
+                    Transfer
+                </button>
+            </form>
+        </div>
+    </div>
+}
+else
+{
+        <table class="table table-hover mb-0 text-center" data-testid="prefilled-destinations-table">
+            <thead>
+            <tr>
+                <th class="text-nowrap" text-translate="true">Destination</th>
+                <th text-translate="true">Action</th>
+            </tr>
+            </thead>
+            <tbody>
+            @foreach (var destination in Model.PrefilledDestination)
+            {
+                <tr data-testid="destination-row">
+                    <td>
+                        <vc:truncate-center text="@destination" classes="truncate-center-id"/>
+                    </td>
+                    <td>
+                        <form asp-route-storeId="@storeId" asp-action="SpendOverview" method="post">
+                        <input type="hidden" name="Destination" value="@destination" />
+                        <button type="submit" class="btn btn-link" data-testid="accept-destination-btn">Accept</button>
+                        </form>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+}
+

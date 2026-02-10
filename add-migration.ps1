@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Adds a new Entity Framework Core migration for the Arkade plugin.
+    Adds a new Entity Framework Core migration for the ArkPayServer plugin.
 .PARAMETER MigrationName
     The name for the new migration. This is a required parameter.
 .EXAMPLE
@@ -18,7 +18,7 @@ Write-Host "⏳ Running EF Core migration command..."
 
 # Run the EF Core migration command
 dotnet ef migrations add $MigrationName `
-  --project BTCPayServer.Plugins.Arkade/BTCPayServer.Plugins.Arkade.csproj `
+  --project BTCPayServer.Plugins.ArkPayServer/BTCPayServer.Plugins.ArkPayServer.csproj `
   --context ArkPluginDbContext `
   --output-dir Data/Migrations
 

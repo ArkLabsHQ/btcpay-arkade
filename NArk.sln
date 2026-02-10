@@ -1,6 +1,6 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BTCPayServer.Plugins.Arkade", "BTCPayServer.Plugins.Arkade\BTCPayServer.Plugins.Arkade.csproj", "{F2B300EB-E090-4CCB-B1D7-9B2B96B95C88}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BTCPayServer.Plugins.ArkPayServer", "BTCPayServer.Plugins.ArkPayServer\BTCPayServer.Plugins.ArkPayServer.csproj", "{F2B300EB-E090-4CCB-B1D7-9B2B96B95C88}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BTCPayServer", "submodules\btcpayserver\BTCPayServer\BTCPayServer.csproj", "{2464FC73-75E8-4254-A900-2090FB4D1EDD}"
 EndProject

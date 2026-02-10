@@ -1,0 +1,144 @@
+@using BTCPayServer.Abstractions.Extensions
+@using BTCPayServer.Plugins.ArkPayServer.Helpers
+@using NArk.Abstractions.Blockchain
+@using NArk.Abstractions.Contracts
+@using NArk.Core.Contracts
+@using NArk.Core.Transport
+@using NBitcoin
+@using NArk.Abstractions.VTXOs
+@inject ArkNetworkConfig ArkNetworkConfig
+@inject IChainTimeProvider ChainTimeProvider
+@inject IClientTransport ClientTransport
+@model IEnumerable<ArkVtxo>
+
+@{
+    var showAddressColumn = ViewData["ShowAddressColumn"] as bool? ?? false;
+    var showSpendableStatus = ViewData["ShowSpendableStatus"] as bool? ?? false;
+    var compactMode = ViewData["CompactMode"] as bool? ?? false;
+    var chainTime = await ChainTimeProvider.GetChainTime(Context.RequestAborted);
+
+    // Optional: contracts dictionary for showing address
+    var vtxoContracts = ViewData["VtxoContracts"] as Dictionary<string, ArkContractEntity> ?? new();
+    // Optional: spendable outpoints set
+    var spendableOutpoints = ViewData["SpendableOutpoints"] as HashSet<OutPoint> ?? new();
+
+    var tableClass = compactMode ? "table table-sm table-hover mb-0" : "table table-sm mb-0";
+
+    // Get network info for address formatting
+    var mainnet = true;
+    Network network = Network.Main;
+    try
+    {
+        var serverInfo = await ClientTransport.GetServerInfoAsync();
+        mainnet = serverInfo.Network.ChainName == ChainName.Mainnet;
+        network = serverInfo.Network;
+    }
+    catch { }
+
+    // Helper to get address from contract
+    string GetAddress(ArkContractEntity? contract)
+    {
+        if (contract == null) return "";
+        try
+        {
+            var arkContract = ArkContractParser.Parse(contract.Type, contract.AdditionalData, network);
+            return arkContract?.GetArkAddress().ToString(mainnet) ?? "";
+        }
+        catch { return ""; }
+    }
+}
+
+@if (Model.Any())
+{
+    <div class="table-responsive">
+        <table class="@tableClass">
+            <thead>
+                <tr>
+                    <th class="text-muted small" text-translate="true">Outpoint</th>
+                    @if (showAddressColumn)
+                    {
+                        <th class="text-muted small" text-translate="true">Address</th>
+                    }
+                    <th class="text-muted small text-end" text-translate="true">Amount</th>
+                    <th class="text-muted small text-end" text-translate="true">Expiry</th>
+                    <th class="text-muted small" text-translate="true">Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var vtxo in Model)
+                {
+                    var outpoint = ArkadeLinkHelper.FormatOutpoint(vtxo.TransactionId, vtxo.TransactionOutputIndex);
+                    var link = ArkadeLinkHelper.GetOutpointLink(ArkNetworkConfig, vtxo.TransactionId, vtxo.TransactionOutputIndex);
+                    var showLink = ViewData["ShowLinks"] as bool? ?? true;
+                    vtxoContracts.TryGetValue(vtxo.Script, out var contract);
+                    var isSpendable = spendableOutpoints.Contains(vtxo.OutPoint);
+                    var addressStr = GetAddress(contract);
+                    var addressLink = !string.IsNullOrEmpty(vtxo.Script) ? ArkadeLinkHelper.GetScriptLink(ArkNetworkConfig, vtxo.Script) : null;
+
+                    <tr>
+                        <td>
+                            @if (showLink)
+                            {
+                                <vc:truncate-center link="@link" text="@outpoint" classes="truncate-center-id"/>
+                            }
+                            else
+                            {
+                                <vc:truncate-center text="@outpoint" classes="truncate-center-id"/>
+                            }
+                        </td>
+                        @if (showAddressColumn)
+                        {
+                            <td>
+                                @if (!string.IsNullOrEmpty(addressStr))
+                                {
+                                    <vc:truncate-center link="@addressLink" text="@addressStr" classes="truncate-center-id"/>
+                                }
+                                else
+                                {
+                                    <span class="text-muted">-</span>
+                                }
+                            </td>
+                        }
+                        <td class="text-end">
+                            <span class="font-monospace small" data-sensitive>@Money.Satoshis((long)vtxo.Amount).ToDecimal(MoneyUnit.BTC) BTC</span>
+                        </td>
+                        <td class="text-end">
+                            @if (vtxo.ExpiresAt.HasValue)
+                            {
+                                <span class="vtxo-expiry" data-expires="@vtxo.ExpiresAt.Value.ToUnixTimeSeconds()">
+                                    @vtxo.ExpiresAt.Value.ToTimeAgo()
+                                </span>
+                            }
+                            else
+                            {
+                                <span class="text-muted">-</span>
+                            }
+                        </td>
+                        <td>
+                            @if (vtxo.IsSpent())
+                            {
+                                <span class="badge text-bg-secondary">Spent</span>
+                            }
+                            else if (vtxo.IsRecoverable(chainTime))
+                            {
+                                <span class="badge text-bg-warning">Recoverable</span>
+                            }
+                            else
+                            {
+                                <span class="badge text-bg-success">Unspent</span>
+                            }
+                            @if (showSpendableStatus && isSpendable)
+                            {
+                                <span class="badge text-bg-info ms-1">Spendable</span>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+else
+{
+    <p class="text-muted mb-0">No VTXOs yet. Receive funds to see them here.</p>
+}

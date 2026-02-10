@@ -11,7 +11,7 @@
     <option name="SEND_DEBUG_REQUEST" value="1" />
     <option name="ADDITIONAL_IIS_EXPRESS_ARGUMENTS" value="" />
     <method v="2">
-      <option name="Build" default="false" projectName="BTCPayServer.Plugins.Arkade" projectPath="$PROJECT_DIR$/BTCPayServer.Plugins.Arkade/BTCPayServer.Plugins.Arkade.csproj" />
+      <option name="Build" default="false" projectName="BTCPayServer.Plugins.ArkPayServer" projectPath="$PROJECT_DIR$/BTCPayServer.Plugins.ArkPayServer/BTCPayServer.Plugins.ArkPayServer.csproj" />
       <option name="Build" />
     </method>
   </configuration>
