@@ -2097,9 +2097,18 @@ public class ArkController(
                 return RedirectWithError(nameof(Intents), "Intent not found.", new { storeId });
 
             // If intent was submitted, delete from server
-            if (intent.State == NArk.Abstractions.Intents.ArkIntentState.WaitingForBatch)
+            if (intent.State == ArkIntentState.WaitingForBatch)
             {
-                await clientTransport.DeleteIntent(intent, cancellationToken);
+                try
+                {
+
+                    await clientTransport.DeleteIntent(intent, cancellationToken);
+                }
+                catch (Exception e)
+                {
+                    // Log and continue - we will still mark as cancelled in storage even if server deletion fails
+                    
+                }
             }
 
             // Update storage to mark as cancelled
