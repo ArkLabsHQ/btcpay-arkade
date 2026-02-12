@@ -872,6 +872,48 @@ public class ArkController(
     }
 
     /// <summary>
+    /// Parse a destination string server-side (BIP21, Lightning, Ark address).
+    /// Used by Send wizard AJAX for rich destination display.
+    /// </summary>
+    [HttpPost("stores/{storeId}/parse-destination")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> ParseDestination(
+        string storeId,
+        [FromBody] ParseDestinationRequest request,
+        CancellationToken token)
+    {
+        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: true);
+        if (errorResult != null) return BadRequest("Invalid store configuration");
+
+        try
+        {
+            var serverInfo = await clientTransport.GetServerInfoAsync(token);
+            var parsed = ParseSend2Destination(request.Destination, request.AmountBtc, serverInfo.Network);
+
+            return Json(new ParseDestinationResponse
+            {
+                RawBip21 = parsed.RawDestination,
+                ResolvedAddress = parsed.ResolvedAddress,
+                Type = parsed.Type.ToString(),
+                TypeBadge = parsed.TypeBadge,
+                TypeBadgeClass = parsed.TypeBadgeClass,
+                AmountSats = parsed.AmountSats,
+                AmountBtc = parsed.AmountBtc,
+                PayoutId = parsed.PayoutId,
+                IsValid = parsed.IsValid,
+                Error = parsed.Error,
+                IsBip21 = parsed.Type is Send2DestinationType.Bip21Ark or Send2DestinationType.Bip21Lightning
+                          || parsed.RawDestination.StartsWith("bitcoin:", StringComparison.OrdinalIgnoreCase),
+                IsLightning = parsed.Type is Send2DestinationType.LightningInvoice or Send2DestinationType.Bip21Lightning
+            });
+        }
+        catch (Exception ex)
+        {
+            return Json(new ParseDestinationResponse { Error = ex.Message });
+        }
+    }
+
+    /// <summary>
     /// Suggests optimal coin selection based on destination type and amount.
     /// </summary>
     [HttpPost("stores/{storeId}/suggest-coins")]
@@ -1175,31 +1217,52 @@ public class ArkController(
             }
         }
 
-        // Handle pre-filled destinations
+        // Handle pre-filled destinations (BIP21-aware parsing)
         if (!string.IsNullOrEmpty(destinations))
         {
-            // Format: addr1:amt1,addr2:amt2,...
-            var parts = destinations.Split(',', StringSplitOptions.RemoveEmptyEntries);
-            foreach (var part in parts)
+            var serverInfo = await clientTransport.GetServerInfoAsync(token);
+            var parsedDestinations = ParseDestinationsParam(destinations, serverInfo.Network);
+
+            foreach (var parsed in parsedDestinations)
             {
-                var segments = part.Split(':', 2);
+                var isBip21 = parsed.Type is Send2DestinationType.Bip21Ark or Send2DestinationType.Bip21Lightning
+                              || parsed.RawDestination.StartsWith("bitcoin:", StringComparison.OrdinalIgnoreCase);
                 var output = new SendOutputViewModel
                 {
-                    Destination = segments[0].Trim()
+                    Destination = parsed.ResolvedAddress ?? parsed.RawDestination,
+                    RawBip21 = isBip21 ? parsed.RawDestination : null,
+                    ResolvedAddress = parsed.ResolvedAddress,
+                    AmountBtc = parsed.AmountSats > 0 ? parsed.AmountBtc : null,
+                    PayoutId = parsed.PayoutId,
+                    IsBip21Parsed = isBip21,
+                    IsReadonly = isBip21,
+                    DetectedType = MapSend2TypeToDestinationType(parsed.Type),
+                    IsLightning = parsed.Type is Send2DestinationType.LightningInvoice or Send2DestinationType.Bip21Lightning,
+                    Error = parsed.Error
                 };
-
-                if (segments.Length > 1 && decimal.TryParse(segments[1], out var amt))
-                {
-                    output.AmountBtc = amt;
-                }
-
                 model.Outputs.Add(output);
             }
         }
         else if (!string.IsNullOrEmpty(destination))
         {
-            // Single destination (BIP21, address, invoice)
-            model.Outputs.Add(new SendOutputViewModel { Destination = destination });
+            var serverInfo = await clientTransport.GetServerInfoAsync(token);
+            var parsed = ParseSend2Destination(destination, null, serverInfo.Network);
+            var isBip21 = parsed.Type is Send2DestinationType.Bip21Ark or Send2DestinationType.Bip21Lightning
+                          || destination.StartsWith("bitcoin:", StringComparison.OrdinalIgnoreCase);
+
+            model.Outputs.Add(new SendOutputViewModel
+            {
+                Destination = parsed.ResolvedAddress ?? parsed.RawDestination,
+                RawBip21 = isBip21 ? destination : null,
+                ResolvedAddress = parsed.ResolvedAddress,
+                AmountBtc = parsed.AmountSats > 0 ? parsed.AmountBtc : null,
+                PayoutId = parsed.PayoutId,
+                IsBip21Parsed = isBip21,
+                IsReadonly = isBip21,
+                DetectedType = MapSend2TypeToDestinationType(parsed.Type),
+                IsLightning = parsed.Type is Send2DestinationType.LightningInvoice or Send2DestinationType.Bip21Lightning,
+                Error = parsed.Error
+            });
         }
         else
         {
@@ -1382,9 +1445,15 @@ public class ArkController(
             // Execute Lightning payment
             try
             {
-                var lnDestination = validOutputs[0].Destination
+                var lnOutput = validOutputs[0];
+                var lnDestination = lnOutput.Destination
                     .Replace("lightning:", "", StringComparison.OrdinalIgnoreCase);
                 await arkadeSpendingService.Spend(store!, lnDestination, token);
+
+                // Mark payout as paid if this fulfills a payout
+                if (!string.IsNullOrEmpty(lnOutput.PayoutId))
+                    await MarkPayoutPaid(lnOutput.PayoutId, null, token);
+
                 return RedirectWithSuccess(nameof(StoreOverview), "Lightning payment sent!", new { storeId });
             }
             catch (Exception ex)
@@ -1452,6 +1521,12 @@ public class ArkController(
             // Poll for VTXO updates
             var activeContracts = await contractStorage.GetContracts(walletIds: [config.WalletId!], isActive: true, cancellationToken: token);
             await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), token);
+
+            // Mark payouts as paid if any outputs fulfill payouts
+            foreach (var output in validOutputs.Where(o => !string.IsNullOrEmpty(o.PayoutId)))
+            {
+                await MarkPayoutPaid(output.PayoutId!, txId, token);
+            }
 
             return RedirectWithSuccess(nameof(StoreOverview), $"Transaction sent successfully! TxId: {txId}", new { storeId });
         }
@@ -2896,40 +2971,15 @@ public class ArkController(
     #region Send2 - Simplified Send (No JavaScript)
 
     /// <summary>
-    /// Send2 - Simplified send page. No JavaScript, offchain only.
+    /// Send2 - Deprecated. Redirects to unified Send wizard.
     /// </summary>
     [HttpGet("stores/{storeId}/send2")]
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
-    public async Task<IActionResult> Send2(
+    public IActionResult Send2(
         string storeId,
-        string? destinations = null,
-        CancellationToken token = default)
+        string? destinations = null)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: false);
-        if (errorResult != null)
-            return errorResult;
-
-        var model = await BuildSend2ViewModel(storeId, config!.WalletId!, token);
-
-        // Handle pre-filled destinations from payout handler
-        // Format can be: full BIP21 URIs (comma-separated), or addr:amt pairs
-        if (!string.IsNullOrEmpty(destinations))
-        {
-            var serverInfo = await clientTransport.GetServerInfoAsync(token);
-            var parsedDestinations = ParseDestinationsParam(destinations, serverInfo.Network);
-
-            model.MultipleDestinationsMode = parsedDestinations.Count > 1;
-
-            foreach (var parsed in parsedDestinations)
-            {
-                model.Destinations.Add(parsed);
-            }
-
-            // Estimate fees for all destinations
-            await EstimateSend2Fees(model, config.WalletId!, token);
-        }
-
-        return View("Send2", model);
+        return RedirectToAction(nameof(Send), new { storeId, destinations });
     }
 
     /// <summary>
@@ -3163,6 +3213,15 @@ public class ArkController(
             // Best-effort: if marking fails, background detection will catch it
         }
     }
+
+    private static DestinationType? MapSend2TypeToDestinationType(Send2DestinationType type) => type switch
+    {
+        Send2DestinationType.ArkAddress => DestinationType.ArkAddress,
+        Send2DestinationType.Bip21Ark => DestinationType.Bip21Uri,
+        Send2DestinationType.Bip21Lightning => DestinationType.Bip21Uri,
+        Send2DestinationType.LightningInvoice => DestinationType.LightningInvoice,
+        _ => null
+    };
 
     private async Task<Send2ViewModel> BuildSend2ViewModel(string storeId, string walletId, CancellationToken token)
     {

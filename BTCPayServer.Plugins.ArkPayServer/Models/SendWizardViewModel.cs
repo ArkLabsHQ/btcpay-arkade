@@ -56,6 +56,41 @@ public class SendOutputViewModel
     public long? AmountSats => AmountBtc.HasValue ? (long)(AmountBtc.Value * 100_000_000) : null;
     public DestinationType? DetectedType { get; set; }
     public string? Error { get; set; }
+
+    // BIP21 parsed state
+    public string? RawBip21 { get; set; }
+    public string? ResolvedAddress { get; set; }
+    public bool IsReadonly { get; set; }
+    public bool IsBip21Parsed { get; set; }
+
+    // Per-output fee breakdown
+    public long FeeSats { get; set; }
+    public string? FeeDescription { get; set; }
+    public bool IsLightning { get; set; }
+    public decimal FeePercentage { get; set; }
+    public long MinerFeeSats { get; set; }
+
+    // Payout tracking
+    public string? PayoutId { get; set; }
+
+    // Display helpers
+    public string TypeBadge => DetectedType switch
+    {
+        DestinationType.ArkAddress => "Ark",
+        DestinationType.BitcoinAddress => "Bitcoin",
+        DestinationType.LightningInvoice => "Lightning",
+        DestinationType.Bip21Uri => "BIP21",
+        _ => ""
+    };
+
+    public string TypeBadgeClass => DetectedType switch
+    {
+        DestinationType.ArkAddress => "bg-success",
+        DestinationType.BitcoinAddress => "bg-primary",
+        DestinationType.LightningInvoice => "bg-warning text-dark",
+        DestinationType.Bip21Uri => "bg-info",
+        _ => "bg-secondary"
+    };
 }
 
 public enum SpendType

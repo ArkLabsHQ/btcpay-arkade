@@ -186,17 +186,10 @@
                                 }
                             </td>
                             <td class="align-middle">
-                                @if (isSpent)
-                                {
-                                    <span class="badge text-bg-secondary">Spent</span>
-                                }
-                                else if (vtxo.IsRecoverable(chainTime))
+                               
+                                @if (vtxo.IsRecoverable(chainTime))
                                 {
                                     <span class="badge text-bg-warning">Recoverable</span>
-                                }
-                                else
-                                {
-                                    <span class="badge text-bg-success">Unspent</span>
                                 }
                                 @if (isSpendable)
                                 {

@@ -174,12 +174,6 @@ else
                 <button type="submit" class="btn btn-secondary">
                     @(Model.Destinations.Any() ? "Add another destination" : "Add destination")
                 </button>
-                @if (!Model.Destinations.Any())
-                {
-                    <button type="submit" name="MultipleDestinationsMode" value="true" class="btn btn-secondary">
-                        Enable batch mode
-                    </button>
-                }
             </div>
         </form>
     }
@@ -207,7 +201,7 @@ else
 
             <div class="d-grid gap-3 buttons">
                 <button type="submit" class="btn btn-primary btn-lg" @(Model.CanExecute ? "" : "disabled")>
-                    Send <span data-sensitive>@DisplayFormatter.Currency(Model.TotalSendingBtc, "BTC")</span>
+                    Send 
                 </button>
             </div>
         </form>

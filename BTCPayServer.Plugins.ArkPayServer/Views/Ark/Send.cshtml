@@ -6,15 +6,18 @@
 @model BTCPayServer.Plugins.ArkPayServer.Models.SendWizardViewModel
 @inject IScopeProvider ScopeProvider
 @inject ArkNetworkConfig ArkNetworkConfig
+@inject BTCPayServer.Security.ContentSecurityPolicies Csp
 
 @{
     ViewData.SetActivePage(category: "Ark", activePage: "Send", title: "Ark - Send");
+    Csp.UnsafeEval();
     var storeId = ScopeProvider.GetCurrentStoreId();
 }
 
 @section PageHeadContent
 {
     <link rel="stylesheet" href="~/Resources/css/ark-plugin.css" asp-append-version="true" />
+    <link href="~/vendor/vue-qrcode-reader/vue-qrcode-reader.css" rel="stylesheet" asp-append-version="true"/>
     <style>
         /* Wizard section tiles - BTCPay modern style */
         .wizard-section {
@@ -71,6 +74,10 @@
         }
         .destination-type-badge:empty {
             display: none;
+        }
+        .bip21-display input {
+            background: var(--btcpay-body-bg);
+            font-size: 0.75rem;
         }
     </style>
 }
@@ -135,15 +142,33 @@ else
                     {
                         var output = i < Model.Outputs.Count ? Model.Outputs[i] : new BTCPayServer.Plugins.ArkPayServer.Models.SendOutputViewModel();
                         <div class="output-row" data-index="@i">
+                            @if (output.IsBip21Parsed && !string.IsNullOrEmpty(output.RawBip21))
+                            {
+                                <div class="mb-2 bip21-display">
+                                    <label class="form-label text-muted small" text-translate="true">BIP21 URI</label>
+                                    <input type="text" class="form-control form-control-sm font-monospace"
+                                           value="@output.RawBip21" readonly />
+                                    <input type="hidden" name="Outputs[@i].RawBip21" value="@output.RawBip21" />
+                                </div>
+                            }
                             <div class="row g-3">
-                                <div class="col-12 col-md-8">
+                                <div class="col-12 col-md-7">
                                     <label class="form-label" text-translate="true">Address, Invoice, or BIP21</label>
-                                    <input type="text"
-                                           name="Outputs[@i].Destination"
-                                           value="@output.Destination"
-                                           class="form-control destination-input"
-                                           placeholder="Leave empty to consolidate, or paste address..."
-                                           data-index="@i" />
+                                    <div class="input-group">
+                                        <input type="text"
+                                               name="Outputs[@i].Destination"
+                                               value="@output.Destination"
+                                               class="form-control destination-input"
+                                               placeholder="Leave empty to consolidate, or paste address..."
+                                               data-index="@i"
+                                               @(output.IsReadonly ? "readonly" : "") />
+                                        <button type="button"
+                                                class="btn btn-secondary px-3 only-for-js scan-qr-btn"
+                                                data-index="@i"
+                                                title="Scan QR code">
+                                            <vc:icon symbol="scan-qr" />
+                                        </button>
+                                    </div>
                                     @if (!string.IsNullOrEmpty(output.Error))
                                     {
                                         <div class="text-danger small mt-1">@output.Error</div>
@@ -158,10 +183,11 @@ else
                                            placeholder="Optional"
                                            step="0.00000001"
                                            min="0"
-                                           data-index="@i" />
+                                           data-index="@i"
+                                           @(output.IsReadonly && output.AmountBtc.HasValue ? "readonly" : "") />
                                 </div>
-                                <div class="col-12 col-md-1 d-flex align-items-end">
-                                    @if (i > 0)
+                                <div class="col-12 col-md-2 d-flex align-items-end">
+                                    @if (i > 0 || output.IsBip21Parsed)
                                     {
                                         <button type="button" class="btn btn-outline-danger remove-output-btn" data-index="@i">
                                             <vc:icon symbol="cross" />
@@ -169,27 +195,19 @@ else
                                     }
                                 </div>
                             </div>
-                            <div class="mt-2">
-                                <span class="destination-type-badge badge" data-index="@i">
-                                    @if (output.DetectedType.HasValue)
-                                    {
-                                        @switch (output.DetectedType.Value)
-                                        {
-                                            case BTCPayServer.Plugins.ArkPayServer.Models.DestinationType.ArkAddress:
-                                                <text>Ark Address</text>
-                                                break;
-                                            case BTCPayServer.Plugins.ArkPayServer.Models.DestinationType.BitcoinAddress:
-                                                <text>Bitcoin Address</text>
-                                                break;
-                                            case BTCPayServer.Plugins.ArkPayServer.Models.DestinationType.LightningInvoice:
-                                                <text>Lightning Invoice</text>
-                                                break;
-                                            case BTCPayServer.Plugins.ArkPayServer.Models.DestinationType.Bip21Uri:
-                                                <text>BIP21 URI</text>
-                                                break;
-                                        }
-                                    }
+                            <input type="hidden" name="Outputs[@i].PayoutId" value="@output.PayoutId" />
+                            <input type="hidden" name="Outputs[@i].IsReadonly" value="@output.IsReadonly.ToString().ToLower()" />
+                            <input type="hidden" name="Outputs[@i].IsBip21Parsed" value="@output.IsBip21Parsed.ToString().ToLower()" />
+                            <div class="mt-2 d-flex align-items-center gap-2">
+                                <span class="destination-type-badge badge @output.TypeBadgeClass" data-index="@i">
+                                    @output.TypeBadge
                                 </span>
+                                @if (!string.IsNullOrEmpty(output.PayoutId))
+                                {
+                                    <span class="badge bg-info">
+                                        Fulfilling payout
+                                    </span>
+                                }
                             </div>
                         </div>
                     }
@@ -346,8 +364,13 @@ else
     </form>
 }
 
+<partial name="CameraScanner"/>
+
 @section PageFootContent
 {
+    <script src="~/vendor/vuejs/vue.min.js" asp-append-version="true"></script>
+    <script src="~/vendor/ur-registry/urlib.min.js" asp-append-version="true"></script>
+    <script src="~/vendor/vue-qrcode-reader/VueQrcodeReader.umd.min.js" asp-append-version="true"></script>
     <script>
     (function() {
         'use strict';
@@ -764,8 +787,21 @@ else
             html += `<dt class="col-sm-4">Inputs</dt><dd class="col-sm-8">${totalInput} coin(s)</dd>`;
             html += `<dt class="col-sm-4">Outputs</dt><dd class="col-sm-8">${totalOutputs}</dd>`;
             html += `<dt class="col-sm-4">Spend Type</dt><dd class="col-sm-8"><span class="badge text-bg-primary">${spendType}</span></dd>`;
-            if (feeData.estimatedFeeSats !== null) {
-                html += `<dt class="col-sm-4">Fee</dt><dd class="col-sm-8">${feeData.estimatedFeeSats} sats</dd>`;
+            if (feeData.estimatedFeeSats !== null && feeData.estimatedFeeSats > 0) {
+                html += `<dt class="col-sm-4">Fee</dt><dd class="col-sm-8">`;
+                html += `<strong>${feeData.estimatedFeeSats} sats</strong>`;
+                if (feeData.feeDescription) {
+                    html += `<br><span class="text-muted small">${feeData.feeDescription}</span>`;
+                }
+                if (feeData.isLightning) {
+                    html += `<br><span class="text-muted small">`;
+                    html += `Service: ${feeData.feePercentage.toFixed(2)}%`;
+                    html += ` + Miner: ${feeData.minerFeeSats} sats`;
+                    html += `</span>`;
+                }
+                html += `</dd>`;
+            } else if (feeData.isConsolidation) {
+                html += `<dt class="col-sm-4">Fee</dt><dd class="col-sm-8"><span class="text-success">0 sats (no fee)</span></dd>`;
             }
             html += '</dl>';
 
@@ -824,16 +860,25 @@ else
         // Add output row
         function addOutputRow() {
             const index = outputsContainer.querySelectorAll('.output-row').length;
+            const scanIcon = document.querySelector('.scan-qr-btn svg')?.outerHTML || '&#x1F4F7;';
             const template = `
                 <div class="output-row" data-index="${index}">
                     <div class="row g-3">
-                        <div class="col-12 col-md-8">
+                        <div class="col-12 col-md-7">
                             <label class="form-label">Address, Invoice, or BIP21</label>
-                            <input type="text"
-                                   name="Outputs[${index}].Destination"
-                                   class="form-control destination-input"
-                                   placeholder="Paste address, invoice, or BIP21 URI..."
-                                   data-index="${index}" />
+                            <div class="input-group">
+                                <input type="text"
+                                       name="Outputs[${index}].Destination"
+                                       class="form-control destination-input"
+                                       placeholder="Paste address, invoice, or BIP21 URI..."
+                                       data-index="${index}" />
+                                <button type="button"
+                                        class="btn btn-secondary px-3 only-for-js scan-qr-btn"
+                                        data-index="${index}"
+                                        title="Scan QR code">
+                                    ${scanIcon}
+                                </button>
+                            </div>
                         </div>
                         <div class="col-12 col-md-3">
                             <label class="form-label">Amount (BTC)</label>
@@ -845,13 +890,16 @@ else
                                    min="0"
                                    data-index="${index}" />
                         </div>
-                        <div class="col-12 col-md-1 d-flex align-items-end">
+                        <div class="col-12 col-md-2 d-flex align-items-end">
                             <button type="button" class="btn btn-outline-danger remove-output-btn" data-index="${index}">
                                 <span>&times;</span>
                             </button>
                         </div>
                     </div>
-                    <div class="mt-2">
+                    <input type="hidden" name="Outputs[${index}].PayoutId" value="" />
+                    <input type="hidden" name="Outputs[${index}].IsReadonly" value="false" />
+                    <input type="hidden" name="Outputs[${index}].IsBip21Parsed" value="false" />
+                    <div class="mt-2 d-flex align-items-center gap-2">
                         <span class="destination-type-badge badge" data-index="${index}"></span>
                     </div>
                 </div>
@@ -902,6 +950,130 @@ else
             }
         }
 
+        // === BIP21/Destination parsing via AJAX ===
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function updateHiddenField(row, fieldName, value) {
+            let input = row.querySelector(`input[name*=".${fieldName}"]`);
+            if (!input) {
+                input = document.createElement('input');
+                input.type = 'hidden';
+                const index = row.dataset.index;
+                input.name = `Outputs[${index}].${fieldName}`;
+                row.appendChild(input);
+            }
+            input.value = value;
+        }
+
+        function insertBip21Display(row, rawBip21) {
+            if (row.querySelector('.bip21-display')) return;
+            const html = `
+                <div class="mb-2 bip21-display">
+                    <label class="form-label text-muted small">BIP21 URI</label>
+                    <input type="text" class="form-control form-control-sm font-monospace"
+                           value="${escapeHtml(rawBip21)}" readonly />
+                </div>`;
+            const rowG3 = row.querySelector('.row.g-3');
+            if (rowG3) rowG3.insertAdjacentHTML('beforebegin', html);
+        }
+
+        function insertPayoutBadge(row, payoutId) {
+            const badgeArea = row.querySelector('.mt-2.d-flex');
+            if (!badgeArea || badgeArea.querySelector('.payout-badge')) return;
+            const badge = document.createElement('span');
+            badge.className = 'badge bg-info payout-badge';
+            badge.textContent = 'Fulfilling payout';
+            badgeArea.appendChild(badge);
+        }
+
+        function updateOutputError(index, error) {
+            const row = outputsContainer.querySelector(`.output-row[data-index="${index}"]`);
+            if (!row) return;
+            let errorDiv = row.querySelector('.text-danger.small');
+            if (error) {
+                if (!errorDiv) {
+                    const inputGroup = row.querySelector('.input-group') || row.querySelector('.destination-input');
+                    errorDiv = document.createElement('div');
+                    errorDiv.className = 'text-danger small mt-1';
+                    inputGroup.parentNode.appendChild(errorDiv);
+                }
+                errorDiv.textContent = error;
+            } else if (errorDiv) {
+                errorDiv.remove();
+            }
+        }
+
+        async function parseDestination(index, destination) {
+            if (!destination || destination.trim() === '') return;
+
+            try {
+                const response = await fetch(`/plugins/ark/stores/@Model.StoreId/parse-destination`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'RequestVerificationToken': document.querySelector('input[name="__RequestVerificationToken"]')?.value
+                    },
+                    body: JSON.stringify({ destination: destination.trim() })
+                });
+
+                const data = await response.json();
+                if (!data.isValid) {
+                    updateOutputError(index, data.error);
+                    return;
+                }
+
+                const row = outputsContainer.querySelector(`.output-row[data-index="${index}"]`);
+                if (!row) return;
+
+                const destInput = row.querySelector('.destination-input');
+                const amountInput = row.querySelector('.amount-input');
+                const badge = row.querySelector('.destination-type-badge');
+
+                // Clear previous error
+                updateOutputError(index, null);
+
+                // If BIP21, make readonly and show raw URI
+                if (data.isBip21) {
+                    destInput.value = data.resolvedAddress || destination;
+                    destInput.readOnly = true;
+                    insertBip21Display(row, destination);
+                    updateHiddenField(row, 'IsReadonly', 'true');
+                    updateHiddenField(row, 'IsBip21Parsed', 'true');
+                    updateHiddenField(row, 'RawBip21', destination);
+                }
+
+                // Populate amount if parsed from BIP21/invoice
+                if (data.amountSats > 0 && !amountInput.value) {
+                    amountInput.value = data.amountBtc.toFixed(8);
+                    if (data.isBip21) amountInput.readOnly = true;
+                }
+
+                // Set payout ID if present
+                if (data.payoutId) {
+                    updateHiddenField(row, 'PayoutId', data.payoutId);
+                    insertPayoutBadge(row, data.payoutId);
+                }
+
+                // Update type badge
+                if (badge) {
+                    badge.textContent = data.typeBadge || '';
+                    badge.className = 'destination-type-badge badge ' + (data.typeBadgeClass || 'bg-secondary');
+                }
+
+                // Update state and trigger coin suggestion / fee estimation
+                state.isLightning = data.isLightning;
+                updateDestinationBadges();
+                suggestCoins();
+            } catch (err) {
+                console.error('Destination parse failed:', err);
+            }
+        }
+
         // Event listeners
 
         // Quick select buttons
@@ -921,17 +1093,37 @@ else
             const removeBtn = e.target.closest('.remove-output-btn');
             if (removeBtn) {
                 removeOutputRow(parseInt(removeBtn.dataset.index));
+                return;
+            }
+            const scanBtn = e.target.closest('.scan-qr-btn');
+            if (scanBtn) {
+                window._scanTargetIndex = parseInt(scanBtn.dataset.index);
+                var modalEl = document.getElementById('scanModal');
+                if (modalEl) {
+                    var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+                    modal.show();
+                }
             }
         });
 
         outputsContainer?.addEventListener('input', debounce(function(e) {
             if (e.target.classList.contains('destination-input')) {
-                updateDestinationBadges();
-                suggestCoins();
+                const index = parseInt(e.target.dataset.index);
+                const value = e.target.value.trim();
+
+                // Server-side parse for BIP21, Lightning, and Ark addresses
+                if (value.startsWith('bitcoin:') || value.startsWith('ln') ||
+                    value.startsWith('lightning:') || value.startsWith('ark1') ||
+                    value.startsWith('tark1')) {
+                    parseDestination(index, value);
+                } else {
+                    updateDestinationBadges();
+                    suggestCoins();
+                }
             } else if (e.target.classList.contains('amount-input')) {
                 estimateFees();
             }
-        }, 300));
+        }, 500));
 
         coinsTable?.addEventListener('change', function(e) {
             if (e.target.classList.contains('coin-checkbox')) {
@@ -1040,6 +1232,25 @@ else
         } else {
             updateCoinsSummary();
         }
+        // For pre-filled BIP21 destinations, trigger fee estimation
+        if (hasDestinations) {
+            estimateFees();
+        }
     })();
+
+    // Initialize QR scanner (after Vue.js loads)
+    window.addEventListener('load', function() {
+        if (typeof initCameraScanningApp === 'function') {
+            initCameraScanningApp('Scan address or payment link', function(data) {
+                var targetIndex = window._scanTargetIndex || 0;
+                var destInput = document.querySelector(
+                    '.destination-input[data-index="' + targetIndex + '"]');
+                if (destInput && !destInput.readOnly) {
+                    destInput.value = data;
+                    destInput.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+            }, 'scanModal', false);
+        }
+    });
     </script>
 }

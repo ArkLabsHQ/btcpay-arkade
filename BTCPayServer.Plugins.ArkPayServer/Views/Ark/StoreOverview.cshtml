@@ -172,7 +172,7 @@
             <div class="d-grid gap-2">
                 @if (Model.CanManagePrivateKeys)
                 {
-                    <a asp-action="Send2" asp-route-storeId="@storeId" class="btn btn-primary" data-testid="send-btn">
+                    <a asp-action="Send" asp-route-storeId="@storeId" class="btn btn-primary" data-testid="send-btn">
                         <vc:icon symbol="actions-send" /> Send
                     </a>
                     <a asp-action="Receive" asp-route-storeId="@storeId" class="btn btn-outline-primary" data-testid="receive-btn">

@@ -224,3 +224,31 @@ public class FeeEstimateResponse
     /// </summary>
     public string? Error { get; set; }
 }
+
+/// <summary>
+/// Request for server-side destination parsing (AJAX).
+/// </summary>
+public class ParseDestinationRequest
+{
+    public string Destination { get; set; } = "";
+    public decimal? AmountBtc { get; set; }
+}
+
+/// <summary>
+/// Response from server-side destination parsing.
+/// </summary>
+public class ParseDestinationResponse
+{
+    public string? RawBip21 { get; set; }
+    public string? ResolvedAddress { get; set; }
+    public string? Type { get; set; }
+    public string? TypeBadge { get; set; }
+    public string? TypeBadgeClass { get; set; }
+    public long AmountSats { get; set; }
+    public decimal AmountBtc { get; set; }
+    public string? PayoutId { get; set; }
+    public bool IsValid { get; set; }
+    public string? Error { get; set; }
+    public bool IsBip21 { get; set; }
+    public bool IsLightning { get; set; }
+}
