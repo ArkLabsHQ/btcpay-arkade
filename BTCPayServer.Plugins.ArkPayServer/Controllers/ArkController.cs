@@ -41,6 +41,7 @@ using NArk.Abstractions.VTXOs;
 using NArk.Swaps.Abstractions;
 using NArk.Abstractions.Wallets;
 using NArk.Swaps.Models;
+using LNURL;
 using NBitcoin;
 using NBitcoin.DataEncoders;
 using NBitcoin.Secp256k1;
@@ -75,7 +76,8 @@ public class ArkController(
     ISwapStorage swapStorage,
     IVtxoStorage vtxoStorage,
     EfCoreIntentStorage efCoreIntentStorage,
-    EfCoreWalletStorage walletStorage) : Controller
+    EfCoreWalletStorage walletStorage,
+    IHttpClientFactory httpClientFactory) : Controller
 {
     [HttpGet("stores/{storeId}/initial-setup")]
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
@@ -790,8 +792,7 @@ public class ArkController(
             if (request.Outputs.Count == 1)
             {
                 var dest = request.Outputs[0].Destination?.Trim() ?? "";
-                if (dest.StartsWith("ln", StringComparison.OrdinalIgnoreCase) ||
-                    dest.StartsWith("lightning:", StringComparison.OrdinalIgnoreCase))
+                if (IsLightningDestination(dest))
                 {
                     // Lightning swap fees
                     if (boltzLimitsValidator != null)
@@ -858,10 +859,20 @@ public class ArkController(
                 outputs.Add(new ArkTxOut(ArkTxOutType.Vtxo, totalInput, placeholderDest));
             }
 
+            // For batch with on-chain outputs, include a change VTXO output for accurate fee estimation
+            var hasOnchain = outputs.Any(o => o.Type == ArkTxOutType.Onchain);
+            var totalOutputSats = outputs.Sum(o => o.Value.Satoshi);
+            var totalCoinsSats = coins.Sum(c => c.TxOut.Value.Satoshi);
+            if (hasOnchain && totalCoinsSats > totalOutputSats)
+            {
+                var changePlaceholder = coins.First().Contract.GetArkAddress();
+                outputs.Add(new ArkTxOut(ArkTxOutType.Vtxo, Money.Satoshis(totalCoinsSats - totalOutputSats), changePlaceholder));
+            }
+
             // Estimate the fee
             var estimatedFee = await feeEstimator.EstimateFeeAsync(coins.ToArray(), outputs.ToArray(), token);
             response.EstimatedFeeSats = estimatedFee;
-            response.FeeDescription = "Ark service fee";
+            response.FeeDescription = hasOnchain ? "Batch transaction fee" : "Ark service fee";
 
             return Json(response);
         }
@@ -888,7 +899,7 @@ public class ArkController(
         try
         {
             var serverInfo = await clientTransport.GetServerInfoAsync(token);
-            var parsed = ParseSend2Destination(request.Destination, request.AmountBtc, serverInfo.Network);
+            var parsed = await ParseSend2DestinationAsync(request.Destination, request.AmountBtc, serverInfo.Network, token);
 
             return Json(new ParseDestinationResponse
             {
@@ -905,6 +916,10 @@ public class ArkController(
                 IsBip21 = parsed.Type is Send2DestinationType.Bip21Ark or Send2DestinationType.Bip21Lightning
                           || parsed.RawDestination.StartsWith("bitcoin:", StringComparison.OrdinalIgnoreCase),
                 IsLightning = parsed.Type is Send2DestinationType.LightningInvoice or Send2DestinationType.Bip21Lightning
+                              or Send2DestinationType.Lnurl,
+                IsLnurl = parsed.Type == Send2DestinationType.Lnurl,
+                LnurlMinSats = parsed.LnurlMinSats,
+                LnurlMaxSats = parsed.LnurlMaxSats,
             });
         }
         catch (Exception ex)
@@ -1072,11 +1087,13 @@ public class ArkController(
             {
                 var destination = output.Destination.Trim();
 
-                // Check for Lightning first
-                if (destination.StartsWith("ln", StringComparison.OrdinalIgnoreCase) ||
-                    destination.StartsWith("lightning:", StringComparison.OrdinalIgnoreCase))
+                // Check for Lightning first (BOLT11, LNURL, Lightning Address)
+                if (IsLightningDestination(destination))
                 {
-                    result.DetectedType = DestinationType.LightningInvoice;
+                    result.DetectedType = destination.IsValidEmail() ||
+                        destination.StartsWith("lnurl", StringComparison.OrdinalIgnoreCase)
+                        ? DestinationType.LnurlPay
+                        : DestinationType.LightningInvoice;
                     hasLightning = true;
                 }
                 else
@@ -1249,6 +1266,7 @@ public class ArkController(
             var parsed = ParseSend2Destination(destination, null, serverInfo.Network);
             var isBip21 = parsed.Type is Send2DestinationType.Bip21Ark or Send2DestinationType.Bip21Lightning
                           || destination.StartsWith("bitcoin:", StringComparison.OrdinalIgnoreCase);
+            var isLightning = parsed.Type is Send2DestinationType.LightningInvoice or Send2DestinationType.Bip21Lightning;
 
             model.Outputs.Add(new SendOutputViewModel
             {
@@ -1258,9 +1276,9 @@ public class ArkController(
                 AmountBtc = parsed.AmountSats > 0 ? parsed.AmountBtc : null,
                 PayoutId = parsed.PayoutId,
                 IsBip21Parsed = isBip21,
-                IsReadonly = isBip21,
+                IsReadonly = isBip21 || isLightning,
                 DetectedType = MapSend2TypeToDestinationType(parsed.Type),
-                IsLightning = parsed.Type is Send2DestinationType.LightningInvoice or Send2DestinationType.Bip21Lightning,
+                IsLightning = isLightning,
                 Error = parsed.Error
             });
         }
@@ -1283,6 +1301,7 @@ public class ArkController(
         [FromForm] SendWizardViewModel model,
         [FromForm] string[] selectedVtxoOutpoints,
         [FromForm] string? SpendType,
+        [FromForm] string? CoinSelectionMode,
         CancellationToken token)
     {
         var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: false);
@@ -1309,7 +1328,9 @@ public class ArkController(
         model.AvailableVtxos = availableVtxos.ToList();
 
         // Validate selected coins
-        if (!selectedVtxoOutpoints.Any())
+        var isAutoMode = string.Equals(CoinSelectionMode, "auto", StringComparison.OrdinalIgnoreCase);
+
+        if (!selectedVtxoOutpoints.Any() && !isAutoMode)
         {
             model.Errors.Add("No coins selected");
             return View("Send", model);
@@ -1320,9 +1341,24 @@ public class ArkController(
             .Where(c => selectedSet.Contains($"{c.Outpoint.Hash}:{c.Outpoint.N}"))
             .ToList();
 
-        if (selectedCoins.Count != selectedVtxoOutpoints.Length)
+        if (selectedCoins.Count != selectedVtxoOutpoints.Length && isAutoMode)
         {
-            model.Errors.Add("Some selected coins are no longer available");
+            // Auto mode: re-select coins from available unlocked set
+            selectedCoins = unlocked.ToList();
+            selectedSet = selectedCoins
+                .Select(c => $"{c.Outpoint.Hash}:{c.Outpoint.N}")
+                .ToHashSet();
+        }
+        else if (selectedCoins.Count != selectedVtxoOutpoints.Length)
+        {
+            var missing = selectedVtxoOutpoints.Length - selectedCoins.Count;
+            model.Errors.Add($"{missing} selected coin(s) are no longer available (spent or locked). Please re-select your coins and try again.");
+            return View("Send", model);
+        }
+
+        if (!selectedCoins.Any())
+        {
+            model.Errors.Add("No coins available to spend");
             return View("Send", model);
         }
 
@@ -1423,10 +1459,11 @@ public class ArkController(
             }
         }
 
-        // Check for Lightning
-        var isLightning = validOutputs.Any(o =>
-            o.Destination.StartsWith("ln", StringComparison.OrdinalIgnoreCase) ||
-            o.Destination.StartsWith("lightning:", StringComparison.OrdinalIgnoreCase));
+        // Get server info for network (needed for Lightning and destination parsing)
+        var serverInfo = await clientTransport.GetServerInfoAsync(token);
+
+        // Check for Lightning (BOLT11, LNURL, or Lightning Address)
+        var isLightning = validOutputs.Any(o => IsLightningDestination(o.Destination));
 
         if (isLightning)
         {
@@ -1446,8 +1483,28 @@ public class ArkController(
             try
             {
                 var lnOutput = validOutputs[0];
-                var lnDestination = lnOutput.Destination
-                    .Replace("lightning:", "", StringComparison.OrdinalIgnoreCase);
+                var lnDestination = lnOutput.Destination;
+
+                // Resolve LNURL/Lightning Address to BOLT11 at submit time
+                if (lnDestination.IsValidEmail() ||
+                    lnDestination.StartsWith("lnurl", StringComparison.OrdinalIgnoreCase))
+                {
+                    var amount = lnOutput.AmountSats ?? model.TotalSelectedSats;
+                    var (bolt11, lnurlError) = await ResolveLnurlToInvoiceAsync(
+                        lnDestination, amount, serverInfo.Network, token);
+                    if (lnurlError != null)
+                    {
+                        model.Errors.Add($"LNURL resolution failed: {lnurlError}");
+                        return View("Send", model);
+                    }
+                    lnDestination = bolt11!;
+                }
+                else
+                {
+                    lnDestination = lnDestination
+                        .Replace("lightning:", "", StringComparison.OrdinalIgnoreCase);
+                }
+
                 await arkadeSpendingService.Spend(store!, lnDestination, token);
 
                 // Mark payout as paid if this fulfills a payout
@@ -1464,7 +1521,6 @@ public class ArkController(
         }
 
         // Parse all destinations and build ArkTxOut array
-        var serverInfo = await clientTransport.GetServerInfoAsync(token);
         var totalInputAmount = selectedCoins.Sum(c => c.TxOut.Value.Satoshi);
         var arkOutputs = new List<ArkTxOut>();
 
@@ -1509,26 +1565,91 @@ public class ArkController(
             return View("Send", model);
         }
 
+        // Determine if batch is required (on-chain outputs or user preference)
+        var hasOnchainOutput = arkOutputs.Any(o => o.Type == ArkTxOutType.Onchain);
+        var useBatch = preferBatch || hasOnchainOutput;
+
         // Execute the spend
         try
         {
-            var txId = await arkadeSpender.Spend(
-                config.WalletId!,
-                selectedCoins.ToArray(),
-                arkOutputs.ToArray(),
-                token);
-
-            // Poll for VTXO updates
-            var activeContracts = await contractStorage.GetContracts(walletIds: [config.WalletId!], isActive: true, cancellationToken: token);
-            await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), token);
-
-            // Mark payouts as paid if any outputs fulfill payouts
-            foreach (var output in validOutputs.Where(o => !string.IsNullOrEmpty(o.PayoutId)))
+            if (useBatch)
             {
-                await MarkPayoutPaid(output.PayoutId!, txId, token);
-            }
+                // Batch path: create an intent for the next batch round
+                // Need to add a change output back to self for the remainder after fees
+                var totalOutput = arkOutputs.Sum(o => o.Value.Satoshi);
 
-            return RedirectWithSuccess(nameof(StoreOverview), $"Transaction sent successfully! TxId: {txId}", new { storeId });
+                // Build preliminary outputs to estimate fees (include a placeholder change output)
+                var contractOutput = await contractService.DeriveContract(config.WalletId!, NextContractPurpose.SendToSelf, ContractActivityState.AwaitingFundsBeforeDeactivate, cancellationToken: token);
+                var selfDest = contractOutput.GetArkAddress();
+
+                // Estimate fees with all outputs including change
+                var preliminaryOutputs = arkOutputs.ToList();
+                var preliminaryChange = totalInputAmount - totalOutput;
+                if (preliminaryChange > 0)
+                {
+                    preliminaryOutputs.Add(new ArkTxOut(ArkTxOutType.Vtxo, Money.Satoshis(preliminaryChange), selfDest));
+                }
+
+                var feeEstimation = await feeEstimator.EstimateFeeAsync(
+                    selectedCoins.ToArray(),
+                    preliminaryOutputs.ToArray(),
+                    token);
+
+                var changeAmount = totalInputAmount - totalOutput - feeEstimation;
+                if (changeAmount < 0)
+                {
+                    model.Errors.Add($"Insufficient funds. Need {totalOutput + feeEstimation} sats but only have {totalInputAmount} sats.");
+                    return View("Send", model);
+                }
+
+                // Build final outputs: destination(s) + change (if any)
+                var finalOutputs = arkOutputs.ToList();
+                if (changeAmount > 0)
+                {
+                    finalOutputs.Add(new ArkTxOut(ArkTxOutType.Vtxo, Money.Satoshis(changeAmount), selfDest));
+                }
+
+                var intentTxId = await intentGenerationService.GenerateManualIntent(
+                    config.WalletId!,
+                    new ArkIntentSpec(
+                        selectedCoins.ToArray(),
+                        finalOutputs.ToArray(),
+                        DateTimeOffset.UtcNow,
+                        DateTimeOffset.UtcNow.AddHours(1)
+                    ),
+                    cancellationToken: token);
+
+                // Mark payouts as paid if any outputs fulfill payouts (no txId yet — assigned at batch time)
+                foreach (var output in validOutputs.Where(o => !string.IsNullOrEmpty(o.PayoutId)))
+                {
+                    await MarkPayoutPaid(output.PayoutId!, null, token);
+                }
+
+                return RedirectWithSuccess(nameof(Intents),
+                    $"Batch intent created! Intent ID: {intentTxId}. Transaction will be included in the next batch round.",
+                    new { storeId });
+            }
+            else
+            {
+                // Arkade path: instant offchain spend
+                var txId = await arkadeSpender.Spend(
+                    config.WalletId!,
+                    selectedCoins.ToArray(),
+                    arkOutputs.ToArray(),
+                    token);
+
+                // Poll for VTXO updates
+                var activeContracts = await contractStorage.GetContracts(walletIds: [config.WalletId!], isActive: true, cancellationToken: token);
+                await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), token);
+
+                // Mark payouts as paid if any outputs fulfill payouts
+                foreach (var output in validOutputs.Where(o => !string.IsNullOrEmpty(o.PayoutId)))
+                {
+                    await MarkPayoutPaid(output.PayoutId!, txId, token);
+                }
+
+                return RedirectWithSuccess(nameof(StoreOverview), $"Transaction sent successfully! TxId: {txId}", new { storeId });
+            }
         }
         catch (Exception ex)
         {
@@ -3220,6 +3341,7 @@ public class ArkController(
         Send2DestinationType.Bip21Ark => DestinationType.Bip21Uri,
         Send2DestinationType.Bip21Lightning => DestinationType.Bip21Uri,
         Send2DestinationType.LightningInvoice => DestinationType.LightningInvoice,
+        Send2DestinationType.Lnurl => DestinationType.LnurlPay,
         _ => null
     };
 
@@ -3239,6 +3361,99 @@ public class ArkController(
             SpendableCoinsCount = spendableCoins.Count,
         };
     }
+
+    private async Task<(LNURLPayRequest? info, string? error)> ResolveLnurlAsync(
+        string destination, CancellationToken token)
+    {
+        Uri lnurl;
+        if (destination.IsValidEmail())
+            lnurl = LNURL.LNURL.ExtractUriFromInternetIdentifier(destination);
+        else
+            lnurl = LNURL.LNURL.Parse(destination, out _);
+
+        var httpClient = httpClientFactory.CreateClient();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, token);
+
+        var rawInfo = await LNURL.LNURL.FetchInformation(lnurl, httpClient, linked.Token);
+        if (rawInfo is not LNURLPayRequest info)
+            return (null, "Not a valid LNURL-pay endpoint");
+
+        return (info, null);
+    }
+
+    private async Task<(string? bolt11, string? error)> ResolveLnurlToInvoiceAsync(
+        string destination, long amountSats, Network network, CancellationToken token)
+    {
+        var (info, error) = await ResolveLnurlAsync(destination, token);
+        if (info == null) return (null, error ?? "LNURL resolution failed");
+
+        var lm = new LightMoney(amountSats, LightMoneyUnit.Satoshi);
+        if (lm < info.MinSendable || lm > info.MaxSendable)
+            return (null, $"Amount {amountSats} sats outside LNURL range ({info.MinSendable.ToUnit(LightMoneyUnit.Satoshi)}-{info.MaxSendable.ToUnit(LightMoneyUnit.Satoshi)} sats)");
+
+        var httpClient = httpClientFactory.CreateClient();
+        var callback = await info.SendRequest(lm, network, httpClient, cancellationToken: token);
+        var bolt11 = callback.GetPaymentRequest(network);
+        return (bolt11.ToString(), null);
+    }
+
+    private async Task<Send2DestinationViewModel> ParseSend2DestinationAsync(
+        string rawDestination, decimal? amountBtc, Network network, CancellationToken token)
+    {
+        // Check if it's an LNURL or Lightning Address FIRST
+        if (rawDestination.IsValidEmail() ||
+            rawDestination.StartsWith("lnurl", StringComparison.OrdinalIgnoreCase))
+        {
+            var result = new Send2DestinationViewModel { RawDestination = rawDestination };
+            try
+            {
+                var (info, lnurlError) = await ResolveLnurlAsync(rawDestination, token);
+                if (info == null)
+                {
+                    result.Type = Send2DestinationType.Lnurl;
+                    result.Error = lnurlError;
+                    return result;
+                }
+
+                result.Type = Send2DestinationType.Lnurl;
+                result.ResolvedAddress = rawDestination;
+                result.LnurlMinSats = (long)info.MinSendable.ToUnit(LightMoneyUnit.Satoshi);
+                result.LnurlMaxSats = (long)info.MaxSendable.ToUnit(LightMoneyUnit.Satoshi);
+
+                // Intersect with Boltz submarine swap limits
+                if (boltzLimitsValidator != null)
+                {
+                    var limits = await boltzLimitsValidator.GetAllLimitsAsync(token);
+                    if (limits != null)
+                    {
+                        result.LnurlMinSats = Math.Max(result.LnurlMinSats, limits.SubmarineMinAmount);
+                        result.LnurlMaxSats = Math.Min(result.LnurlMaxSats, limits.SubmarineMaxAmount);
+                    }
+                }
+
+                var amountSats = amountBtc.HasValue ? (long)(amountBtc.Value * 100_000_000m) : 0L;
+                result.AmountSats = amountSats;
+                result.IsValid = true;
+                return result;
+            }
+            catch (Exception ex)
+            {
+                result.Type = Send2DestinationType.Lnurl;
+                result.Error = $"LNURL resolution failed: {ex.Message}";
+                return result;
+            }
+        }
+
+        // Delegate to existing sync method for all other types
+        return ParseSend2Destination(rawDestination, amountBtc, network);
+    }
+
+    private static bool IsLightningDestination(string dest) =>
+        dest.StartsWith("ln", StringComparison.OrdinalIgnoreCase) ||
+        dest.StartsWith("lightning:", StringComparison.OrdinalIgnoreCase) ||
+        dest.StartsWith("lnurl", StringComparison.OrdinalIgnoreCase) ||
+        dest.IsValidEmail();
 
     private Send2DestinationViewModel ParseSend2Destination(string rawDestination, decimal? amountBtc, Network network)
     {
@@ -3354,11 +3569,12 @@ public class ArkController(
             return result;
         }
 
-        // LNURL support (future)
-        if (rawDestination.StartsWith("lnurl", StringComparison.OrdinalIgnoreCase))
+        // LNURL / Lightning Address (requires async resolution — use ParseSend2DestinationAsync)
+        if (rawDestination.StartsWith("lnurl", StringComparison.OrdinalIgnoreCase) ||
+            rawDestination.IsValidEmail())
         {
             result.Type = Send2DestinationType.Lnurl;
-            result.Error = "LNURL support coming soon";
+            result.Error = "LNURL/Lightning Address requires async resolution";
             return result;
         }
 
@@ -3393,7 +3609,7 @@ public class ArkController(
                         dest.FeeDescription = "Ark service fee";
                     }
                 }
-                else if (dest.Type == Send2DestinationType.LightningInvoice || dest.Type == Send2DestinationType.Bip21Lightning)
+                else if (dest.Type is Send2DestinationType.LightningInvoice or Send2DestinationType.Bip21Lightning or Send2DestinationType.Lnurl)
                 {
                     // Lightning swap fee estimation via Boltz
                     if (boltzLimitsValidator != null)
@@ -3418,9 +3634,9 @@ public class ArkController(
 
     private static string SerializeSend2Destinations(List<Send2DestinationViewModel> destinations)
     {
-        // Simple serialization: rawDest|type|resolvedAddr|amountSats|feeSats|isValid|error|payoutId;;...
+        // Simple serialization: rawDest|type|resolvedAddr|amountSats|feeSats|isValid|error|payoutId|lnurlMin|lnurlMax;;...
         var parts = destinations.Select(d =>
-            $"{d.RawDestination}|{(int)d.Type}|{d.ResolvedAddress ?? ""}|{d.AmountSats}|{d.FeeSats}|{d.IsValid}|{d.Error ?? ""}|{d.PayoutId ?? ""}");
+            $"{d.RawDestination}|{(int)d.Type}|{d.ResolvedAddress ?? ""}|{d.AmountSats}|{d.FeeSats}|{d.IsValid}|{d.Error ?? ""}|{d.PayoutId ?? ""}|{d.LnurlMinSats}|{d.LnurlMaxSats}");
         return string.Join(";;", parts);
     }
 
@@ -3445,7 +3661,9 @@ public class ArkController(
                     FeeSats = long.TryParse(segments[4], out var fee) ? fee : 0,
                     IsValid = bool.TryParse(segments[5], out var valid) && valid,
                     Error = segments.Length > 6 && !string.IsNullOrEmpty(segments[6]) ? segments[6] : null,
-                    PayoutId = segments.Length > 7 && !string.IsNullOrEmpty(segments[7]) ? segments[7] : null
+                    PayoutId = segments.Length > 7 && !string.IsNullOrEmpty(segments[7]) ? segments[7] : null,
+                    LnurlMinSats = segments.Length > 8 && long.TryParse(segments[8], out var lnMin) ? lnMin : 0,
+                    LnurlMaxSats = segments.Length > 9 && long.TryParse(segments[9], out var lnMax) ? lnMax : 0,
                 });
             }
         }

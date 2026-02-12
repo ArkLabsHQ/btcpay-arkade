@@ -77,9 +77,10 @@ public class SendOutputViewModel
     public string TypeBadge => DetectedType switch
     {
         DestinationType.ArkAddress => "Ark",
-        DestinationType.BitcoinAddress => "Bitcoin",
+        DestinationType.BitcoinAddress => "Bitcoin (Batch)",
         DestinationType.LightningInvoice => "Lightning",
         DestinationType.Bip21Uri => "BIP21",
+        DestinationType.LnurlPay => "LNURL",
         _ => ""
     };
 
@@ -89,6 +90,7 @@ public class SendOutputViewModel
         DestinationType.BitcoinAddress => "bg-primary",
         DestinationType.LightningInvoice => "bg-warning text-dark",
         DestinationType.Bip21Uri => "bg-info",
+        DestinationType.LnurlPay => "bg-info",
         _ => "bg-secondary"
     };
 }
@@ -105,5 +107,6 @@ public enum DestinationType
     ArkAddress,
     BitcoinAddress,
     LightningInvoice,
-    Bip21Uri
+    Bip21Uri,
+    LnurlPay
 }

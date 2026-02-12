@@ -70,6 +70,10 @@ public class Send2DestinationViewModel
     // Payout tracking (when initiated from payout handler)
     public string? PayoutId { get; set; }
 
+    // LNURL metadata (populated on resolution)
+    public long LnurlMinSats { get; set; }
+    public long LnurlMaxSats { get; set; }
+
     // Validation
     public bool IsValid { get; set; }
     public string? Error { get; set; }

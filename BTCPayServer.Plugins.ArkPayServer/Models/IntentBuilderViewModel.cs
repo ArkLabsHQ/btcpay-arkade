@@ -251,4 +251,7 @@ public class ParseDestinationResponse
     public string? Error { get; set; }
     public bool IsBip21 { get; set; }
     public bool IsLightning { get; set; }
+    public bool IsLnurl { get; set; }
+    public long LnurlMinSats { get; set; }
+    public long LnurlMaxSats { get; set; }
 }

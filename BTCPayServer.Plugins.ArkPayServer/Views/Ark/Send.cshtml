@@ -127,6 +127,7 @@
 else
 {
     <form method="post" asp-action="Send" asp-route-storeId="@Model.StoreId" id="send-wizard-form">
+        <input type="hidden" name="CoinSelectionMode" id="coin-selection-mode-field" value="@Model.CoinSelectionMode" />
         <!-- Destination Section -->
         <div class="wizard-section" id="destination-section">
             <div class="wizard-section-header" onclick="toggleSection('destination-section')">
@@ -185,14 +186,13 @@ else
                                            min="0"
                                            data-index="@i"
                                            @(output.IsReadonly && output.AmountBtc.HasValue ? "readonly" : "") />
+                                    <small class="remaining-balance-hint text-muted d-none mt-1"></small>
                                 </div>
                                 <div class="col-12 col-md-2 d-flex align-items-end">
-                                    @if (i > 0 || output.IsBip21Parsed)
-                                    {
-                                        <button type="button" class="btn btn-outline-danger remove-output-btn" data-index="@i">
-                                            <vc:icon symbol="cross" />
-                                        </button>
-                                    }
+                                    <button type="button" class="btn btn-outline-danger remove-output-btn" data-index="@i"
+                                            style="@(i == 0 && Model.Outputs.Count == 1 && string.IsNullOrWhiteSpace(output.Destination) ? "display:none" : "")">
+                                        <vc:icon symbol="cross" />
+                                    </button>
                                 </div>
                             </div>
                             <input type="hidden" name="Outputs[@i].PayoutId" value="@output.PayoutId" />
@@ -381,6 +381,7 @@ else
             detectedSpendType: null,
             estimatedFee: null,
             isLightning: false,
+            hasBitcoinAddress: false,
             userSpendType: 'Arkade' // User's choice - influences auto coin selection
         };
 
@@ -402,6 +403,13 @@ else
         const resetToAutoBtn = document.getElementById('reset-to-auto-btn');
         const selectActiveBtn = document.getElementById('select-active-btn');
         const selectRecoverableBtn = document.getElementById('select-recoverable-btn');
+        const coinSelectionModeField = document.getElementById('coin-selection-mode-field');
+
+        // Update coin selection mode (state + hidden field)
+        function setCoinSelectionMode(mode) {
+            state.coinSelectionMode = mode;
+            if (coinSelectionModeField) coinSelectionModeField.value = mode;
+        }
 
         // Debounce helper
         function debounce(fn, delay) {
@@ -420,7 +428,7 @@ else
 
         // Select coins by type
         function selectCoinsByType(type) {
-            state.coinSelectionMode = 'manual';
+            setCoinSelectionMode('manual');
             const rows = coinsTable.querySelectorAll('tbody tr');
             rows.forEach(row => {
                 const badge = row.querySelector('[data-coin-type]');
@@ -482,6 +490,53 @@ else
             }
         }
 
+        // Update remaining balance hints next to amount fields
+        function updateRemainingBalance() {
+            // Calculate total selected sats
+            let totalSelectedSats = 0;
+            coinsTable.querySelectorAll('.coin-checkbox:checked').forEach(cb => {
+                const row = cb.closest('tr');
+                const amountText = row.cells[2].textContent;
+                totalSelectedSats += Math.round(parseFloat(amountText) * 100000000);
+            });
+
+            // Calculate total allocated across all outputs
+            const outputRows = outputsContainer.querySelectorAll('.output-row');
+            let totalAllocated = 0;
+            outputRows.forEach(row => {
+                const amountInput = row.querySelector('.amount-input');
+                if (amountInput?.value) {
+                    totalAllocated += Math.round(parseFloat(amountInput.value) * 100000000);
+                }
+            });
+
+            // Update each row's remaining hint
+            outputRows.forEach(row => {
+                const hint = row.querySelector('.remaining-balance-hint');
+                const amountInput = row.querySelector('.amount-input');
+                const destInput = row.querySelector('.destination-input');
+                if (!hint) return;
+
+                // Only show when there's a destination and coins are selected
+                if (!destInput?.value?.trim() || totalSelectedSats === 0) {
+                    hint.classList.add('d-none');
+                    return;
+                }
+
+                const remaining = totalSelectedSats - totalAllocated;
+                const remainingBtc = (remaining / 100000000).toFixed(8);
+                hint.classList.remove('d-none');
+
+                if (remaining < 0) {
+                    hint.innerHTML = `<span class="text-danger">Exceeds balance by ${(-remaining).toLocaleString()} sats</span>`;
+                } else if (!amountInput?.value) {
+                    hint.textContent = `Available: ${totalSelectedSats.toLocaleString()} sats`;
+                } else {
+                    hint.textContent = `Remaining: ${remaining.toLocaleString()} sats`;
+                }
+            });
+        }
+
         // Get outputs from form
         function getOutputs() {
             const outputs = [];
@@ -511,34 +566,61 @@ else
             if (lower.startsWith('bitcoin:') || lower.startsWith('ark:')) {
                 return 'Bip21Uri';
             }
-            // Simple heuristic: Ark addresses are typically longer
-            if (destination.length > 60) {
+            // LNURL or Lightning Address (email format)
+            if (lower.startsWith('lnurl') || /^[^@@\s]+@@[^@@\s]+\.[^@@\s]+$/.test(destination)) {
+                return 'LnurlPay';
+            }
+            // Ark addresses start with ark1/tark1
+            if (lower.startsWith('ark1') || lower.startsWith('tark1')) {
                 return 'ArkAddress';
             }
-            return 'BitcoinAddress';
+            // Bitcoin on-chain addresses (requires batch/collab exit)
+            if (/^(1|3|bc1|tb1|bcrt1)[a-zA-HJ-NP-Z0-9]+$/.test(destination)) {
+                return 'BitcoinAddress';
+            }
+            return null;
         }
 
         // Update destination badges
         function updateDestinationBadges() {
             const rows = outputsContainer.querySelectorAll('.output-row');
             let hasLightning = false;
+            let hasBitcoinAddress = false;
             let filledDestCount = 0;
 
             rows.forEach((row, i) => {
                 const destInput = row.querySelector('.destination-input');
                 const badge = row.querySelector('.destination-type-badge');
+                const removeBtn = row.querySelector('.remove-output-btn');
                 const type = detectDestinationType(destInput?.value);
 
                 if (destInput?.value?.trim()) filledDestCount++;
-                if (type === 'LightningInvoice') hasLightning = true;
+                if (type === 'LightningInvoice' || type === 'LnurlPay') hasLightning = true;
+                if (type === 'BitcoinAddress') hasBitcoinAddress = true;
 
                 if (badge) {
-                    badge.textContent = type || '';
-                    badge.className = 'destination-type-badge badge ' + (type ? 'text-bg-info' : '');
+                    const badgeMap = {
+                        'ArkAddress': ['Ark', 'bg-success'],
+                        'LightningInvoice': ['Lightning', 'bg-warning text-dark'],
+                        'LnurlPay': ['LNURL', 'bg-info'],
+                        'Bip21Uri': ['BIP21', 'bg-info'],
+                        'BitcoinAddress': ['Bitcoin (Batch)', 'bg-primary'],
+                    };
+                    const [label, cls] = badgeMap[type] || ['', 'bg-secondary'];
+                    badge.textContent = label;
+                    badge.className = 'destination-type-badge badge ' + (label ? cls : '');
+                }
+
+                // Hide remove button on the only row if it's empty
+                if (removeBtn) {
+                    const isOnlyRow = rows.length === 1;
+                    const isEmpty = !destInput?.value?.trim();
+                    removeBtn.style.display = (isOnlyRow && isEmpty) ? 'none' : '';
                 }
             });
 
             state.isLightning = hasLightning;
+            state.hasBitcoinAddress = hasBitcoinAddress;
 
             // Lightning swap constraints
             if (addOutputBtn) {
@@ -547,12 +629,8 @@ else
                 addOutputBtn.style.display = hasLightning ? 'none' : '';
             }
 
-            // Hide spend type section for Lightning (type is determined by destination)
-            if (spendTypeSection) {
-                if (hasLightning) {
-                    spendTypeSection.style.display = 'none';
-                }
-            }
+            // Update spend type constraints (Lightning hides it, Bitcoin forces Batch)
+            updateSpendTypeSection();
 
             // Show error if Lightning with multiple destinations
             const lightningError = document.getElementById('lightning-multi-dest-error');
@@ -579,7 +657,7 @@ else
 
             if (!selectedCoins.length) {
                 sendBtn.disabled = true;
-                updateReviewContent('Select coins to continue.');
+                updateReviewContent(state.coinSelectionMode === 'auto' ? 'No coins available.' : 'Select coins to continue.');
                 return;
             }
 
@@ -669,7 +747,34 @@ else
                 spendTypeSection.style.display = 'none';
                 return;
             }
+            // Force Batch for Bitcoin on-chain addresses
+            if (state.hasBitcoinAddress) {
+                spendTypeSection.style.display = '';
+                if (spendTypeBatch) spendTypeBatch.checked = true;
+                if (spendTypeArkade) { spendTypeArkade.checked = false; spendTypeArkade.disabled = true; }
+                if (!state._savedSpendType) state._savedSpendType = state.userSpendType;
+                var wasAlreadyBatch = state.userSpendType === 'Batch';
+                state.userSpendType = 'Batch';
+                spendTypeSummary.textContent = 'Batch (required for on-chain address)';
+                // Re-select coins for Batch mode if switching from Arkade
+                if (!wasAlreadyBatch && state.coinSelectionMode === 'auto') {
+                    const outputs = getOutputs();
+                    const amounts = outputs.filter(o => o.destination).map(o => o.amountBtc ? Math.round(o.amountBtc * 100000000) : null);
+                    const totalNeeded = amounts.every(a => a !== null) ? amounts.reduce((sum, a) => sum + a, 0) : null;
+                    autoSelectCoins(totalNeeded);
+                    handleCoinSelectionChange();
+                }
+                return;
+            }
             spendTypeSection.style.display = '';
+            if (spendTypeArkade) spendTypeArkade.disabled = false;
+            // Restore previous spend type if it was overridden by Bitcoin address
+            if (state._savedSpendType) {
+                state.userSpendType = state._savedSpendType;
+                delete state._savedSpendType;
+                const radio = state.userSpendType === 'Batch' ? spendTypeBatch : spendTypeArkade;
+                if (radio) radio.checked = true;
+            }
             spendTypeSummary.textContent = state.userSpendType;
         }
 
@@ -690,44 +795,54 @@ else
             const rows = coinsTable.querySelectorAll('tbody tr');
             let selectedSats = 0;
 
-            // First pass: select based on spend type preference
-            rows.forEach(row => {
-                const badge = row.querySelector('[data-coin-type]');
-                const cb = row.querySelector('.coin-checkbox');
-                if (!badge || !cb) return;
-
-                const coinType = badge.dataset.coinType;
-                const amountText = row.cells[2].textContent;
-                const coinSats = Math.round(parseFloat(amountText) * 100000000);
-
-                if (state.userSpendType === 'Arkade') {
-                    // Arkade: only select non-recoverable (spendable) coins
-                    cb.checked = (coinType === 'spendable');
-                } else {
-                    // Batch: prefer recoverable coins first
-                    cb.checked = (coinType === 'recoverable');
-                }
-
-                if (cb.checked) selectedSats += coinSats;
-            });
-
-            // If Batch and amount needed, check if we need to add non-recoverable coins
-            if (state.userSpendType === 'Batch' && amountNeededSats && selectedSats < amountNeededSats) {
-                // Sort non-recoverable by expiry (closest first) and add until we have enough
-                const sortedRows = getCoinsSortedByExpiry();
-                for (const row of sortedRows) {
-                    if (selectedSats >= amountNeededSats) break;
-
+            if (state.userSpendType === 'Arkade') {
+                // Arkade: only select non-recoverable (spendable) coins
+                rows.forEach(row => {
                     const badge = row.querySelector('[data-coin-type]');
                     const cb = row.querySelector('.coin-checkbox');
-                    if (!badge || !cb || cb.checked) continue;
-
-                    const coinType = badge.dataset.coinType;
-                    if (coinType === 'spendable') {
+                    if (!badge || !cb) return;
+                    cb.checked = (badge.dataset.coinType === 'spendable');
+                    if (cb.checked) {
                         const amountText = row.cells[2].textContent;
-                        const coinSats = Math.round(parseFloat(amountText) * 100000000);
+                        selectedSats += Math.round(parseFloat(amountText) * 100000000);
+                    }
+                });
+            } else {
+                // Batch: select all coins (recoverable + spendable)
+                // When no amount specified, select everything (send-all or consolidation)
+                // When amount specified, select recoverable first then add spendable until enough
+                rows.forEach(row => {
+                    const badge = row.querySelector('[data-coin-type]');
+                    const cb = row.querySelector('.coin-checkbox');
+                    if (!badge || !cb) return;
+                    const coinType = badge.dataset.coinType;
+                    const amountText = row.cells[2].textContent;
+                    const coinSats = Math.round(parseFloat(amountText) * 100000000);
+
+                    if (!amountNeededSats) {
+                        // No specific amount — select all coins
                         cb.checked = true;
-                        selectedSats += coinSats;
+                    } else {
+                        // Prefer recoverable first
+                        cb.checked = (coinType === 'recoverable');
+                    }
+                    if (cb.checked) selectedSats += coinSats;
+                });
+
+                // If amount specified and recoverable coins weren't enough, add spendable
+                if (amountNeededSats && selectedSats < amountNeededSats) {
+                    const sortedRows = getCoinsSortedByExpiry();
+                    for (const row of sortedRows) {
+                        if (selectedSats >= amountNeededSats) break;
+                        const badge = row.querySelector('[data-coin-type]');
+                        const cb = row.querySelector('.coin-checkbox');
+                        if (!badge || !cb || cb.checked) continue;
+                        if (badge.dataset.coinType === 'spendable') {
+                            const amountText = row.cells[2].textContent;
+                            const coinSats = Math.round(parseFloat(amountText) * 100000000);
+                            cb.checked = true;
+                            selectedSats += coinSats;
+                        }
                     }
                 }
             }
@@ -739,6 +854,7 @@ else
         function getEffectiveSpendType(needsRecovery) {
             if (needsRecovery) return 'Batch (Recovery)';
             if (state.isLightning) return 'Lightning Swap';
+            if (state.hasBitcoinAddress) return 'Batch';
             return state.userSpendType;
         }
 
@@ -889,6 +1005,7 @@ else
                                    step="0.00000001"
                                    min="0"
                                    data-index="${index}" />
+                            <small class="remaining-balance-hint text-muted d-none mt-1"></small>
                         </div>
                         <div class="col-12 col-md-2 d-flex align-items-end">
                             <button type="button" class="btn btn-outline-danger remove-output-btn" data-index="${index}">
@@ -909,13 +1026,30 @@ else
 
         // Remove output row and reindex
         function removeOutputRow(index) {
+            const rows = outputsContainer.querySelectorAll('.output-row');
             const row = outputsContainer.querySelector(`.output-row[data-index="${index}"]`);
-            if (row) {
+            if (!row) return;
+
+            if (rows.length <= 1) {
+                // Last row — reset it instead of removing
+                const destInput = row.querySelector('.destination-input');
+                const amountInput = row.querySelector('.amount-input');
+                if (destInput) { destInput.value = ''; destInput.readOnly = false; }
+                if (amountInput) { amountInput.value = ''; amountInput.readOnly = false; amountInput.placeholder = 'Optional'; amountInput.removeAttribute('min'); amountInput.removeAttribute('max'); }
+                row.querySelector('.bip21-display')?.remove();
+                row.querySelector('.lnurl-range-hint')?.remove();
+                row.querySelector('.payout-badge')?.remove();
+                row.querySelector('.text-danger.small')?.remove();
+                row.querySelectorAll('input[type="hidden"]').forEach(h => h.value = '');
+                const badge = row.querySelector('.destination-type-badge');
+                if (badge) { badge.textContent = ''; badge.className = 'destination-type-badge badge'; }
+            } else {
                 row.remove();
                 reindexOutputs();
-                updateDestinationBadges();
-                estimateFees();
             }
+
+            updateDestinationBadges();
+            estimateFees();
         }
 
         // Reindex output rows after removal
@@ -936,6 +1070,8 @@ else
             const hasDestinations = outputs.some(o => o.destination);
             const selectedCoins = getSelectedCoins();
 
+            updateRemainingBalance();
+
             if (!hasDestinations && selectedCoins.length > 0) {
                 // Consolidation mode - enable send button immediately
                 sendBtn.disabled = false;
@@ -943,7 +1079,11 @@ else
             } else if (selectedCoins.length === 0) {
                 // No coins selected
                 sendBtn.disabled = true;
-                updateReviewContent('Select coins to continue.');
+                if (state.coinSelectionMode === 'auto') {
+                    updateReviewContent('No coins available.');
+                } else {
+                    updateReviewContent('Select coins to continue.');
+                }
             } else {
                 // Has destination - use debounced fee estimation
                 estimateFees();
@@ -982,6 +1122,15 @@ else
             if (rowG3) rowG3.insertAdjacentHTML('beforebegin', html);
         }
 
+        function insertLnurlRangeHint(row, minSats, maxSats) {
+            row.querySelector('.lnurl-range-hint')?.remove();
+            const hint = document.createElement('small');
+            hint.className = 'lnurl-range-hint text-muted d-block mt-1';
+            hint.textContent = `Amount range: ${minSats.toLocaleString()} \u2013 ${maxSats.toLocaleString()} sats`;
+            const amountCol = row.querySelector('.amount-input')?.closest('.col-md-3');
+            if (amountCol) amountCol.appendChild(hint);
+        }
+
         function insertPayoutBadge(row, payoutId) {
             const badgeArea = row.querySelector('.mt-2.d-flex');
             if (!badgeArea || badgeArea.querySelector('.payout-badge')) return;
@@ -1008,9 +1157,28 @@ else
             }
         }
 
+        function setDestinationLoading(index, loading) {
+            const row = outputsContainer.querySelector(`.output-row[data-index="${index}"]`);
+            if (!row) return;
+            const destInput = row.querySelector('.destination-input');
+            const badge = row.querySelector('.destination-type-badge');
+            if (loading) {
+                destInput?.classList.add('opacity-50');
+                destInput?.setAttribute('disabled', '');
+                if (badge) {
+                    badge.textContent = 'Resolving\u2026';
+                    badge.className = 'destination-type-badge badge text-bg-secondary';
+                }
+            } else {
+                destInput?.classList.remove('opacity-50');
+                destInput?.removeAttribute('disabled');
+            }
+        }
+
         async function parseDestination(index, destination) {
             if (!destination || destination.trim() === '') return;
 
+            setDestinationLoading(index, true);
             try {
                 const response = await fetch(`/plugins/ark/stores/@Model.StoreId/parse-destination`, {
                     method: 'POST',
@@ -1023,6 +1191,7 @@ else
 
                 const data = await response.json();
                 if (!data.isValid) {
+                    setDestinationLoading(index, false);
                     updateOutputError(index, data.error);
                     return;
                 }
@@ -1047,10 +1216,32 @@ else
                     updateHiddenField(row, 'RawBip21', destination);
                 }
 
-                // Populate amount if parsed from BIP21/invoice
-                if (data.amountSats > 0 && !amountInput.value) {
+                // LNURL / Lightning Address: destination readonly, amount editable with range
+                if (data.isLnurl) {
+                    destInput.readOnly = true;
+                    updateHiddenField(row, 'IsReadonly', 'true');
+
+                    // Amount is editable — user must choose within range
+                    amountInput.readOnly = false;
+                    if (data.lnurlMinSats > 0 && data.lnurlMaxSats > 0) {
+                        const minBtc = (data.lnurlMinSats / 100000000).toFixed(8);
+                        const maxBtc = (data.lnurlMaxSats / 100000000).toFixed(8);
+                        amountInput.min = minBtc;
+                        amountInput.max = maxBtc;
+                        amountInput.placeholder = `${data.lnurlMinSats.toLocaleString()} - ${data.lnurlMaxSats.toLocaleString()} sats`;
+                        insertLnurlRangeHint(row, data.lnurlMinSats, data.lnurlMaxSats);
+                    }
+                }
+                // Lightning invoices (BOLT11): make destination and amount readonly
+                else if (data.isLightning && !data.isBip21) {
+                    destInput.readOnly = true;
+                    updateHiddenField(row, 'IsReadonly', 'true');
+                }
+
+                // Populate amount if parsed from BIP21/invoice (not LNURL — user picks amount)
+                if (!data.isLnurl && data.amountSats > 0 && !amountInput.value) {
                     amountInput.value = data.amountBtc.toFixed(8);
-                    if (data.isBip21) amountInput.readOnly = true;
+                    if (data.isBip21 || data.isLightning) amountInput.readOnly = true;
                 }
 
                 // Set payout ID if present
@@ -1066,10 +1257,13 @@ else
                 }
 
                 // Update state and trigger coin suggestion / fee estimation
+                setDestinationLoading(index, false);
                 state.isLightning = data.isLightning;
                 updateDestinationBadges();
-                suggestCoins();
+                await suggestCoins();
+                handleCoinSelectionChange();
             } catch (err) {
+                setDestinationLoading(index, false);
                 console.error('Destination parse failed:', err);
             }
         }
@@ -1111,23 +1305,25 @@ else
                 const index = parseInt(e.target.dataset.index);
                 const value = e.target.value.trim();
 
-                // Server-side parse for BIP21, Lightning, and Ark addresses
+                // Server-side parse for BIP21, Lightning, Ark addresses, LNURL, and Lightning Addresses
                 if (value.startsWith('bitcoin:') || value.startsWith('ln') ||
                     value.startsWith('lightning:') || value.startsWith('ark1') ||
-                    value.startsWith('tark1')) {
+                    value.startsWith('tark1') || value.startsWith('lnurl') ||
+                    /^[^@@\s]+@@[^@@\s]+\.[^@@\s]+$/.test(value)) {
                     parseDestination(index, value);
                 } else {
                     updateDestinationBadges();
                     suggestCoins();
                 }
             } else if (e.target.classList.contains('amount-input')) {
+                updateRemainingBalance();
                 estimateFees();
             }
         }, 500));
 
         coinsTable?.addEventListener('change', function(e) {
             if (e.target.classList.contains('coin-checkbox')) {
-                state.coinSelectionMode = 'manual';
+                setCoinSelectionMode('manual');
                 updateCoinsSummary();
                 handleCoinSelectionChange();
             }
@@ -1135,7 +1331,7 @@ else
 
         selectAllCoins?.addEventListener('change', function() {
             selectAllCoinsVisible(this.checked);
-            state.coinSelectionMode = 'manual';
+            setCoinSelectionMode('manual');
             updateCoinsSummary();
             handleCoinSelectionChange();
         });
@@ -1143,7 +1339,7 @@ else
         // Reset to auto coin selection
         resetToAutoBtn?.addEventListener('click', function(e) {
             e.stopPropagation(); // Don't toggle section collapse
-            state.coinSelectionMode = 'auto';
+            setCoinSelectionMode('auto');
 
             // Clear all coin selections first
             coinsTable.querySelectorAll('.coin-checkbox').forEach(cb => cb.checked = false);
