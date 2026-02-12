@@ -823,7 +823,91 @@ public class ArkController(
             }
 
             // Ark intent/transaction fees - need to get coins and build outputs
-            var coins = await GetCoinsForOutpoints(config!.WalletId!, request.VtxoOutpoints, token);
+            var isAutoMode = string.Equals(request.CoinSelectionMode, "auto", StringComparison.OrdinalIgnoreCase);
+            List<ArkCoin> coins;
+
+            if (isAutoMode)
+            {
+                // Auto mode: use smart coin selection based on destination type
+                var allCoins = await arkadeSpender.GetAvailableCoins(config!.WalletId!, token);
+                var lockedOutpoints = await intentStorage.GetLockedVtxoOutpoints(config.WalletId!, token);
+                var lockedSet = new HashSet<NBitcoin.OutPoint>(lockedOutpoints);
+                var availableCoins = allCoins.Where(c => !lockedSet.Contains(c.Outpoint)).ToList();
+
+                if (!availableCoins.Any())
+                {
+                    response.Error = "No spendable coins available";
+                    return Json(response);
+                }
+
+                // Determine destination type for smart selection
+                var destType = DestinationType.ArkAddress; // default: consolidation / ark send
+                long? targetSats = null;
+
+                if (request.Outputs.Any(o => !string.IsNullOrWhiteSpace(o.Destination)))
+                {
+                    var firstDest = request.Outputs.First(o => !string.IsNullOrWhiteSpace(o.Destination)).Destination!.Trim();
+                    if (IsLightningDestination(firstDest))
+                        destType = DestinationType.LightningInvoice;
+                    else if (firstDest.StartsWith("bc1", StringComparison.OrdinalIgnoreCase)
+                          || firstDest.StartsWith("tb1", StringComparison.OrdinalIgnoreCase)
+                          || firstDest.StartsWith("bcrt1", StringComparison.OrdinalIgnoreCase)
+                          || firstDest.StartsWith("1") || firstDest.StartsWith("3"))
+                        destType = DestinationType.BitcoinAddress;
+
+                    // Calculate target amount
+                    var amounts = request.Outputs.Where(o => o.AmountSats.HasValue).Select(o => o.AmountSats!.Value).ToList();
+                    if (amounts.Any())
+                        targetSats = amounts.Sum();
+                }
+
+                // Reuse the same selection logic as SuggestCoins
+                var nonRecoverable = availableCoins.Where(c => !c.Swept).ToList();
+                var recoverable = availableCoins.Where(c => c.Swept).ToList();
+                SuggestCoinsResponse suggestion;
+
+                if (destType == DestinationType.LightningInvoice)
+                {
+                    suggestion = SelectCoins(nonRecoverable.Any() ? nonRecoverable : availableCoins, targetSats, SpendType.Swap);
+                }
+                else if (destType == DestinationType.BitcoinAddress)
+                {
+                    suggestion = SelectCoins(availableCoins, targetSats, SpendType.Batch);
+                }
+                else if (string.Equals(request.SpendType, "Batch", StringComparison.OrdinalIgnoreCase))
+                {
+                    suggestion = SelectCoins(availableCoins, targetSats, SpendType.Batch);
+                }
+                else
+                {
+                    // Ark address / offchain: prefer non-recoverable
+                    suggestion = nonRecoverable.Any()
+                        ? SelectCoins(nonRecoverable, targetSats, SpendType.Offchain)
+                        : SelectCoins(availableCoins, targetSats, SpendType.Batch);
+                }
+
+                if (suggestion.Error != null)
+                {
+                    response.Error = suggestion.Error;
+                    return Json(response);
+                }
+
+                // Map selected outpoints back to coins
+                var selectedSet = suggestion.SuggestedOutpoints.ToHashSet();
+                coins = availableCoins.Where(c => selectedSet.Contains($"{c.Outpoint.Hash}:{c.Outpoint.N}")).ToList();
+
+                // Populate response with selected coin info
+                response.TotalInputSats = coins.Sum(c => c.TxOut.Value.Satoshi);
+                response.SelectedCoinCount = coins.Count;
+                response.SelectedOutpoints = suggestion.SuggestedOutpoints;
+
+                request.TotalInputSats = response.TotalInputSats;
+            }
+            else
+            {
+                coins = await GetCoinsForOutpoints(config!.WalletId!, request.VtxoOutpoints, token);
+            }
+
             if (coins.Count == 0)
             {
                 response.Error = "No valid coins found for selected outpoints";
@@ -1388,7 +1472,7 @@ public class ArkController(
                 }
 
                 // Get the wallet's own Ark address for consolidation
-                var contractOutput = await contractService.DeriveContract(config.WalletId!, NextContractPurpose.SendToSelf, ContractActivityState.AwaitingFundsBeforeDeactivate, cancellationToken: token);
+                var contractOutput = await contractService.DeriveContract(config.WalletId!, NextContractPurpose.SendToSelf, ContractActivityState.Inactive, cancellationToken: token);
                 var selfDest = contractOutput.GetArkAddress();
 
                 // For recoverable coins OR user chose Batch, create an intent (batch transaction)
@@ -1421,9 +1505,9 @@ public class ArkController(
                         config.WalletId!,
                         new ArkIntentSpec(
                             selectedCoins.ToArray(),
-                            new[] { consolidationOutput },
-                            DateTimeOffset.UtcNow,
-                            DateTimeOffset.UtcNow.AddHours(1)
+                            new [] { consolidationOutput },
+                            null,
+                            null
                         ),
                         cancellationToken: token);
 

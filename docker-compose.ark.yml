@@ -175,8 +175,8 @@ services:
         base = "ARK"
         quote = "BTC"
         rate = 1
-        fee = 0
-        swapInFee = 0.00
+        fee = 0.5
+        swapInFee = 0.1
         maxSwapAmount = 4294967
         minSwapAmount = 1000
 

@@ -171,6 +171,16 @@ public class FeeEstimateRequest
     /// Output destinations and amounts.
     /// </summary>
     public List<FeeEstimateOutput> Outputs { get; set; } = [];
+
+    /// <summary>
+    /// Coin selection mode ("auto" or "manual"). When "auto", server selects coins if none provided.
+    /// </summary>
+    public string? CoinSelectionMode { get; set; }
+
+    /// <summary>
+    /// Spend type preference ("Arkade" or "Batch").
+    /// </summary>
+    public string? SpendType { get; set; }
 }
 
 /// <summary>
@@ -223,6 +233,21 @@ public class FeeEstimateResponse
     /// Error message if estimation failed.
     /// </summary>
     public string? Error { get; set; }
+
+    /// <summary>
+    /// Total input sats from auto-selected coins (returned when server picks coins).
+    /// </summary>
+    public long TotalInputSats { get; set; }
+
+    /// <summary>
+    /// Number of coins selected by the server (auto mode).
+    /// </summary>
+    public int SelectedCoinCount { get; set; }
+
+    /// <summary>
+    /// Outpoints selected by the server (auto mode), so client can sync UI.
+    /// </summary>
+    public List<string>? SelectedOutpoints { get; set; }
 }
 
 /// <summary>

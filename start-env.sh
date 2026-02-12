@@ -61,6 +61,26 @@ setup_lnd_wallet() {
   log "✓ LND wallet setup completed successfully!"
 }
 
+setup_arkd_fees() {
+  log "Configuring arkd intent fees..."
+
+  # Set fees via admin API (port 7071, internal to container)
+  local fee_response
+  fee_response=$(docker exec ark wget -qO- \
+    --post-data='{"fees":{"offchainInputFee":"amount * 0.01","onchainInputFee":"amount * 0.01","offchainOutputFee":"0.0","onchainOutputFee":"250.0"}}' \
+    --header="Content-Type: application/json" \
+    http://localhost:7071/v1/admin/intentFees 2>&1) || {
+    log "WARNING: Failed to set arkd fees (admin port may not be available)"
+    return 0
+  }
+
+  # Verify
+  local verify
+  verify=$(docker exec ark wget -qO- http://localhost:7071/v1/admin/intentFees 2>&1)
+  log "arkd fees configured: $verify"
+  log "✓ arkd intent fees set (1% input fee, 250 sat onchain output fee)"
+}
+
 setup_fulmine_wallet() {
   log "Setting up Fulmine wallet..."
   
@@ -264,6 +284,9 @@ if [ $attempt -gt $max_attempts ]; then
   log "ERROR: arkd failed to start within expected time"
   exit 1
 fi
+
+# Configure arkd fees before wallet setup
+setup_arkd_fees
 
 # this is technically already handled in nigiri start
 nigiri ark init  --password secret --server-url localhost:7070 --explorer http://chopsticks:3000

@@ -653,36 +653,20 @@ else
             const selectedCoins = getSelectedCoins();
             const outputs = getOutputs();
             const hasDestinations = outputs.some(o => o.destination);
-            const isConsolidation = !hasDestinations && selectedCoins.length > 0;
+            const isAuto = state.coinSelectionMode === 'auto';
 
-            if (!selectedCoins.length) {
+            if (!selectedCoins.length && !isAuto) {
                 sendBtn.disabled = true;
-                updateReviewContent(state.coinSelectionMode === 'auto' ? 'No coins available.' : 'Select coins to continue.');
+                updateReviewContent('Select coins to continue.');
                 return;
             }
 
-            // For consolidation (no destination), enable send without fee estimation
-            if (isConsolidation) {
-                sendBtn.disabled = false;
-                updateReviewSection(selectedCoins, outputs, { estimatedFeeSats: 0, isConsolidation: true });
-                return;
-            }
-
-            // No coins or no destination - disable
-            if (!hasDestinations) {
-                sendBtn.disabled = true;
-                updateReviewContent('Enter a destination or leave empty to consolidate.');
-                return;
-            }
-
-            // Calculate total input
+            // Calculate total input from checked coins
             let totalInputSats = 0;
-            const checkboxes = coinsTable.querySelectorAll('.coin-checkbox:checked');
-            checkboxes.forEach(cb => {
+            coinsTable.querySelectorAll('.coin-checkbox:checked').forEach(cb => {
                 const row = cb.closest('tr');
                 const amountText = row.cells[2].textContent;
-                const btc = parseFloat(amountText);
-                totalInputSats += Math.round(btc * 100000000);
+                totalInputSats += Math.round(parseFloat(amountText) * 100000000);
             });
 
             try {
@@ -695,6 +679,8 @@ else
                     body: JSON.stringify({
                         vtxoOutpoints: selectedCoins,
                         totalInputSats: totalInputSats,
+                        coinSelectionMode: state.coinSelectionMode,
+                        spendType: state.userSpendType,
                         outputs: outputs.filter(o => o.destination).map(o => ({
                             destination: o.destination,
                             amountSats: o.amountBtc ? Math.round(o.amountBtc * 100000000) : null
@@ -711,8 +697,25 @@ else
                     state.estimatedFee = data.estimatedFeeSats;
                     sendBtn.disabled = false;
 
-                    // Update review section
-                    updateReviewSection(selectedCoins, outputs, data);
+                    // In auto mode, sync coin checkboxes from server selection
+                    if (isAuto && data.selectedOutpoints?.length) {
+                        const serverSelected = new Set(data.selectedOutpoints);
+                        coinsTable.querySelectorAll('.coin-checkbox').forEach(cb => {
+                            cb.checked = serverSelected.has(cb.value);
+                        });
+                        updateCoinsSummary();
+                        updateRemainingBalance();
+                    }
+
+                    // Mark consolidation for review display
+                    if (!hasDestinations) data.isConsolidation = true;
+
+                    // Use server-reported coins for review if auto
+                    const reviewCoins = (isAuto && data.selectedOutpoints?.length)
+                        ? data.selectedOutpoints
+                        : selectedCoins;
+
+                    updateReviewSection(reviewCoins, outputs, data);
                 }
             } catch (err) {
                 console.error('Fee estimation failed:', err);
@@ -903,9 +906,9 @@ else
             html += `<dt class="col-sm-4">Inputs</dt><dd class="col-sm-8">${totalInput} coin(s)</dd>`;
             html += `<dt class="col-sm-4">Outputs</dt><dd class="col-sm-8">${totalOutputs}</dd>`;
             html += `<dt class="col-sm-4">Spend Type</dt><dd class="col-sm-8"><span class="badge text-bg-primary">${spendType}</span></dd>`;
+            html += `<dt class="col-sm-4">Fee</dt><dd class="col-sm-8">`;
             if (feeData.estimatedFeeSats !== null && feeData.estimatedFeeSats > 0) {
-                html += `<dt class="col-sm-4">Fee</dt><dd class="col-sm-8">`;
-                html += `<strong>${feeData.estimatedFeeSats} sats</strong>`;
+                html += `<strong>${feeData.estimatedFeeSats.toLocaleString()} sats</strong>`;
                 if (feeData.feeDescription) {
                     html += `<br><span class="text-muted small">${feeData.feeDescription}</span>`;
                 }
@@ -915,10 +918,10 @@ else
                     html += ` + Miner: ${feeData.minerFeeSats} sats`;
                     html += `</span>`;
                 }
-                html += `</dd>`;
-            } else if (feeData.isConsolidation) {
-                html += `<dt class="col-sm-4">Fee</dt><dd class="col-sm-8"><span class="text-success">0 sats (no fee)</span></dd>`;
+            } else {
+                html += `<span class="text-success">0 sats (no fee)</span>`;
             }
+            html += `</dd>`;
             html += '</dl>';
 
             reviewContent.innerHTML = html;
@@ -1066,26 +1069,15 @@ else
 
         // Helper to handle coin selection changes (consolidation vs destination mode)
         function handleCoinSelectionChange() {
-            const outputs = getOutputs();
-            const hasDestinations = outputs.some(o => o.destination);
             const selectedCoins = getSelectedCoins();
 
             updateRemainingBalance();
 
-            if (!hasDestinations && selectedCoins.length > 0) {
-                // Consolidation mode - enable send button immediately
-                sendBtn.disabled = false;
-                updateReviewSection(selectedCoins, outputs, { estimatedFeeSats: 0, isConsolidation: true });
-            } else if (selectedCoins.length === 0) {
-                // No coins selected
+            if (selectedCoins.length === 0 && state.coinSelectionMode !== 'auto') {
                 sendBtn.disabled = true;
-                if (state.coinSelectionMode === 'auto') {
-                    updateReviewContent('No coins available.');
-                } else {
-                    updateReviewContent('Select coins to continue.');
-                }
+                updateReviewContent('Select coins to continue.');
             } else {
-                // Has destination - use debounced fee estimation
+                // Always estimate fees — in auto mode, server picks coins
                 estimateFees();
             }
         }
@@ -1407,30 +1399,14 @@ else
         if (preselectedCoins.length > 0) {
             // Pre-selected coins (manual mode from URL params)
             updateCoinsSummary();
-            if (!hasDestinations) {
-                // Consolidation mode - enable immediately
-                sendBtn.disabled = false;
-                updateReviewSection(preselectedCoins, outputs, { estimatedFeeSats: 0, isConsolidation: true });
-            } else {
-                estimateFees();
-            }
+            estimateFees();
         } else if (state.coinSelectionMode === 'auto') {
-            // Auto mode with no pre-selection - select coins based on spend type
+            // Auto mode - server will select coins; try local selection too for UI
             autoSelectCoins();
             updateCoinsSummary();
-            const selectedCoins = getSelectedCoins();
-            if (selectedCoins.length > 0) {
-                sendBtn.disabled = false;
-                updateReviewSection(selectedCoins, outputs, { estimatedFeeSats: 0, isConsolidation: true });
-            } else {
-                updateReviewContent('No coins available for selected transaction type.');
-            }
+            estimateFees();
         } else {
             updateCoinsSummary();
-        }
-        // For pre-filled BIP21 destinations, trigger fee estimation
-        if (hasDestinations) {
-            estimateFees();
         }
     })();
 
