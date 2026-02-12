@@ -34,17 +34,30 @@
             <Private>false</Private>
             <Private Condition="'$(Configuration)' == 'Debug'">true</Private>
         </ProjectReference>
-        <!-- NNark submodule projects -->
-        <ProjectReference Include="..\submodules\NNark\NArk.Abstractions\NArk.Abstractions.csproj" />
-        <ProjectReference Include="..\submodules\NNark\NArk.Core\NArk.Core.csproj" />
-        <ProjectReference Include="..\submodules\NNark\NArk.Swaps\NArk.Swaps.csproj" />
+        <!-- NNark submodule projects (Private=true to bundle in plugin package) -->
+        <ProjectReference Include="..\submodules\NNark\NArk.Abstractions\NArk.Abstractions.csproj">
+            <Private>true</Private>
+        </ProjectReference>
+        <ProjectReference Include="..\submodules\NNark\NArk.Core\NArk.Core.csproj">
+            <Private>true</Private>
+        </ProjectReference>
+        <ProjectReference Include="..\submodules\NNark\NArk.Swaps\NArk.Swaps.csproj">
+            <Private>true</Private>
+        </ProjectReference>
         <!-- NNark transitive dependencies (must be explicit for plugin publish) -->
         <PackageReference Include="AsyncKeyedLock" Version="8.0.1" />
         <PackageReference Include="BTCPayServer.Lightning.Common" Version="1.5.2" />
         <PackageReference Include="Cel" Version="0.3.2" />
-
+        <PackageReference Include="Google.Api.CommonProtos" Version="2.17.0" />
+        <PackageReference Include="Grpc.Net.Client" Version="2.76.0" />
+        <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
+        <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.0.1" />
+        <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.1" />
+        <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.1" />
+        <PackageReference Include="Microsoft.Extensions.Options" Version="8.0.2" />
         <PackageReference Include="NBitcoin" Version="9.0.4" />
         <PackageReference Include="NBitcoin.Secp256k1" Version="3.2.0" />
+        <PackageReference Include="NBXplorer.Client" Version="5.0.5" />
         <!-- Additional packages -->
         <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
         <PackageReference Include="Grpc.Net.ClientFactory" Version="2.76.0" />
