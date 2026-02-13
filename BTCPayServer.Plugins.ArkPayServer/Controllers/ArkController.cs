@@ -44,6 +44,7 @@ using NArk.Swaps.Models;
 using LNURL;
 using NBitcoin;
 using NBitcoin.DataEncoders;
+using NBitcoin.Scripting;
 using NBitcoin.Secp256k1;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Controllers;
@@ -224,19 +225,13 @@ public class ArkController(
 
         // Get the default/active contract address
         string? defaultAddress = null;
-        var activeContracts = await contractStorage.GetContracts(
-            walletIds: [config.WalletId!],
-            isActive: true,
-            take: 1,
-            cancellationToken: cancellationToken);
-        var activeContract = activeContracts.FirstOrDefault();
-        if (activeContract != null)
+        if (wallet?.WalletType == WalletType.SingleKey)
         {
+            // SingleKey: compute the deterministic default address directly from the wallet key
             var terms = await clientTransport.GetServerInfoAsync(cancellationToken);
-            var script = Script.FromHex(activeContract.Script);
-            var serverKey = terms.SignerKey.Extract().XOnlyPubKey;
-            var address = ArkAddress.FromScriptPubKey(script, serverKey);
-            defaultAddress = address.ToString(terms.Network.ChainName == ChainName.Mainnet);
+            var descriptor = OutputDescriptor.Parse(wallet.AccountDescriptor, terms.Network);
+            var defaultContract = new ArkPaymentContract(terms.SignerKey, terms.UnilateralExit, descriptor);
+            defaultAddress = defaultContract.GetArkAddress().ToString(terms.Network.ChainName == ChainName.Mainnet);
         }
 
         // Check Ark Operator connection
