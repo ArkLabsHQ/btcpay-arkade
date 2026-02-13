@@ -60,14 +60,14 @@ public class EfCoreSwapStorage : ISwapStorage
     }
 
     public async Task<IReadOnlyCollection<NNarkArkSwap>> GetSwaps(
-        string? walletId = null,
+        string[]? walletIds = null,
         string[]? swapIds = null,
         bool? active = null,
-        ArkSwapType? swapType = null,
-        ArkSwapStatus? status = null,
+        ArkSwapType[]? swapTypes = null,
+        ArkSwapStatus[]? status = null,
         string[]? contractScripts = null,
-        string? hash = null,
-        string? invoice = null,
+        string[]? hashes = null,
+        string[]? invoices = null,
         string? searchText = null,
         int? skip = null,
         int? take = null,
@@ -77,12 +77,12 @@ public class EfCoreSwapStorage : ISwapStorage
 
         var query = db.Swaps.AsQueryable();
 
-        if (walletId != null)
+        if (walletIds is { Length: > 0 })
         {
-            query = query.Where(s => s.WalletId == walletId);
+            query = query.Where(s => walletIds.Contains(s.WalletId));
         }
 
-        if (swapIds is {  })
+        if (swapIds is { Length: > 0 })
         {
             query = query.Where(s => swapIds.Contains(s.SwapId));
         }
@@ -96,29 +96,29 @@ public class EfCoreSwapStorage : ISwapStorage
             query = query.Where(s => s.Status != ArkSwapStatus.Pending && s.Status != ArkSwapStatus.Unknown);
         }
 
-        if (swapType.HasValue)
+        if (swapTypes is { Length: > 0 })
         {
-            query = query.Where(s => s.SwapType == swapType.Value);
+            query = query.Where(s => swapTypes.Contains(s.SwapType));
         }
 
-        if (status.HasValue)
+        if (status is { Length: > 0 })
         {
-            query = query.Where(s => s.Status == status.Value);
+            query = query.Where(s => status.Contains(s.Status));
         }
 
-        if (contractScripts is {  })
+        if (contractScripts is { Length: > 0 })
         {
             query = query.Where(s => contractScripts.Contains(s.ContractScript));
         }
 
-        if (!string.IsNullOrEmpty(hash))
+        if (hashes is { Length: > 0 })
         {
-            query = query.Where(s => s.Hash == hash);
+            query = query.Where(s => hashes.Contains(s.Hash));
         }
 
-        if (!string.IsNullOrEmpty(invoice))
+        if (invoices is { Length: > 0 })
         {
-            query = query.Where(s => s.Invoice == invoice);
+            query = query.Where(s => invoices.Contains(s.Invoice));
         }
 
         if (!string.IsNullOrEmpty(searchText))

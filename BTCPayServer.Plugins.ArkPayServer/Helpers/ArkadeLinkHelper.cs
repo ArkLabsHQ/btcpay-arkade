@@ -24,6 +24,9 @@ public static class ArkadeLinkHelper
     public static string GetTransactionLink(ArkNetworkConfig config, string txId)
     {
         return config.ExplorerUri is not null ? $"{config.ExplorerUri.TrimEnd('/')}/tx/{txId}" : $"{config.ArkUri.TrimEnd('/')}/indexer/v1/tx/{txId}";
+    }    public static string GetCommitmentTransactionLink(ArkNetworkConfig config, string txId)
+    {
+        return config.ExplorerUri is not null ? $"{config.ExplorerUri.TrimEnd('/')}/tx/{txId}" : $"{config.ArkUri.TrimEnd('/')}/indexer/v1/tcommtmentTx/{txId}";
     }
     
     public static string GetScriptLink(ArkNetworkConfig config, string script)
@@ -38,6 +41,7 @@ public static class ArkadeLinkHelper
     
     public static string? GetOutpointLink(ArkNetworkConfig config, string outpoint)
     {
+        outpoint = outpoint.Replace('-', ':');
         return config.ExplorerUri is not null ? GetTransactionLink(config, OutPoint.Parse(outpoint).Hash.ToString()) : $"{config.ArkUri.TrimEnd('/')}/v1/indexer/vtxos?outpoints={outpoint}";
     } 
     public static string? GetOutpointLink(ArkNetworkConfig config, string txid , uint vout)

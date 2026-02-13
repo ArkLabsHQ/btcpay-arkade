@@ -1,10 +1,10 @@
 @using BTCPayServer.Abstractions.Contracts
 @using BTCPayServer.Abstractions.Extensions
-@using BTCPayServer.Plugins.ArkPayServer.Data
-@using BTCPayServer.Plugins.ArkPayServer.Data.Entities
 @using BTCPayServer.Plugins.ArkPayServer.Helpers
 @using NArk.Core.Transport
 @using NArk.Abstractions.Intents
+@using NArk.Abstractions.VTXOs
+@using NBitcoin
 @using static BTCPayServer.Plugins.ArkPayServer.Helpers.ArkViewHelpers
 @model BTCPayServer.Plugins.ArkPayServer.Models.StoreIntentsViewModel
 @inject IScopeProvider ScopeProvider
@@ -109,8 +109,8 @@
                 {
                     var detailsId = $"intent_details_{intent.IntentTxId}";
                     
-                    ArkIntentVtxo[]? vtxos = [];
-                    var hasVtxos = Model.IntentVtxos.TryGetValue(intent.IntentTxId, out vtxos) && vtxos.Any();
+                    Model.IntentVtxoOutpoints.TryGetValue(intent.IntentTxId, out var outpoints);
+                    var hasVtxos = outpoints is { Length: > 0 };
 
                     <tr id="intent_@intent.IntentTxId">
                         <td class="align-middle date-col">@intent.CreatedAt.ToBrowserDate()</td>
@@ -165,7 +165,7 @@
                         <td class="align-middle">
                             @if (!string.IsNullOrEmpty(intent.CommitmentTransactionId))
                             {
-                                var txLink = ArkadeLinkHelper.GetTransactionLink(ArkNetworkConfig, intent.CommitmentTransactionId);
+                                var txLink = ArkadeLinkHelper.GetCommitmentTransactionLink(ArkNetworkConfig, intent.CommitmentTransactionId);
                                 <vc:truncate-center link="@txLink" text="@intent.CommitmentTransactionId" classes="truncate-center-id"/>
                             }
                             else
@@ -176,7 +176,7 @@
                         <td class="align-middle">
                             @if (hasVtxos)
                             {
-                                <span class="badge text-bg-info">@vtxos.Length</span>
+                                <span class="badge text-bg-info">@outpoints!.Length</span>
                             }
                             else
                             {
@@ -210,7 +210,10 @@
                             <td colspan="@colspanCount" class="border-top-0">
                                 <h6 class="mb-3">VTXOs</h6>
                                 @{
-                                    var vtxoList = vtxos.Select(iv => iv.Vtxo.ToArkVtxo()).ToList();
+                                    var vtxoList = outpoints!
+                                        .Select(op => Model.VtxoLookup.GetValueOrDefault(op))
+                                        .Where(v => v != null)
+                                        .ToList();
                                 }
                                 <partial name="_VtxoTable" model="vtxoList" view-data='new ViewDataDictionary(ViewData) { { "ShowLinks", true }, { "UseTimeAgo", true }, { "TimeColumnLabel", "Linked" } }' />
                             </td>

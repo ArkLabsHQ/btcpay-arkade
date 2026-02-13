@@ -1,8 +1,9 @@
+using BTCPayServer.Plugins.ArkPayServer.Data;
 using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using NArk.Abstractions.Contracts;
 using NArk.Abstractions.VTXOs;
+using NArk.Swaps.Models;
 using NBitcoin;
-
 namespace BTCPayServer.Plugins.ArkPayServer.Models;
 
 public class StoreOverviewViewModel
@@ -55,4 +56,12 @@ public class StoreOverviewViewModel
     public HashSet<OutPoint> SpendableOutpoints { get; set; } = [];
     public Dictionary<string, ArkContractEntity> VtxoContracts { get; set; } = new();
     public int TotalVtxoCount { get; set; }
+
+    // Recent intents
+    public IReadOnlyCollection<NArk.Abstractions.Intents.ArkIntent> RecentIntents { get; set; } = [];
+    public int TotalIntentCount { get; set; }
+
+    // Recent swaps
+    public IReadOnlyCollection<ArkSwap> RecentSwaps { get; set; } = [];
+    public int TotalSwapCount { get; set; }
 }

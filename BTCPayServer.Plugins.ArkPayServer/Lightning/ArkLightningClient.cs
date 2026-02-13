@@ -41,12 +41,12 @@ public class ArkLightningClient(
         CancellationToken cancellation = default)
     {
         var swaps = await swapStorage.GetSwaps(
-            walletId: walletId,
+            walletIds: [walletId],
             swapIds: swapIds,
-            swapType: swapType,
-            status: status,
-            hash: hash,
-            invoice: invoice,
+            swapTypes: swapType != null ? [swapType.Value] : null,
+            status: status != null ? [status.Value] : null,
+            hashes: hash != null ? [hash] : null,
+            invoices: invoice != null ? [invoice] : null,
             skip: skip,
             cancellationToken: cancellation);
 

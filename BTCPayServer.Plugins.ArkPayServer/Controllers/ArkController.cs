@@ -46,6 +46,7 @@ using NBitcoin;
 using NBitcoin.DataEncoders;
 using NBitcoin.Scripting;
 using NBitcoin.Secp256k1;
+using ArkIntent = NArk.Abstractions.Intents.ArkIntent;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Controllers;
 
@@ -283,6 +284,30 @@ public class ArkController(
             // Silently ignore - VTXOs section will show empty
         }
 
+        // Get recent intents (latest 5)
+        IReadOnlyCollection<ArkIntent> recentIntents = [];
+        try
+        {
+            recentIntents = await efCoreIntentStorage.GetIntents(
+                walletIds:[config.WalletId!], skip: 0, take: 5, states: [ArkIntentState.BatchInProgress, ArkIntentState.BatchSucceeded, ArkIntentState.WaitingForBatch, ArkIntentState.WaitingToSubmit], cancellationToken: cancellationToken);
+        }
+        catch (Exception)
+        {
+            // Silently ignore - intents section will show empty
+        }
+
+        // Get recent swaps (latest 5)
+        IReadOnlyCollection<NArk.Swaps.Models.ArkSwap> recentSwaps = [];
+        try
+        {
+            recentSwaps = await swapStorage.GetSwaps(
+                walletIds: [config.WalletId!], take: 5, status: [ArkSwapStatus.Pending , ArkSwapStatus.Settled], cancellationToken: cancellationToken);
+        }
+        catch (Exception)
+        {
+            // Silently ignore - swaps section will show empty
+        }
+
         return View(new StoreOverviewViewModel
         {
             StoreId = store!.Id,
@@ -314,7 +339,9 @@ public class ArkController(
             RecentVtxos = recentVtxos,
             SpendableOutpoints = spendableOutpoints,
             VtxoContracts = vtxoContracts,
-            TotalVtxoCount = totalVtxoCount
+            TotalVtxoCount = totalVtxoCount,
+            RecentIntents = recentIntents,
+            RecentSwaps = recentSwaps
         });
     }
 
@@ -1914,7 +1941,7 @@ public class ArkController(
         {
             var contractScripts = contracts.Select(c => c.Script).ToArray();
             var swaps = await swapStorage.GetSwaps(
-                walletId: config.WalletId,
+                walletIds: [config.WalletId!],
                 contractScripts: contractScripts,
                 cancellationToken: HttpContext.RequestAborted);
             contractSwaps = swaps
@@ -1977,9 +2004,9 @@ public class ArkController(
         });
 
         var swaps = await swapStorage.GetSwaps(
-            walletId: config.WalletId!,
-            status: statusFilter,
-            swapType: typeFilter,
+            walletIds: [config.WalletId!],
+            status: statusFilter != null ? [statusFilter.Value] : null,
+            swapTypes: typeFilter != null ? [typeFilter.Value] : null,
             searchText: searchText,
             skip: skip,
             take: count,
@@ -2021,7 +2048,7 @@ public class ArkController(
                 return RedirectWithError(nameof(Swaps), "Boltz client is not configured", new { storeId });
 
             var swaps = await swapStorage.GetSwaps(
-                walletId: config!.WalletId!,
+                walletIds: [config!.WalletId!],
                 swapIds: [swapId],
                 cancellationToken: HttpContext.RequestAborted);
             var swap = swaps.FirstOrDefault();
@@ -2213,19 +2240,32 @@ public class ArkController(
             _ => null
         });
 
-        var intents = await efCoreIntentStorage.GetIntentsWithPaginationAsync(
-            config.WalletId!,
-            skip,
-            count,
-            searchText,
-            stateFilter,
-            HttpContext.RequestAborted);
+        var intents = await efCoreIntentStorage.GetIntents(
+            walletIds: [config.WalletId!],
+            states: stateFilter != null ? [stateFilter.Value] : null,
+            searchText: searchText,
+            skip: skip,
+            take: count,
+            cancellationToken: HttpContext.RequestAborted);
 
-        var intentVtxos = new Dictionary<string, ArkIntentVtxo[]>();
+        // Get VTXOs referenced by intents so the view can show them
+        var intentVtxoOutpoints = new Dictionary<string, OutPoint[]>();
         if (intents.Any())
         {
-            var intentTxIds = intents.Select(i => i.IntentTxId);
-            intentVtxos = await efCoreIntentStorage.GetIntentVtxosByIntentTxIdsAsync(intentTxIds, HttpContext.RequestAborted);
+            foreach (var intent in intents)
+            {
+                if (intent.IntentVtxos.Length > 0)
+                    intentVtxoOutpoints[intent.IntentTxId] = intent.IntentVtxos;
+            }
+        }
+
+        // Fetch full VTXO data for all referenced outpoints
+        var allOutpoints = intentVtxoOutpoints.Values.SelectMany(ops => ops).Distinct().ToArray();
+        var vtxoLookup = new Dictionary<OutPoint, ArkVtxo>();
+        if (allOutpoints.Length > 0)
+        {
+            var vtxos = await vtxoStorage.GetVtxos(outpoints: allOutpoints, includeSpent: true, cancellationToken: HttpContext.RequestAborted);
+            vtxoLookup = vtxos.ToDictionary(v => v.OutPoint);
         }
 
         return View(new StoreIntentsViewModel
@@ -2236,7 +2276,8 @@ public class ArkController(
             Count = count,
             SearchText = searchText,
             Search = new SearchString(searchTerm),
-            IntentVtxos = intentVtxos
+            IntentVtxoOutpoints = intentVtxoOutpoints,
+            VtxoLookup = vtxoLookup
         });
     }
 
@@ -2466,7 +2507,7 @@ public class ArkController(
                 return RedirectWithError(nameof(Contracts), "Contract not found.", new { storeId });
 
             // Check if contract has any pending swaps
-            var swaps = await swapStorage.GetSwaps(walletId: config.WalletId, contractScripts: [script], status: ArkSwapStatus.Pending, cancellationToken: cancellationToken);
+            var swaps = await swapStorage.GetSwaps(walletIds: [config.WalletId!], contractScripts: [script], status: [ArkSwapStatus.Pending], cancellationToken: cancellationToken);
             if (swaps.Any())
                 return RedirectWithError(nameof(Contracts), "Cannot delete contract: It has pending swaps.", new { storeId });
 
@@ -2988,7 +3029,7 @@ public class ArkController(
                     var updatedCount = 0;
                     // Batch fetch all swaps at once for efficiency
                     var swapsToCheck = await swapStorage.GetSwaps(
-                        walletId: config!.WalletId!,
+                        walletIds: [config!.WalletId!],
                         swapIds: selectedItems,
                         cancellationToken: cancellationToken);
                     var swapsDict = swapsToCheck.ToDictionary(s => s.SwapId);
@@ -3118,7 +3159,7 @@ public class ArkController(
                     var updatedSwapCount = 0;
                     // Batch fetch all swaps at once for efficiency
                     var swapsForContracts = await swapStorage.GetSwaps(
-                        walletId: config!.WalletId!,
+                        walletIds: [config!.WalletId!],
                         swapIds: selectedItems,
                         cancellationToken: cancellationToken);
                     var contractSwapsDict = swapsForContracts.ToDictionary(s => s.SwapId);

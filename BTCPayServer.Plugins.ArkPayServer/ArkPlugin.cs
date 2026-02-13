@@ -196,6 +196,7 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         services.AddUIExtension("store-wallets-nav", "/Views/Ark/ArkWalletNav.cshtml");
         services.AddUIExtension("ln-payment-method-setup-tab", "/Views/Lightning/LNPaymentMethodSetupTab.cshtml");
         services.AddUIExtension("dashboard", "/Views/Ark/ArkDashboardWidget.cshtml");
+        services.AddUIExtension("dashboard", "/Views/Ark/ArkActivityDashboardWidget.cshtml");
     }
 
     private static void RegisterBoltzServices(IServiceCollection services, ArkNetworkConfig networkConfig)
@@ -232,7 +233,7 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
         // Start with preset for the network
         var preset = GetNetworkPreset(networkType);
-        if (preset is null) return null;
+        // if (preset is null) return null;
 
         // Check for config file override
         var dataDir = new DataDirectories().Configure(configuration).DataDir;

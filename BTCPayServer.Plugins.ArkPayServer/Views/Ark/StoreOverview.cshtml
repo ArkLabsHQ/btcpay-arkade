@@ -1,8 +1,13 @@
 @using BTCPayServer.Abstractions.Contracts
 @using BTCPayServer.Abstractions.Extensions
+@using BTCPayServer.Plugins.ArkPayServer.Helpers
 @using BTCPayServer.Plugins.ArkPayServer.Wallet
+@using NArk.Abstractions.Intents
+@using NArk.Swaps.Models
+@using NBitcoin
 @model BTCPayServer.Plugins.ArkPayServer.Models.StoreOverviewViewModel
 @inject IScopeProvider ScopeProvider
+@inject ArkNetworkConfig ArkNetworkConfig
 
 @{
     ViewData.SetActivePage(category: "Ark", activePage: "StoreOverview", title: "Arkade - Overview");
@@ -196,6 +201,145 @@
                     <vc:icon symbol="cross" /> Clear Wallet
                 </button>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- Recent Intents + Recent Swaps -->
+<div class="row g-4 mb-4">
+    <!-- Recent Intents -->
+    <div class="col-md-6">
+        <div class="bg-tile rounded p-3 p-sm-4 h-100">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h2 class="h5 mb-0">Recent Batches</h2>
+                <a asp-action="Intents" asp-route-storeId="@storeId" class="btn btn-sm btn-outline-secondary">
+                    View All
+                </a>
+            </div>
+            @if (Model.RecentIntents.Any())
+            {
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead>
+                            <tr>
+                                <th text-translate="true">Created</th>
+                                <th text-translate="true">State</th>
+                                <th text-translate="true">Batch ID</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var intent in Model.RecentIntents)
+                            {
+                                <tr>
+                                    <td>@intent.CreatedAt.ToTimeAgo()</td>
+                                    <td>
+                                        @switch (intent.State)
+                                        {
+                                            case ArkIntentState.WaitingToSubmit:
+                                                <span class="badge text-bg-secondary">Waiting</span>
+                                                break;
+                                            case ArkIntentState.WaitingForBatch:
+                                                <span class="badge text-bg-warning">Queued</span>
+                                                break;
+                                            case ArkIntentState.BatchInProgress:
+                                                <span class="badge text-bg-primary">In Progress</span>
+                                                break;
+                                            case ArkIntentState.BatchSucceeded:
+                                                <span class="badge text-bg-success">Succeeded</span>
+                                                break;
+                                            case ArkIntentState.BatchFailed:
+                                                <span class="badge text-bg-danger" title="@intent.CancellationReason">Failed</span>
+                                                break;
+                                            case ArkIntentState.Cancelled:
+                                                <span class="badge text-bg-dark" title="@intent.CancellationReason">Cancelled</span>
+                                                break;
+                                        }
+                                    </td>
+                                    <td>
+                                        @if (!string.IsNullOrEmpty(intent.BatchId))
+                                        {
+                                            <vc:truncate-center text="@intent.BatchId" classes="truncate-center-id"/>
+                                        }
+                                        else
+                                        {
+                                            <span class="text-muted">-</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+            else
+            {
+                <p class="text-muted text-center mb-0">No batches yet</p>
+            }
+        </div>
+    </div>
+
+    <!-- Recent Swaps -->
+    <div class="col-md-6">
+        <div class="bg-tile rounded p-3 p-sm-4 h-100">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h2 class="h5 mb-0">Recent Swaps</h2>
+                <a asp-action="Swaps" asp-route-storeId="@storeId" class="btn btn-sm btn-outline-secondary">
+                    View All
+                </a>
+            </div>
+            @if (Model.RecentSwaps.Any())
+            {
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead>
+                            <tr>
+                                <th text-translate="true">Swap ID</th>
+                                <th text-translate="true">Type</th>
+                                <th text-translate="true">Amount</th>
+                                <th text-translate="true">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var swap in Model.RecentSwaps)
+                            {
+                                var boltzSwapLink = ArkadeLinkHelper.GetSwapLink(ArkNetworkConfig, swap.SwapId);
+                                <tr>
+                                    <td>
+                                        <vc:truncate-center text="@swap.SwapId" link="@boltzSwapLink" classes="truncate-center-id"/>
+                                    </td>
+                                    <td>
+                                        @if (swap.SwapType == ArkSwapType.ReverseSubmarine)
+                                        {
+                                            <span class="badge text-bg-primary">Reverse</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge text-bg-info">Submarine</span>
+                                        }
+                                    </td>
+                                    <td>@Money.Satoshis(swap.ExpectedAmount).ToDecimal(MoneyUnit.BTC) BTC</td>
+                                    <td>
+                                        @{
+                                            var swapBadge = swap.Status switch
+                                            {
+                                                ArkSwapStatus.Pending => "text-bg-info",
+                                                ArkSwapStatus.Settled => "text-bg-success",
+                                                ArkSwapStatus.Failed => "text-bg-danger",
+                                                _ => "text-bg-warning"
+                                            };
+                                        }
+                                        <span class="badge @swapBadge">@Enum.GetName(typeof(ArkSwapStatus), swap.Status)</span>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+            else
+            {
+                <p class="text-muted text-center mb-0">No swaps yet</p>
+            }
         </div>
     </div>
 </div>

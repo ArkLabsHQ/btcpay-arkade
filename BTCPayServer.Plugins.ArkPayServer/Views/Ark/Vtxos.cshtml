@@ -197,7 +197,7 @@
                                 }
                                 @if (!vtxo.Preconfirmed)
                                 {
-                                    <span class="badge text-bg-light ms-1">Bitcoin finality</span>
+                                    <span class="badge text-bg-light ms-1">Settled</span>
                                 }
                                 @if (vtxo.Unrolled)
                                 {
@@ -205,6 +205,10 @@
                                 }
                             </td>
                             <td class="align-middle">
+                                @if(!vtxo.IsSpent()){
+                                <span class="badge text-bg-info ms-1">Unspent</span>
+                                }
+                                
                                 @if (!string.IsNullOrEmpty(vtxo.SpentByTransactionId))
                                 {
                                     var spentByLink = ArkadeLinkHelper.GetTransactionLink(ArkNetworkConfig, vtxo.SpentByTransactionId);
@@ -213,7 +217,7 @@
                                 }
                                 @if (!string.IsNullOrEmpty(vtxo.SettledByTransactionId))
                                 {
-                                    var settledByLink = ArkadeLinkHelper.GetTransactionLink(ArkNetworkConfig, vtxo.SettledByTransactionId);
+                                    var settledByLink = ArkadeLinkHelper.GetCommitmentTransactionLink(ArkNetworkConfig, vtxo.SettledByTransactionId);
                                     <span class="text-muted small">Settled:</span>
                                     <vc:truncate-center link="@settledByLink" text="@vtxo.SettledByTransactionId"
                                                         classes="truncate-center-id"/>

@@ -96,6 +96,7 @@ public class EfCoreIntentStorage : IIntentStorage
         OutPoint[]? containingInputs = null,
         ArkIntentState[]? states = null,
         DateTimeOffset? validAt = null,
+        string? searchText = null,
         int? skip = null,
         int? take = null,
         CancellationToken cancellationToken = default)
@@ -136,6 +137,15 @@ public class EfCoreIntentStorage : IIntentStorage
             query = query.Where(i =>
                 (i.ValidFrom == null || i.ValidFrom <= validAt.Value) &&
                 (i.ValidUntil == null || i.ValidUntil >= validAt.Value));
+        }
+
+        // Search text across IDs
+        if (!string.IsNullOrEmpty(searchText))
+        {
+            query = query.Where(i =>
+                (i.IntentId != null && i.IntentId.Contains(searchText)) ||
+                (i.BatchId != null && i.BatchId.Contains(searchText)) ||
+                (i.CommitmentTransactionId != null && i.CommitmentTransactionId.Contains(searchText)));
         }
 
         // Order by creation date for consistent pagination
@@ -214,65 +224,4 @@ public class EfCoreIntentStorage : IIntentStorage
         );
     }
 
-    #region Plugin-specific methods (for views that need plugin entities)
-
-    /// <summary>
-    /// Gets intent VTXOs grouped by IntentTxId.
-    /// Used by Intents view to display VTXOs associated with each intent.
-    /// </summary>
-    public async Task<Dictionary<string, ArkIntentVtxo[]>> GetIntentVtxosByIntentTxIdsAsync(
-        IEnumerable<string> intentTxIds,
-        CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        var idSet = intentTxIds.ToHashSet();
-        var vtxos = await db.IntentVtxos
-            .Include(iv => iv.Vtxo)
-            .Where(iv => idSet.Contains(iv.IntentTxId))
-            .ToArrayAsync(cancellationToken);
-
-        return vtxos
-            .GroupBy(iv => iv.IntentTxId)
-            .ToDictionary(g => g.Key, g => g.ToArray());
-    }
-
-    /// <summary>
-    /// Gets intents with pagination and optional filtering.
-    /// Returns plugin entities for use in views that display intent details.
-    /// </summary>
-    public async Task<IReadOnlyList<PluginArkIntent>> GetIntentsWithPaginationAsync(
-        string walletId,
-        int skip = 0,
-        int count = 10,
-        string? searchText = null,
-        ArkIntentState? state = null,
-        CancellationToken cancellationToken = default)
-    {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        var query = db.Intents.Where(i => i.WalletId == walletId);
-
-        if (!string.IsNullOrEmpty(searchText))
-        {
-            query = query.Where(i =>
-                (i.IntentId != null && i.IntentId.Contains(searchText)) ||
-                (i.BatchId != null && i.BatchId.Contains(searchText)) ||
-                (i.CommitmentTransactionId != null && i.CommitmentTransactionId.Contains(searchText)));
-        }
-
-        if (state.HasValue)
-        {
-            query = query.Where(i => i.State == state.Value);
-        }
-
-        return await query
-            .OrderByDescending(i => i.CreatedAt)
-            .Skip(skip)
-            .Take(count)
-            .AsNoTracking()
-            .ToListAsync(cancellationToken);
-    }
-
-    #endregion
 }
