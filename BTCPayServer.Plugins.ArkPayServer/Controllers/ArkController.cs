@@ -79,7 +79,8 @@ public class ArkController(
     IVtxoStorage vtxoStorage,
     EfCoreIntentStorage efCoreIntentStorage,
     EfCoreWalletStorage walletStorage,
-    IHttpClientFactory httpClientFactory) : Controller
+    IHttpClientFactory httpClientFactory,
+    AssetMetadataService assetMetadataService) : Controller
 {
     [HttpGet("stores/{storeId}/initial-setup")]
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
@@ -1663,7 +1664,13 @@ public class ArkController(
                 }
             }
 
-            arkOutputs.Add(new ArkTxOut(outputType, outputAmount, dest));
+            var arkOut = new ArkTxOut(outputType, outputAmount, dest)
+            {
+                Assets = !string.IsNullOrEmpty(output.AssetId) && output.AssetAmount > 0
+                    ? [new ArkTxOutAsset(output.AssetId, output.AssetAmount)]
+                    : null
+            };
+            arkOutputs.Add(arkOut);
         }
 
         if (model.Errors.Any())
@@ -2743,12 +2750,34 @@ public class ArkController(
             .Where(coin => lockedSet.Contains(coin.Outpoint))
             .Sum(coin => coin.Amount.Satoshi);
 
+        // Aggregate asset balances from available (non-locked, non-recoverable) coins
+        var assetTotals = new Dictionary<string, ulong>();
+        foreach (var coin in coinsByRecoverableStatus[false])
+        {
+            if (lockedSet.Contains(coin.Outpoint)) continue;
+            if (coin.Assets is not { Count: > 0 }) continue;
+            foreach (var asset in coin.Assets)
+                assetTotals[asset.AssetId] = assetTotals.GetValueOrDefault(asset.AssetId) + asset.Amount;
+        }
+
         return new ArkBalancesViewModel
         {
             AvailableBalance = availableBalance - lockedBalance,
             LockedBalance = lockedBalance,
             RecoverableBalance = recoverableBalance,
             UnspendableBalance = unspendableBalance,
+            AssetBalances = await Task.WhenAll(assetTotals.Select(async kv =>
+            {
+                var details = await assetMetadataService.GetAssetDetailsAsync(kv.Key, cancellationToken);
+                return new AssetBalanceViewModel
+                {
+                    AssetId = kv.Key,
+                    Amount = kv.Value,
+                    Name = assetMetadataService.GetName(details),
+                    Ticker = assetMetadataService.GetTicker(details),
+                    Decimals = assetMetadataService.GetDecimals(details),
+                };
+            })).ContinueWith(t => t.Result.ToList(), cancellationToken),
         };
     }
 

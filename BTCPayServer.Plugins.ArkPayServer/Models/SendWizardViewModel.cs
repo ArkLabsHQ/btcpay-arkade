@@ -1,3 +1,4 @@
+using NArk.Abstractions;
 using NArk.Abstractions.VTXOs;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Models;
@@ -27,6 +28,9 @@ public class SendWizardViewModel
 
     // Balance summary
     public ArkBalancesViewModel? Balances { get; set; }
+
+    // Available assets for the asset selector dropdown
+    public List<AssetBalanceViewModel> AvailableAssets => Balances?.AssetBalances ?? [];
 
     // Fee estimation
     public long? EstimatedFeeSats { get; set; }
@@ -69,6 +73,10 @@ public class SendOutputViewModel
     public bool IsLightning { get; set; }
     public decimal FeePercentage { get; set; }
     public long MinerFeeSats { get; set; }
+
+    // Asset fields (optional — only used when sending assets)
+    public string? AssetId { get; set; }
+    public ulong AssetAmount { get; set; }
 
     // Payout tracking
     public string? PayoutId { get; set; }

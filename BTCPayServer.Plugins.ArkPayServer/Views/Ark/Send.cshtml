@@ -195,6 +195,33 @@ else
                                     </button>
                                 </div>
                             </div>
+                            @if (Model.AvailableAssets.Count > 0)
+                            {
+                                <div class="row g-3 mt-1">
+                                    <div class="col-12 col-md-5">
+                                        <label class="form-label text-muted small">Asset (optional)</label>
+                                        <select name="Outputs[@i].AssetId" class="form-select form-select-sm asset-select" data-index="@i">
+                                            <option value="">None (BTC only)</option>
+                                            @foreach (var asset in Model.AvailableAssets)
+                                            {
+                                                <option value="@asset.AssetId" selected="@(output.AssetId == asset.AssetId)">
+                                                    @asset.DisplayName (@asset.Amount available)
+                                                </option>
+                                            }
+                                        </select>
+                                    </div>
+                                    <div class="col-12 col-md-5 asset-amount-col" style="@(string.IsNullOrEmpty(output.AssetId) ? "display:none" : "")">
+                                        <label class="form-label text-muted small">Asset Amount</label>
+                                        <input type="number"
+                                               name="Outputs[@i].AssetAmount"
+                                               value="@(output.AssetAmount > 0 ? output.AssetAmount.ToString() : "")"
+                                               class="form-control form-control-sm asset-amount-input"
+                                               placeholder="0"
+                                               min="1"
+                                               data-index="@i" />
+                                    </div>
+                                </div>
+                            }
                             <input type="hidden" name="Outputs[@i].PayoutId" value="@output.PayoutId" />
                             <input type="hidden" name="Outputs[@i].IsReadonly" value="@output.IsReadonly.ToString().ToLower()" />
                             <input type="hidden" name="Outputs[@i].IsBip21Parsed" value="@output.IsBip21Parsed.ToString().ToLower()" />
@@ -1384,6 +1411,17 @@ else
                     autoSelectCoins(totalNeeded);
                 }
                 handleCoinSelectionChange();
+            }
+        });
+
+        // Asset selector show/hide
+        outputsContainer?.addEventListener('change', function(e) {
+            if (e.target.classList.contains('asset-select')) {
+                const row = e.target.closest('.output-row');
+                const amountCol = row?.querySelector('.asset-amount-col');
+                if (amountCol) {
+                    amountCol.style.display = e.target.value ? '' : 'none';
+                }
             }
         });
 

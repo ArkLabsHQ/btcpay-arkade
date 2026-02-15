@@ -175,6 +175,7 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
     private static void RegisterPluginServices(IServiceCollection services)
     {
         services.AddSingleton<ArkadeSpendingService>();
+        services.AddSingleton<AssetMetadataService>();
 
         services.AddSingleton<ISweepPolicy, DestinationSweepPolicy>();
 

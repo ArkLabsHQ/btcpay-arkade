@@ -101,6 +101,14 @@
                         }
                         <td class="text-end">
                             <span class="font-monospace small" data-sensitive>@Money.Satoshis((long)vtxo.Amount).ToDecimal(MoneyUnit.BTC) BTC</span>
+                            @if (vtxo.Assets is { Count: > 0 })
+                            {
+                                @foreach (var asset in vtxo.Assets)
+                                {
+                                    var shortId = asset.AssetId.Length > 12 ? $"{asset.AssetId[..6]}…{asset.AssetId[^6..]}" : asset.AssetId;
+                                    <br/><span class="badge bg-info-subtle text-info-emphasis small" title="@asset.AssetId">@shortId: @asset.Amount</span>
+                                }
+                            }
                         </td>
                         <td class="text-end">
                             @if (vtxo.ExpiresAt.HasValue)
