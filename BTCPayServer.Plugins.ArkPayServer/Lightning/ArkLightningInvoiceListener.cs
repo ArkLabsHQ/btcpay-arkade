@@ -1,51 +1,87 @@
 using System.Threading.Channels;
 using BTCPayServer.Lightning;
-using BTCPayServer.Plugins.ArkPayServer.Lightning.Events;
 using Microsoft.Extensions.Logging;
+using NArk.Abstractions.Contracts;
+using NArk.Swaps.Abstractions;
+using NArk.Swaps.Models;
 using NBitcoin;
-using NBXplorer;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Lightning;
 
-public class ArkLightningInvoiceListener : ILightningInvoiceListener 
+public class ArkLightningInvoiceListener : ILightningInvoiceListener
 {
     private readonly string _walletId;
     private readonly ILogger<ArkLightningInvoiceListener> _logger;
     private readonly Network _network;
     private readonly CancellationToken _cancellationToken;
-    
+    private readonly ISwapStorage _swapStorage;
+    private readonly IContractStorage _contractStorage;
+    private readonly Func<ArkSwap, ArkContractEntity?, Network, LightningInvoice> _mapFunc;
+
     private readonly Channel<LightningInvoice> _paidInvoicesChannel = Channel.CreateUnbounded<LightningInvoice>();
-    private readonly CompositeDisposable _leases = new();
-    
+
     public ArkLightningInvoiceListener(
         string walletId,
         ILogger<ArkLightningInvoiceListener> logger,
-        EventAggregator eventAggregator,
+        ISwapStorage swapStorage,
+        IContractStorage contractStorage,
         Network network,
-        CancellationToken cancellationToken) 
+        Func<ArkSwap, ArkContractEntity?, Network, LightningInvoice> mapFunc,
+        CancellationToken cancellationToken)
     {
         _walletId = walletId;
         _logger = logger;
         _network = network;
         _cancellationToken = cancellationToken;
-        
-        _leases.Add(eventAggregator.SubscribeAsync<ArkSwapUpdated>(OnInvoicePaid));
+        _swapStorage = swapStorage;
+        _contractStorage = contractStorage;
+        _mapFunc = mapFunc;
+
+        // Subscribe to NNark's swap storage events directly
+        _swapStorage.SwapsChanged += OnSwapChanged;
     }
 
-    private async Task OnInvoicePaid(ArkSwapUpdated e)
+    private async void OnSwapChanged(object? sender, ArkSwap swap)
     {
-        if(e.Swap.WalletId != _walletId)
-            return;
-        var invoice = ArkLightningClient.Map(e.Swap, _network);
-        if(invoice.Status != LightningInvoiceStatus.Paid)
-            return;
-        await _paidInvoicesChannel.Writer.WriteAsync(invoice, _cancellationToken);
+        try
+        {
+            // Only process swaps for this wallet that are settled (reverse swaps = receiving)
+            if (swap.WalletId != _walletId)
+                return;
+
+            if (swap.Status != ArkSwapStatus.Settled)
+                return;
+
+            if (swap.SwapType != ArkSwapType.ReverseSubmarine)
+                return;
+
+            // Fetch the contract data for mapping
+            ArkContractEntity? contract = null;
+            if (!string.IsNullOrEmpty(swap.ContractScript))
+            {
+                var contracts = await _contractStorage.GetContracts(
+                    walletIds: [_walletId],
+                    scripts: [swap.ContractScript],
+                    cancellationToken: _cancellationToken);
+                contract = contracts.FirstOrDefault();
+            }
+
+            var invoice = _mapFunc(swap, contract, _network);
+            if (invoice.Status != LightningInvoiceStatus.Paid)
+                return;
+
+            await _paidInvoicesChannel.Writer.WriteAsync(invoice, _cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error processing swap change for {SwapId}", swap.SwapId);
+        }
     }
 
     public async Task<LightningInvoice?> WaitInvoice(CancellationToken cancellation)
     {
         using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(_cancellationToken, cancellation);
-        
+
         try
         {
             // Wait for a paid invoice from the channel
@@ -70,7 +106,7 @@ public class ArkLightningInvoiceListener : ILightningInvoiceListener
     }
     public void Dispose()
     {
-        _leases.Dispose();
+        _swapStorage.SwapsChanged -= OnSwapChanged;
         _paidInvoicesChannel.Writer.Complete();
     }
 }

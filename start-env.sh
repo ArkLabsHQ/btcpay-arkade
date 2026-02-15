@@ -61,6 +61,26 @@ setup_lnd_wallet() {
   log "✓ LND wallet setup completed successfully!"
 }
 
+setup_arkd_fees() {
+  log "Configuring arkd intent fees..."
+
+  # Set fees via admin API (port 7071, internal to container)
+  local fee_response
+  fee_response=$(docker exec ark wget -qO- \
+    --post-data='{"fees":{"offchainInputFee":"amount * 0.01","onchainInputFee":"amount * 0.01","offchainOutputFee":"0.0","onchainOutputFee":"250.0"}}' \
+    --header="Content-Type: application/json" \
+    http://localhost:7071/v1/admin/intentFees 2>&1) || {
+    log "WARNING: Failed to set arkd fees (admin port may not be available)"
+    return 0
+  }
+
+  # Verify
+  local verify
+  verify=$(docker exec ark wget -qO- http://localhost:7071/v1/admin/intentFees 2>&1)
+  log "arkd fees configured: $verify"
+  log "✓ arkd intent fees set (1% input fee, 250 sat onchain output fee)"
+}
+
 setup_fulmine_wallet() {
   log "Setting up Fulmine wallet..."
   
@@ -174,13 +194,13 @@ if [ ! -f "$NIGIRI" ]; then
   # Clone or update the repo
   if [ ! -d "$NIGIRI_REPO" ]; then
     log "Cloning nigiri repository..."
-    git clone https://github.com/Kukks/nigiri.git -b b8 "$NIGIRI_REPO"
+    git clone https://github.com/vulpemventures/nigiri.git "$NIGIRI_REPO"
   else
     log "Nigiri repo exists, pulling latest changes..."
     cd "$NIGIRI_REPO"
     git fetch origin
-    git checkout b8
-    git pull origin b8
+    git checkout master
+    git pull origin master
     cd "$SCRIPT_DIR"
   fi
   
@@ -201,8 +221,8 @@ elif [ "$CLEAN" = true ]; then
   log "Nigiri found but clean flag set. Rebuilding..."
   cd "$NIGIRI_REPO"
   git fetch origin
-  git checkout b8
-  git pull origin b8
+  git checkout master
+  git pull origin master
   make install
   make build
   cd "$SCRIPT_DIR"
@@ -219,6 +239,10 @@ if [ "$CLEAN" = true ]; then
   $NIGIRI stop --delete
 
  fi
+
+log "Pulling latest Nigiri images..."
+$NIGIRI update || log "Nigiri update failed, continuing with existing images..."
+
 log "Starting Nigiri with Ark support..."
 # Start nigiri, but don't fail if it's already running
 
@@ -232,7 +256,7 @@ $NIGIRI start --ark || {
 }
 
 # Use docker-compose.ark.yml for custom ark configuration
-log "Pulling latest images..."
+log "Pulling latest custom Ark stack images..."
 docker compose -f docker-compose.ark.yml pull
 
 log "Starting ark stack with docker-compose.ark.yml..."
@@ -261,10 +285,13 @@ if [ $attempt -gt $max_attempts ]; then
   exit 1
 fi
 
+# Configure arkd fees before wallet setup
+setup_arkd_fees
+
 # this is technically already handled in nigiri start
-$NIGIRI ark init  --password secret --server-url localhost:7070 --explorer http://chopsticks:3000
-$NIGIRI faucet $($NIGIRI ark receive | jq -r ".onchain_address") 2
-$NIGIRI ark redeem-notes -n $($NIGIRI arkd note --amount 100000000) --password secret
+nigiri ark init  --password secret --server-url localhost:7070 --explorer http://chopsticks:3000
+nigiri faucet $(nigiri ark receive | jq -r ".onchain_address") 2
+nigiri ark redeem-notes -n $(nigiri arkd note --amount 100000000) --password secret
 
 # 7. Setup Fulmine wallet
 setup_fulmine_wallet

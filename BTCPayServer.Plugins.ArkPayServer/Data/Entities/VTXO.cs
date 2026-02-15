@@ -1,4 +1,6 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using NArk.Abstractions.VTXOs;
 using NBitcoin;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Data.Entities;
@@ -16,6 +18,12 @@ public class VTXO
     // public DateTimeOffset? SpentAt { get; set; }
     public bool Recoverable { get; set; }
     public DateTimeOffset ExpiresAt { get; set; }
+    public uint? ExpiresAtHeight { get; set; }
+    public bool Preconfirmed { get; set; }
+    public bool Unrolled { get; set; }
+    public string? CommitmentTxids { get; set; }
+    public string? ArkTxid { get; set; }
+    public string? AssetsJson { get; set; }
 
     public virtual ICollection<ArkIntentVtxo> IntentVtxos { get; set; } = null!;
 
@@ -31,6 +39,36 @@ public class VTXO
         return !string.IsNullOrEmpty(SpentByTransactionId) || !string.IsNullOrEmpty(SettledByTransactionId);
     }
 
+    public ArkVtxo ToArkVtxo()
+    {
+        return new ArkVtxo(
+            Script: Script,
+            TransactionId: TransactionId,
+            TransactionOutputIndex: (uint)TransactionOutputIndex,
+            Amount: (ulong)Amount,
+            SpentByTransactionId: SpentByTransactionId,
+            SettledByTransactionId: SettledByTransactionId,
+            Swept: Recoverable,
+            CreatedAt: SeenAt,
+            ExpiresAt: ExpiresAt == DateTimeOffset.MaxValue ? null : ExpiresAt,
+            ExpiresAtHeight: ExpiresAtHeight,
+            Preconfirmed: Preconfirmed,
+            Unrolled: Unrolled,
+            CommitmentTxids: string.IsNullOrEmpty(CommitmentTxids) ? null : JsonSerializer.Deserialize<List<string>>(CommitmentTxids),
+            ArkTxid: ArkTxid,
+            Assets: DeserializeAssets(AssetsJson)
+        );
+    }
+
+    private static IReadOnlyList<VtxoAsset>? DeserializeAssets(string? json)
+    {
+        if (string.IsNullOrEmpty(json)) return null;
+        var items = JsonSerializer.Deserialize<List<VtxoAssetDto>>(json);
+        return items?.Select(a => new VtxoAsset(a.AssetId, a.Amount)).ToList();
+    }
+
+    private record VtxoAssetDto(string AssetId, ulong Amount);
+
     public override int GetHashCode()
     {
         // Hash all properties to detect changes
@@ -44,6 +82,11 @@ public class VTXO
         hash.Add(SpentByTransactionId);
         hash.Add(Script);
         hash.Add(SettledByTransactionId);
+        hash.Add(Preconfirmed);
+        hash.Add(Unrolled);
+        hash.Add(CommitmentTxids);
+        hash.Add(ArkTxid);
+        hash.Add(AssetsJson);
         return hash.ToHashCode();
     }
     

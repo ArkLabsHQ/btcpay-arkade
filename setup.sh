@@ -3,7 +3,6 @@
 ROOT_DIR=$(pwd)
 PLUGIN_DIR="BTCPayServer.Plugins.ArkPayServer"
 OUTPUT_DIR="$ROOT_DIR/$PLUGIN_DIR/bin/Debug/net8.0"
-PROJECTS=("NArk" "NArk.Grpc")
 
 # Remove old build artifacts
 if [ -d "$OUTPUT_DIR" ]; then
@@ -26,15 +25,7 @@ if [ ! -f "$APPSETTINGS" ]; then
   echo '{ "DEBUG_PLUGINS": "../../../BTCPayServer.Plugins.ArkPayServer/bin/Debug/net8.0/BTCPayServer.Plugins.ArkPayServer.dll" }' > "$APPSETTINGS"
 fi
 
-publish_project() {
-  local dir="$1"
-  echo "Publishing $dir..."
-  dotnet publish "$dir" -c Debug -o "$OUTPUT_DIR"
-}
-
-publish_project "$PLUGIN_DIR"
-for project in "${PROJECTS[@]}"; do
-  publish_project "$project"
-done
+echo "Publishing plugin (includes NNark dependencies)..."
+dotnet publish "$PLUGIN_DIR" -c Debug -o "$OUTPUT_DIR"
 
 echo "✅ Setup complete."

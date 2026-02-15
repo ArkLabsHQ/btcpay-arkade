@@ -1,16 +1,14 @@
-using BTCPayServer.Models;
-using BTCPayServer.Plugins.ArkPayServer.Data;
-using BTCPayServer.Services;
+using NArk.Abstractions.Intents;
+using NArk.Abstractions.VTXOs;
+using NBitcoin;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Models;
 
-public class StoreIntentsViewModel : BasePagingViewModel
+public class StoreIntentsViewModel : StoreCollectionViewModelBase
 {
     public IReadOnlyCollection<ArkIntent> Intents { get; set; } = [];
-    public Dictionary<int, ArkIntentVtxo[]> IntentVtxos { get; set; } = new();
-    public SearchString Search { get; set; } = new(null);
-    public string? SearchText { get; set; }
-    public string StoreId { get; set; }
+    public Dictionary<string, OutPoint[]> IntentVtxoOutpoints { get; set; } = new();
+    public Dictionary<OutPoint, ArkVtxo> VtxoLookup { get; set; } = new();
 
     public override int CurrentPageCount => Intents.Count;
 }

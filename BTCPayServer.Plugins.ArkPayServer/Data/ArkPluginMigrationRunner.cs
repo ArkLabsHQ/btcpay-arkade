@@ -1,4 +1,5 @@
 ﻿using BTCPayServer.Abstractions.Contracts;
+using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
@@ -12,6 +13,7 @@ public class ArkPluginMigrationRunner(
     private class ArkPluginDataMigrationHistory
     {
         public bool InitialSetup { get; set; }
+        public bool NNArkMigration { get; set; }
     }
 
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
@@ -35,6 +37,21 @@ public class ArkPluginMigrationRunner(
         {
             settings.InitialSetup = true;
             await settingsRepository.UpdateSetting(settings);
+        }
+        if (!settings.NNArkMigration)
+        {
+            var wallets = await ctx.Wallets.Where(wallet => wallet.AccountDescriptor == "TODO_MIGRATION")
+                .ToListAsync(cancellationToken: cancellationToken);
+            foreach (var wallet in wallets)
+            {
+                wallet.AccountDescriptor =
+                    WalletFactory.GetOutputDescriptorFromNsec(wallet.Wallet);
+            }
+            var result = await ctx.SaveChangesAsync(cancellationToken: cancellationToken);
+            
+            settings.NNArkMigration = true;
+            await settingsRepository.UpdateSetting(settings);
+            logger.LogInformation("Migrated {Count} wallets", result);
         }
     }
 }

@@ -87,7 +87,7 @@ services:
       - '10009:10009'
 
   boltz-fulmine:
-    image: ghcr.io/arklabshq/fulmine:v0.3.0-rc.3
+    image: ghcr.io/arklabshq/fulmine:v0.3.13
     container_name: boltz-fulmine
     environment:
       - FULMINE_ARK_SERVER=http://ark:7070
@@ -108,8 +108,19 @@ services:
       - boltz_lnd_datadir:/root/.lnd
     restart: unless-stopped
 
+  nginx-boltz:
+    image: nginx:alpine
+    container_name: nginx-boltz
+    restart: unless-stopped
+    ports:
+      - '9069:9069'
+    volumes:
+      - ./cors.nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - boltz
+
   boltz:
-    image: boltz/boltz:ark
+    image: boltz/boltz:latest
     container_name: boltz
     restart: unless-stopped
     ports:
@@ -125,6 +136,8 @@ services:
         [ark]
         host = "boltz-fulmine"
         port = 7000
+        useLocktimeSeconds = true
+
 
         [api]
         host = "0.0.0.0"
@@ -162,8 +175,8 @@ services:
         base = "ARK"
         quote = "BTC"
         rate = 1
-        fee = 0
-        swapInFee = 0.00
+        fee = 0.5
+        swapInFee = 0.1
         maxSwapAmount = 4294967
         minSwapAmount = 1000
 

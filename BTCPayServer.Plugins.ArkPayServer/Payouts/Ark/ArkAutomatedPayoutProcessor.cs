@@ -1,18 +1,15 @@
 using BTCPayServer.Abstractions.Contracts;
-using BTCPayServer.Client;
 using BTCPayServer.Client.Models;
-using BTCPayServer.Common;
 using BTCPayServer.Data;
-using BTCPayServer.Payments;
 using BTCPayServer.PayoutProcessors;
 using BTCPayServer.Payouts;
-using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Services;
 using BTCPayServer.Services;
 using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Stores;
 using Microsoft.Extensions.Logging;
-using NArk.Services.Abstractions;
+using NArk.Abstractions.Wallets;
+using NArk.Core.Transport;
 using NBitcoin;
 using PayoutData = BTCPayServer.Data.PayoutData;
 using PayoutProcessorData = BTCPayServer.Data.PayoutProcessorData;
@@ -21,14 +18,13 @@ namespace BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
 
 public class ArkAutomatedPayoutProcessor: BaseAutomatedPayoutProcessor<ArkAutomatedPayoutBlob>
 {
-    private readonly IOperatorTermsService _operatorTermsService;
+    private readonly IClientTransport _clientTransport;
     private readonly ArkadeSpendingService _arkSpendingService;
     private readonly PayoutMethodHandlerDictionary _payoutMethodHandlers;
     private readonly BTCPayNetworkJsonSerializerSettings _jsonSerializerSettings;
-    private readonly IArkadeMultiWalletSigner _arkadeMultiWalletSigner;
 
     public ArkAutomatedPayoutProcessor(
-        IOperatorTermsService operatorTermsService,
+        IClientTransport clientTransport,
         ILoggerFactory logger,
         StoreRepository storeRepository,
         PayoutProcessorData payoutProcessorSettings,
@@ -39,32 +35,24 @@ public class ArkAutomatedPayoutProcessor: BaseAutomatedPayoutProcessor<ArkAutoma
         ArkadeSpendingService arkSpendingService,
         PayoutMethodHandlerDictionary payoutMethodHandlers,
         BTCPayNetworkJsonSerializerSettings jsonSerializerSettings,
-        IArkadeMultiWalletSigner arkadeMultiWalletSigner
+        IWalletProvider walletProvider
     ) 
         : base(ArkadePlugin.ArkadePaymentMethodId, logger, storeRepository, payoutProcessorSettings, applicationDbContextFactory, paymentHandlers, pluginHookService, eventAggregator)
     {
-        _operatorTermsService = operatorTermsService;
+        _clientTransport = clientTransport;
         _arkSpendingService = arkSpendingService;
         _payoutMethodHandlers = payoutMethodHandlers;
         _jsonSerializerSettings = jsonSerializerSettings;
-        _arkadeMultiWalletSigner = arkadeMultiWalletSigner;
     }
 
     protected override async Task Process(object paymentMethodConfig, List<PayoutData> payouts)
     {
         var payoutHandler = (ArkPayoutHandler)_payoutMethodHandlers[ArkadePlugin.ArkadePayoutMethodId];
         
-        var arkPaymentMethodConfig = (ArkadePaymentMethodConfig)paymentMethodConfig;
-        
-        var terms = await _operatorTermsService.GetOperatorTerms();
+        var terms = await _clientTransport.GetServerInfoAsync();
 
         var storeData = await _storeRepository.FindStore(PayoutProcessorSettings.StoreId) ??
             throw new InvalidOperationException("Could not find store by StoreId");
-
-        if (!await _arkadeMultiWalletSigner.CanHandle(arkPaymentMethodConfig.WalletId))
-        {
-            return;
-        }
         
         foreach (var payout in payouts)
         {

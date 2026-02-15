@@ -1,0 +1,251 @@
+@using BTCPayServer.Abstractions.Extensions
+@using BTCPayServer.Plugins.ArkPayServer.Models
+@using BTCPayServer.Services
+@model Send2ViewModel
+@inject DisplayFormatter DisplayFormatter
+
+@{
+    ViewData.SetActivePage(category: "Ark", activePage: "Send2", title: "Ark - Send");
+}
+
+<div class="sticky-header">
+    <h2>
+        <span>@ViewData["Title"]</span>
+    </h2>
+    @if (Model.SpendableCoinsCount > 0)
+    {
+        <div class="text-muted">
+            <span data-sensitive>Available: <strong>@DisplayFormatter.Currency(Model.AvailableBalanceBtc, "BTC")</strong> (@Model.SpendableCoinsCount coin@(Model.SpendableCoinsCount != 1 ? "s" : ""))</span>
+        </div>
+    }
+</div>
+
+<partial name="_StatusMessage" />
+
+@if (Model.Errors.Any())
+{
+    <div class="alert alert-danger">
+        <ul class="mb-0">
+            @foreach (var error in Model.Errors)
+            {
+                <li>@error</li>
+            }
+        </ul>
+    </div>
+}
+
+@if (Model.SpendableCoinsCount == 0)
+{
+    <div class="alert alert-warning text-center">
+        <p class="mb-0">No spendable coins available. Receive some funds first.</p>
+    </div>
+    <div class="text-center mt-3">
+        <a asp-action="StoreOverview" asp-route-storeId="@Model.StoreId" class="btn btn-secondary">
+            Back to Overview
+        </a>
+    </div>
+}
+else
+{
+    <!-- Destinations List -->
+    @if (Model.Destinations.Any())
+    {
+        <div class="list-group list-group-flush mb-4">
+            @foreach (var dest in Model.Destinations)
+            {
+                <div class="list-group-item d-block px-0 py-3">
+                    <div class="d-flex align-items-start justify-content-between">
+                        <div class="flex-grow-1">
+                            <div class="d-flex align-items-center gap-2 mb-1">
+                                <span class="badge @dest.TypeBadgeClass">@dest.TypeBadge</span>
+                                @if (!dest.IsValid)
+                                {
+                                    <span class="badge bg-danger">Invalid</span>
+                                }
+                            </div>
+                            <div class="font-monospace text-break small mb-1">
+                                @(dest.ResolvedAddress ?? dest.RawDestination)
+                            </div>
+                            @if (!string.IsNullOrEmpty(dest.Error))
+                            {
+                                <span class="text-danger small">@dest.Error</span>
+                            }
+                        </div>
+                        <div class="text-end ms-3">
+                            <div class="fw-semibold" data-sensitive>@DisplayFormatter.Currency(dest.AmountBtc, "BTC")</div>
+                            @if (dest.FeeSats > 0)
+                            {
+                                <div class="text-muted small" data-sensitive>+@DisplayFormatter.Currency(dest.FeeBtc, "BTC") fee</div>
+                            }
+                        </div>
+                        <form method="post" asp-action="Send2Remove" asp-route-storeId="@Model.StoreId" class="ms-3">
+                            <input type="hidden" name="SerializedDestinations" value="@Model.SerializedDestinations" />
+                            <input type="hidden" name="MultipleDestinationsMode" value="@Model.MultipleDestinationsMode" />
+                            <input type="hidden" name="removeIndex" value="@dest.Index" />
+                            <button type="submit" class="btn btn-link text-danger p-0" title="Remove">
+                                <vc:icon symbol="cross" /> Remove
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            }
+        </div>
+
+        <!-- Totals Summary -->
+        <div class="bg-tile rounded p-3 mb-4">
+            <div class="d-flex justify-content-between mb-1">
+                <span>Amount</span>
+                <span data-sensitive>@DisplayFormatter.Currency(Model.TotalSendingBtc, "BTC")</span>
+            </div>
+            <div class="d-flex justify-content-between text-muted mb-1">
+                <span>Fees</span>
+                <span data-sensitive>+@DisplayFormatter.Currency(Model.TotalFeesBtc, "BTC")</span>
+            </div>
+            <hr class="my-2" />
+            <div class="d-flex justify-content-between fw-semibold">
+                <span>Total</span>
+                <span class="@(Model.RemainingSats < 0 ? "text-danger" : "")" data-sensitive>@DisplayFormatter.Currency(Model.GrandTotalBtc, "BTC")</span>
+            </div>
+            @if (Model.RemainingSats >= 0)
+            {
+                <div class="d-flex justify-content-between text-muted small mt-1">
+                    <span>Remaining</span>
+                    <span data-sensitive>@DisplayFormatter.Currency(Model.RemainingBtc, "BTC")</span>
+                </div>
+            }
+        </div>
+    }
+
+    <!-- Add Destination Form -->
+    @if (!Model.Destinations.Any() || Model.MultipleDestinationsMode)
+    {
+        <form method="post" asp-action="Send2Add" asp-route-storeId="@Model.StoreId" class="mb-4">
+            <input type="hidden" name="SerializedDestinations" value="@Model.SerializedDestinations" />
+            <input type="hidden" name="MultipleDestinationsMode" value="@Model.MultipleDestinationsMode" />
+
+            <div class="form-group mb-3">
+                <label class="form-label">Destination</label>
+                <div class="input-group">
+                    <input type="text"
+                           name="NewDestination"
+                           class="form-control font-monospace"
+                           placeholder="ark1... / lnbc... / bitcoin:...?ark=..."
+                           autofocus />
+                    <button type="button" class="btn btn-secondary px-3 only-for-js" data-bs-toggle="modal" data-bs-target="#scanModal" title="Scan QR code">
+                        <vc:icon symbol="scan-qr" />
+                    </button>
+                </div>
+                <div class="form-text">
+                    Ark address, Lightning invoice, or BIP21 URI
+                </div>
+            </div>
+
+            <div class="form-group mb-3">
+                <label class="form-label">Amount (BTC)</label>
+                <input type="number"
+                       name="NewAmountBtc"
+                       id="NewAmountBtc"
+                       class="form-control"
+                       step="0.00000001"
+                       min="0"
+                       placeholder="Required for addresses, optional for invoices" />
+                @if (!Model.Destinations.Any())
+                {
+                    <div class="form-text">
+                        <a href="#" id="sendAllLink" class="text-primary" onclick="document.getElementById('NewAmountBtc').value = '@Model.AvailableBalanceBtc.ToString("0.00000000", System.Globalization.CultureInfo.InvariantCulture)'; return false;">
+                            Send all (<span data-sensitive>@DisplayFormatter.Currency(Model.AvailableBalanceBtc, "BTC")</span>)
+                        </a>
+                    </div>
+                }
+                else
+                {
+                    @if (Model.RemainingSats > 0)
+                    {
+                        <div class="form-text">
+                            <a href="#" id="sendRemainingLink" class="text-primary" onclick="document.getElementById('NewAmountBtc').value = '@Model.RemainingBtc.ToString("0.00000000", System.Globalization.CultureInfo.InvariantCulture)'; return false;">
+                                Send remaining (<span data-sensitive>@DisplayFormatter.Currency(Model.RemainingBtc, "BTC")</span>)
+                            </a>
+                        </div>
+                    }
+                }
+            </div>
+
+            <div class="d-grid d-sm-flex flex-wrap gap-3 buttons">
+                <button type="submit" class="btn btn-secondary">
+                    @(Model.Destinations.Any() ? "Add another destination" : "Add destination")
+                </button>
+            </div>
+        </form>
+    }
+
+    <!-- Execute Button -->
+    @if (Model.Destinations.Any())
+    {
+        <form method="post" asp-action="Send2Execute" asp-route-storeId="@Model.StoreId">
+            <input type="hidden" name="SerializedDestinations" value="@Model.SerializedDestinations" />
+            <input type="hidden" name="MultipleDestinationsMode" value="@Model.MultipleDestinationsMode" />
+
+            @if (!Model.CanExecute)
+            {
+                <div class="alert alert-warning">
+                    @if (Model.RemainingSats < 0)
+                    {
+                        <span>Insufficient balance. Need <span data-sensitive>@DisplayFormatter.Currency((Model.GrandTotalSats - Model.AvailableBalanceSats) / 100_000_000m, "BTC")</span> more.</span>
+                    }
+                    else if (Model.Destinations.Any(d => !d.IsValid))
+                    {
+                        <span>Some destinations are invalid. Remove them to continue.</span>
+                    }
+                </div>
+            }
+
+            <div class="d-grid gap-3 buttons">
+                <button type="submit" class="btn btn-primary btn-lg" @(Model.CanExecute ? "" : "disabled")>
+                    Send 
+                </button>
+            </div>
+        </form>
+    }
+
+    <!-- Navigation -->
+    <div class="d-flex justify-content-between mt-4 pt-3 border-top">
+        <a asp-action="StoreOverview" asp-route-storeId="@Model.StoreId" class="btn btn-link px-0">
+            <vc:icon symbol="caret-left" /> Back
+        </a>
+        <a asp-action="Send" asp-route-storeId="@Model.StoreId" class="btn btn-link">
+            Advanced options
+        </a>
+    </div>
+}
+
+@section PageHeadContent
+{
+    <link rel="stylesheet" href="~/Resources/css/ark-plugin.css" asp-append-version="true" />
+    <link href="~/vendor/vue-qrcode-reader/vue-qrcode-reader.css" rel="stylesheet" asp-append-version="true"/>
+    <style>
+        .buttons .btn { flex: 1 0 45%; }
+    </style>
+}
+
+<partial name="CameraScanner"/>
+
+@section PageFootContent
+{
+    <script src="~/vendor/vuejs/vue.min.js" asp-append-version="true"></script>
+    <script src="~/vendor/ur-registry/urlib.min.js" asp-append-version="true"></script>
+    <script src="~/vendor/vue-qrcode-reader/VueQrcodeReader.umd.min.js" asp-append-version="true"></script>
+    <script>
+        // Send2 camera scanner - initialize after page loads
+        window.addEventListener('load', function() {
+            initCameraScanningApp('Scan address or payment link', function(data) {
+                // Set the scanned data into the destination input
+                var destInput = document.querySelector('[name="NewDestination"]');
+                if (destInput) {
+                    destInput.value = data;
+                    // Auto-submit to add the destination
+                    destInput.form.submit();
+                }
+            }, 'scanModal', false);
+        });
+    </script>
+}

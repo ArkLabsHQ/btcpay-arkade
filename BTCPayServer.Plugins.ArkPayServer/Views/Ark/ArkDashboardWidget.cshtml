@@ -1,0 +1,4 @@
+@using BTCPayServer.Models.StoreViewModels
+@model StoreDashboardViewModel
+
+@await Component.InvokeAsync("ArkDashboardWidget", new { dashboardModel = Model })

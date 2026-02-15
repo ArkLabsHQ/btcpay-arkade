@@ -1,51 +1,25 @@
 @using BTCPayServer.Abstractions.Contracts
 @using BTCPayServer.Abstractions.Extensions
-@using BTCPayServer.Plugins.ArkPayServer
-@using BTCPayServer.Plugins.ArkPayServer.Data
-@using BTCPayServer.Plugins.ArkPayServer.Data.Entities
-@using NArk.Services.Abstractions
+@using BTCPayServer.Plugins.ArkPayServer.Helpers
+@using NArk.Core.Transport
+@using NArk.Abstractions.Intents
+@using NArk.Abstractions.VTXOs
 @using NBitcoin
-@using Microsoft.AspNetCore.Mvc.ViewFeatures
+@using static BTCPayServer.Plugins.ArkPayServer.Helpers.ArkViewHelpers
 @model BTCPayServer.Plugins.ArkPayServer.Models.StoreIntentsViewModel
 @inject IScopeProvider ScopeProvider
-@inject IOperatorTermsService Terms
-@inject ArkConfiguration ArkConfiguration
+@inject IClientTransport Terms
+@inject ArkNetworkConfig ArkNetworkConfig
 
 @{
     ViewData.SetActivePage(category: "Ark", activePage: "Intents", title: "Ark - Intents");
     var storeId = ScopeProvider.GetCurrentStoreId();
-    
-    var stateFilterCount = Model.Search?.ContainsFilter("state") == true ? Model.Search.GetFilterArray("state").Length : 0;
-}
-
-@functions
-{
-    private bool HasArrayFilter(string type, string key = null) =>
-        Model.Search?.ContainsFilter(type) == true && (key is null || Model.Search.GetFilterArray(type).Contains(key));
+    var stateFilterCount = GetFilterCount(Model.Search, "state");
 }
 
 @section PageHeadContent
 {
-    <style>
-        .intent-details-row > td {
-            padding: 1.5rem 1rem 0 2.65rem;
-        }
-        .dropdown > .btn {
-            min-width: 7rem;
-            padding-left: 1rem;
-            text-align: left;
-        }
-        #SearchText {
-            flex-shrink: 0;
-            min-width: 200px;
-            max-width: 300px;
-        }
-        @@media (max-width: 568px) {
-            #SearchText {
-                width: 100%;
-            }
-        }
-    </style>
+    <link rel="stylesheet" href="~/Resources/css/ark-plugin.css" asp-append-version="true" />
 }
 
 <div class="sticky-header">
@@ -88,12 +62,12 @@
             }
         </button>
         <div class="dropdown-menu" aria-labelledby="StateOptionsToggle">
-            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "waiting-submit") ?? "")" class="dropdown-item @(HasArrayFilter("state", "waiting-submit") ? "custom-active" : "")" text-translate="true">Waiting to Submit</a>
-            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "waiting-batch") ?? "")" class="dropdown-item @(HasArrayFilter("state", "waiting-batch") ? "custom-active" : "")" text-translate="true">Waiting for Batch</a>
-            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "batch-in-progress") ?? "")" class="dropdown-item @(HasArrayFilter("state", "batch-in-progress") ? "custom-active" : "")" text-translate="true">Batch In Progress</a>
-            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "batch-succeeded") ?? "")" class="dropdown-item @(HasArrayFilter("state", "batch-succeeded") ? "custom-active" : "")" text-translate="true">Batch Succeeded</a>
-            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "batch-failed") ?? "")" class="dropdown-item @(HasArrayFilter("state", "batch-failed") ? "custom-active" : "")" text-translate="true">Batch Failed</a>
-            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "cancelled") ?? "")" class="dropdown-item @(HasArrayFilter("state", "cancelled") ? "custom-active" : "")" text-translate="true">Cancelled</a>
+            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "waiting-submit") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "state", "waiting-submit") ? "custom-active" : "")" text-translate="true">Waiting to Submit</a>
+            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "waiting-batch") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "state", "waiting-batch") ? "custom-active" : "")" text-translate="true">Waiting for Batch</a>
+            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "batch-in-progress") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "state", "batch-in-progress") ? "custom-active" : "")" text-translate="true">Batch In Progress</a>
+            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "batch-succeeded") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "state", "batch-succeeded") ? "custom-active" : "")" text-translate="true">Batch Succeeded</a>
+            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "batch-failed") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "state", "batch-failed") ? "custom-active" : "")" text-translate="true">Batch Failed</a>
+            <a asp-action="Intents" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("state", "cancelled") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "state", "cancelled") ? "custom-active" : "")" text-translate="true">Cancelled</a>
         </div>
     </div>
     
@@ -125,6 +99,7 @@
                     <th text-translate="true" class="text-nowrap">State</th>
                     <th text-translate="true" class="text-nowrap">Valid Until</th>
                     <th text-translate="true">Batch ID</th>
+                    <th text-translate="true" class="text-nowrap">Commitment Tx</th>
                     <th text-translate="true">VTXOs</th>
                     <th></th>
                 </tr>
@@ -132,17 +107,21 @@
             <tbody>
                 @foreach (var intent in Model.Intents)
                 {
-                    var detailsId = $"intent_details_{intent.InternalId}";
+                    var detailsId = $"intent_details_{intent.IntentTxId}";
                     
-                    ArkIntentVtxo[]? vtxos = [];
-                    var hasVtxos = Model.IntentVtxos.TryGetValue(intent.InternalId, out vtxos) && vtxos.Any();
+                    Model.IntentVtxoOutpoints.TryGetValue(intent.IntentTxId, out var outpoints);
+                    var hasVtxos = outpoints is { Length: > 0 };
 
-                    <tr id="intent_@intent.InternalId">
+                    <tr id="intent_@intent.IntentTxId">
                         <td class="align-middle date-col">@intent.CreatedAt.ToBrowserDate()</td>
                         <td class="align-middle">
                             @if (!string.IsNullOrEmpty(intent.IntentId))
                             {
                                 <vc:truncate-center text="@intent.IntentId" classes="truncate-center-id"/>
+                            }
+                            else if (intent.State == ArkIntentState.Cancelled || intent.State == ArkIntentState.BatchFailed)
+                            {
+                                <span class="text-muted">-</span>
                             }
                             else
                             {
@@ -165,14 +144,14 @@
                                     <span class="badge text-bg-success">Batch Succeeded</span>
                                     break;
                                 case ArkIntentState.BatchFailed:
-                                    <span class="badge text-bg-danger">Batch Failed</span>
+                                    <span class="badge text-bg-danger" title="@intent.CancellationReason">Batch Failed</span>
                                     break;
                                 case ArkIntentState.Cancelled:
-                                    <span class="badge text-bg-dark">Cancelled</span>
+                                    <span class="badge text-bg-dark" title="@intent.CancellationReason">Cancelled</span>
                                     break;
                             }
                         </td>
-                        <td class="align-middle">@intent.ValidUntil.ToTimeAgo()</td>
+                        <td class="align-middle">@(intent.ValidUntil.HasValue ? intent.ValidUntil.Value.ToTimeAgo() : "-")</td>
                         <td class="align-middle">
                             @if (!string.IsNullOrEmpty(intent.BatchId))
                             {
@@ -184,9 +163,20 @@
                             }
                         </td>
                         <td class="align-middle">
+                            @if (!string.IsNullOrEmpty(intent.CommitmentTransactionId))
+                            {
+                                var txLink = ArkadeLinkHelper.GetCommitmentTransactionLink(ArkNetworkConfig, intent.CommitmentTransactionId);
+                                <vc:truncate-center link="@txLink" text="@intent.CommitmentTransactionId" classes="truncate-center-id"/>
+                            }
+                            else
+                            {
+                                <span class="text-muted">-</span>
+                            }
+                        </td>
+                        <td class="align-middle">
                             @if (hasVtxos)
                             {
-                                <span class="badge text-bg-info">@vtxos.Length</span>
+                                <span class="badge text-bg-info">@outpoints!.Length</span>
                             }
                             else
                             {
@@ -197,7 +187,7 @@
                             <div class="d-inline-flex align-items-center gap-2">
                                 @if (intent.State == ArkIntentState.WaitingToSubmit || intent.State == ArkIntentState.WaitingForBatch)
                                 {
-                                    <form asp-action="CancelIntent" method="post" asp-route-storeId="@storeId" asp-route-internalId="@intent.InternalId" class="d-inline" onsubmit="return confirm('Are you sure you want to cancel this intent?');">
+                                    <form asp-action="CancelIntent" method="post" asp-route-storeId="@storeId" asp-route-intentTxId="@intent.IntentTxId" class="d-inline" onsubmit="return confirm('Are you sure you want to cancel this intent?');">
                                         <button type="submit" class="btn btn-sm btn-outline-danger" title="Cancel Intent">
                                             <vc:icon symbol="cross" />
                                         </button>
@@ -215,12 +205,15 @@
                     
                     @if (hasVtxos)
                     {
-                        var colspanCount = 7;
+                        var colspanCount = 8;
                         <tr id="@detailsId" class="intent-details-row collapse">
                             <td colspan="@colspanCount" class="border-top-0">
                                 <h6 class="mb-3">VTXOs</h6>
                                 @{
-                                    var vtxoList = vtxos.Select(iv => iv.Vtxo).ToList();
+                                    var vtxoList = outpoints!
+                                        .Select(op => Model.VtxoLookup.GetValueOrDefault(op))
+                                        .Where(v => v != null)
+                                        .ToList();
                                 }
                                 <partial name="_VtxoTable" model="vtxoList" view-data='new ViewDataDictionary(ViewData) { { "ShowLinks", true }, { "UseTimeAgo", true }, { "TimeColumnLabel", "Linked" } }' />
                             </td>

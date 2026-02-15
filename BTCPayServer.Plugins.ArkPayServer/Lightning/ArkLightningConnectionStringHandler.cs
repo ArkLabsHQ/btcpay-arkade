@@ -1,8 +1,5 @@
 using BTCPayServer.Lightning;
-using BTCPayServer.Plugins.ArkPayServer.Data;
-using BTCPayServer.Plugins.ArkPayServer.Services;
 using Microsoft.Extensions.DependencyInjection;
-using NArk.Services;
 using NBitcoin;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Lightning;
