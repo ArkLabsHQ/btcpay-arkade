@@ -23,6 +23,7 @@ public class VTXO
     public bool Unrolled { get; set; }
     public string? CommitmentTxids { get; set; }
     public string? ArkTxid { get; set; }
+    public string? AssetsJson { get; set; }
 
     public virtual ICollection<ArkIntentVtxo> IntentVtxos { get; set; } = null!;
 
@@ -54,9 +55,19 @@ public class VTXO
             Preconfirmed: Preconfirmed,
             Unrolled: Unrolled,
             CommitmentTxids: string.IsNullOrEmpty(CommitmentTxids) ? null : JsonSerializer.Deserialize<List<string>>(CommitmentTxids),
-            ArkTxid: ArkTxid
+            ArkTxid: ArkTxid,
+            Assets: DeserializeAssets(AssetsJson)
         );
     }
+
+    private static IReadOnlyList<VtxoAsset>? DeserializeAssets(string? json)
+    {
+        if (string.IsNullOrEmpty(json)) return null;
+        var items = JsonSerializer.Deserialize<List<VtxoAssetDto>>(json);
+        return items?.Select(a => new VtxoAsset(a.AssetId, a.Amount)).ToList();
+    }
+
+    private record VtxoAssetDto(string AssetId, ulong Amount);
 
     public override int GetHashCode()
     {
@@ -75,6 +86,7 @@ public class VTXO
         hash.Add(Unrolled);
         hash.Add(CommitmentTxids);
         hash.Add(ArkTxid);
+        hash.Add(AssetsJson);
         return hash.ToHashCode();
     }
     

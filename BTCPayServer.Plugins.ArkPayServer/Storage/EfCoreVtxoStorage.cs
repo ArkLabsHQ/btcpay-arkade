@@ -57,6 +57,9 @@ public class EfCoreVtxoStorage : IVtxoStorage
         entity.Unrolled = vtxo.Unrolled;
         entity.CommitmentTxids = vtxo.CommitmentTxids is { Count: > 0 } ? JsonSerializer.Serialize(vtxo.CommitmentTxids) : null;
         entity.ArkTxid = vtxo.ArkTxid;
+        entity.AssetsJson = vtxo.Assets is { Count: > 0 }
+            ? JsonSerializer.Serialize(vtxo.Assets.Select(a => new { a.AssetId, a.Amount }))
+            : null;
 
         if (isNew)
         {
@@ -154,21 +157,6 @@ public class EfCoreVtxoStorage : IVtxoStorage
 
     private static ArkVtxo MapToArkVtxo(VTXO entity)
     {
-        return new ArkVtxo(
-            Script: entity.Script,
-            TransactionId: entity.TransactionId,
-            TransactionOutputIndex: (uint)entity.TransactionOutputIndex,
-            Amount: (ulong)entity.Amount,
-            SpentByTransactionId: entity.SpentByTransactionId,
-            SettledByTransactionId: entity.SettledByTransactionId,
-            Swept: entity.Recoverable,
-            CreatedAt: entity.SeenAt,
-            ExpiresAt: entity.ExpiresAt == DateTimeOffset.MaxValue ? null : entity.ExpiresAt,
-            ExpiresAtHeight: null, // Plugin doesn't track height-based expiry
-            Preconfirmed: entity.Preconfirmed,
-            Unrolled: entity.Unrolled,
-            CommitmentTxids: string.IsNullOrEmpty(entity.CommitmentTxids) ? null : JsonSerializer.Deserialize<List<string>>(entity.CommitmentTxids),
-            ArkTxid: entity.ArkTxid
-        );
+        return entity.ToArkVtxo();
     }
 }
