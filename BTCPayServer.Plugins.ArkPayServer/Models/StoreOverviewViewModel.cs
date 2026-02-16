@@ -1,7 +1,7 @@
 using BTCPayServer.Plugins.ArkPayServer.Data;
-using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using NArk.Abstractions.Contracts;
 using NArk.Abstractions.VTXOs;
+using NArk.Abstractions.Wallets;
 using NArk.Swaps.Models;
 using NBitcoin;
 namespace BTCPayServer.Plugins.ArkPayServer.Models;

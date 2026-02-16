@@ -44,6 +44,9 @@
         <ProjectReference Include="..\submodules\NNark\NArk.Swaps\NArk.Swaps.csproj">
             <Private>true</Private>
         </ProjectReference>
+        <ProjectReference Include="..\submodules\NNark\NArk.Storage.EfCore\NArk.Storage.EfCore.csproj">
+            <Private>true</Private>
+        </ProjectReference>
         <!-- NNark transitive dependencies (must be explicit for plugin publish) -->
         <PackageReference Include="AsyncKeyedLock" Version="8.0.1" />
         <PackageReference Include="BTCPayServer.Lightning.Common" Version="1.5.2" />

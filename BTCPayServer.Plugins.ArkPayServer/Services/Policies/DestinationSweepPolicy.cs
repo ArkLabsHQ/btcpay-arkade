@@ -1,7 +1,6 @@
 using System.Runtime.CompilerServices;
-using BTCPayServer.Plugins.ArkPayServer.Storage;
-using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using NArk.Abstractions;
+using NArk.Abstractions.Wallets;
 using NArk.Core.Contracts;
 using NArk.Core.Sweeper;
 using NArk.Core.Transport;
@@ -16,7 +15,7 @@ namespace BTCPayServer.Plugins.ArkPayServer.Services.Policies;
 /// For SingleKey wallets without a destination, sweeps non-default coins (e.g. HashLocked)
 /// to the wallet's default payment address.
 /// </summary>
-public class DestinationSweepPolicy(EfCoreWalletStorage walletStorage, IClientTransport clientTransport) : ISweepPolicy
+public class DestinationSweepPolicy(IWalletStorage walletStorage, IClientTransport clientTransport) : ISweepPolicy
 {
     public async IAsyncEnumerable<ArkCoin> SweepAsync(IEnumerable<ArkCoin> coins,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -35,17 +34,23 @@ public class DestinationSweepPolicy(EfCoreWalletStorage walletStorage, IClientTr
         //if the wallet is Legacy (SingleKey), always sweep
         //if the wallet is HD, sweep if the wallet has a destination set
         // Load wallets via storage, filter for those with destinations set
-        var wallets = await walletStorage.GetWalletsByIdsAsync(walletIds, cancellationToken);
+        var walletInfos = new List<ArkWalletInfo>();
+        foreach (var walletId in walletIds)
+        {
+            var walletInfo = await walletStorage.GetWalletById(walletId, cancellationToken);
+            if (walletInfo != null)
+                walletInfos.Add(walletInfo);
+        }
 
-        var eligibleWallets = wallets
-            .Where(w => !string.IsNullOrEmpty(w.WalletDestination) || w.WalletType == WalletType.SingleKey)
-            .ToDictionary(w => w.Id, w => w.WalletDestination);
+        var eligibleWallets = walletInfos
+            .Where(w => !string.IsNullOrEmpty(w.Destination) || w.WalletType == WalletType.SingleKey)
+            .ToDictionary(w => w.Id, w => w.Destination);
 
         foreach (var group in spendableCoins
                      .Where(c => eligibleWallets.ContainsKey(c.WalletIdentifier))
                      .GroupBy(c => c.WalletIdentifier))
         {
-            var wallet = wallets.First(w => w.Id == group.Key);
+            var wallet = walletInfos.First(w => w.Id == group.Key);
             Script destinationScript;
 
             if (!string.IsNullOrEmpty(eligibleWallets[group.Key]))

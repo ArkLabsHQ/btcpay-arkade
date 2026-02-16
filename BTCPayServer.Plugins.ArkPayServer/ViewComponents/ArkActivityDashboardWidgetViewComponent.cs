@@ -3,13 +3,13 @@ using BTCPayServer.Models.StoreViewModels;
 using BTCPayServer.Plugins.ArkPayServer.Helpers;
 using BTCPayServer.Plugins.ArkPayServer.Models;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
-using BTCPayServer.Plugins.ArkPayServer.Storage;
 using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Stores;
 using Microsoft.AspNetCore.Mvc;
 using NArk.Abstractions.Intents;
 using NArk.Abstractions.VTXOs;
 using NArk.Hosting;
+using NArk.Swaps.Abstractions;
 using NArk.Swaps.Models;
 using NBitcoin;
 
@@ -18,8 +18,8 @@ namespace BTCPayServer.Plugins.ArkPayServer.ViewComponents;
 public class ArkActivityDashboardWidgetViewComponent(
     StoreRepository storeRepository,
     PaymentMethodHandlerDictionary handlerDictionary,
-    EfCoreIntentStorage intentStorage,
-    EfCoreSwapStorage swapStorage,
+    IIntentStorage intentStorage,
+    ISwapStorage swapStorage,
     IVtxoStorage vtxoStorage,
     ArkNetworkConfig arkNetworkConfig) : ViewComponent
 {

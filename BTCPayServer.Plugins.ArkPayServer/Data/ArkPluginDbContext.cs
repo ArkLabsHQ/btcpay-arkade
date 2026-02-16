@@ -1,33 +1,31 @@
-using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using Microsoft.EntityFrameworkCore;
+using NArk.Storage.EfCore;
+using NArk.Storage.EfCore.Entities;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Data;
 
 public class ArkPluginDbContext(DbContextOptions<ArkPluginDbContext> options) : DbContext(options)
 {
-    public DbSet<ArkWallet> Wallets { get; set; }
-    public DbSet<ArkWalletContract> WalletContracts { get; set; }
-    public DbSet<VTXO> Vtxos { get; set; }
-    public DbSet<ArkSwap> Swaps { get; set; }
-    public DbSet<ArkIntent> Intents { get; set; }
-    public DbSet<ArkIntentVtxo> IntentVtxos { get; set; }
-    
+    public DbSet<ArkWalletEntity> Wallets { get; set; }
+    public DbSet<ArkWalletContractEntity> WalletContracts { get; set; }
+    public DbSet<VtxoEntity> Vtxos { get; set; }
+    public DbSet<ArkSwapEntity> Swaps { get; set; }
+    public DbSet<ArkIntentEntity> Intents { get; set; }
+    public DbSet<ArkIntentVtxoEntity> IntentVtxos { get; set; }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
-        modelBuilder.HasDefaultSchema("BTCPayServer.Plugins.Ark");
-        SetupDbRelations(modelBuilder);
-    }
+        modelBuilder.ConfigureArkEntities(opts =>
+        {
+            opts.Schema = "BTCPayServer.Plugins.Ark";
+        });
 
-    private static void SetupDbRelations(ModelBuilder modelBuilder)
-    {
-        // ArkStoredTransaction.OnModelCreating(modelBuilder);
-        VTXO.OnModelCreating(modelBuilder);
-        ArkWallet.OnModelCreating(modelBuilder);
-        ArkWalletContract.OnModelCreating(modelBuilder);
-        ArkIntent.OnModelCreating(modelBuilder);
-        ArkIntentVtxo.OnModelCreating(modelBuilder);
-        ArkSwap.OnModelCreating(modelBuilder);
-        // BoardingAddress.OnModelCreating(modelBuilder);
+        // PostgreSQL-specific: jsonb column types for contract data
+        modelBuilder.Entity<ArkWalletContractEntity>(entity =>
+        {
+            entity.Property(e => e.ContractDataJson).HasColumnType("jsonb");
+            entity.Property(e => e.MetadataJson).HasColumnType("jsonb");
+        });
     }
 }
