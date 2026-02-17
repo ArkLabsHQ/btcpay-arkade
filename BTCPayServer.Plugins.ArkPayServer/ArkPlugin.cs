@@ -149,6 +149,9 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
             options.Threshold = TimeSpan.FromDays(1));
         services.AddSingleton<IIntentScheduler, SimpleIntentScheduler>();
 
+        // Wallet provider
+        services.AddSingleton<NArk.Abstractions.Wallets.IWalletProvider, NArk.Core.Wallet.DefaultWalletProvider>();
+
         // Core services and network config (includes caching transport by default)
         services.AddArkCoreServices();
         services.AddArkNetwork(networkConfig);

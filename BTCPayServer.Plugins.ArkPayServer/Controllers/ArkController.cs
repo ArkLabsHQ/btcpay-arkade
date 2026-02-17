@@ -40,7 +40,7 @@ using NArk.Swaps.Abstractions;
 using NArk.Abstractions.Wallets;
 using NArk.Swaps.Models;
 using NArk.Storage.EfCore.Entities;
-using NArk.Storage.EfCore.Wallet;
+using NArk.Core.Wallet;
 using LNURL;
 using NBitcoin;
 using NBitcoin.DataEncoders;

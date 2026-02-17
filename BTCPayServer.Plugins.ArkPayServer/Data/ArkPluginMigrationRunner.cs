@@ -1,7 +1,7 @@
 ﻿using BTCPayServer.Abstractions.Contracts;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using NArk.Storage.EfCore.Wallet;
+using NArk.Core.Wallet;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Data;
 
