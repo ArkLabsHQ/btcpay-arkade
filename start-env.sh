@@ -194,13 +194,13 @@ if [ ! -f "$NIGIRI" ]; then
   # Clone or update the repo
   if [ ! -d "$NIGIRI_REPO" ]; then
     log "Cloning nigiri repository..."
-    git clone https://github.com/vulpemventures/nigiri.git "$NIGIRI_REPO"
+    git clone -b bump-arkd https://github.com/vulpemventures/nigiri.git "$NIGIRI_REPO"
   else
     log "Nigiri repo exists, pulling latest changes..."
     cd "$NIGIRI_REPO"
     git fetch origin
-    git checkout master
-    git pull origin master
+    git checkout bump-arkd
+    git pull origin bump-arkd
     cd "$SCRIPT_DIR"
   fi
   
