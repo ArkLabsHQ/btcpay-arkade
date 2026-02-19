@@ -1,4 +1,3 @@
-using AsyncKeyedLock;
 using BTCPayServer.Abstractions.Contracts;
 using BTCPayServer.Abstractions.Extensions;
 using BTCPayServer.Abstractions.Models;
@@ -12,28 +11,24 @@ using BTCPayServer.Plugins.ArkPayServer.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
 using BTCPayServer.Plugins.ArkPayServer.Services;
-using BTCPayServer.Plugins.ArkPayServer.Storage;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using NArk.Abstractions.Blockchain;
-using NArk.Abstractions.Contracts;
 using NArk.Abstractions.Intents;
 using NArk.Abstractions.Safety;
-using NArk.Abstractions.VTXOs;
-using NArk.Abstractions.Wallets;
 using NArk.Blockchain.NBXplorer;
 using NArk.Hosting;
 using NArk.Core.Models.Options;
 using NArk.Core.Services;
-using NArk.Swaps.Abstractions;
+using NArk.Storage.EfCore.Entities;
+using NArk.Storage.EfCore.Hosting;
 using NArk.Swaps.Boltz;
 using NArk.Swaps.Boltz.Client;
 using NArk.Swaps.Services;
 using NBitcoin;
-using System.Reflection;
 using System.Text.Json;
 using BTCPayServer.Plugins.ArkPayServer.Services.Policies;
-using NArk.Abstractions.Scripts;
+using Microsoft.EntityFrameworkCore;
 using NArk.Core.Sweeper;
 
 namespace BTCPayServer.Plugins.ArkPayServer;
@@ -43,14 +38,7 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
     internal const string CheckoutBodyComponentName = "arkadeCheckoutBody";
 
     internal static readonly PaymentMethodId ArkadePaymentMethodId = new("ARKADE");
-    internal static readonly PayoutMethodId ArkadePayoutMethodId = CreatePayoutMethodId();
-
-    private static PayoutMethodId CreatePayoutMethodId()
-    {
-        var constructor = typeof(PayoutMethodId).GetConstructor(
-            BindingFlags.NonPublic | BindingFlags.Instance, [typeof(string)])!;
-        return (PayoutMethodId)constructor.Invoke(["ARKADE"])!;
-    }
+    internal static readonly PayoutMethodId ArkadePayoutMethodId = PayoutMethodId.Parse("ARKADE");
 
     public override IBTCPayServerPlugin.PluginDependency[] Dependencies { get; } =
     [
@@ -70,7 +58,7 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         // Database
         RegisterDatabase(services);
 
-        // NArk storage implementations
+        // NArk storage implementations (SDK)
         RegisterNArkStorage(services);
 
         // NArk core services
@@ -129,30 +117,24 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
     private static void RegisterNArkStorage(IServiceCollection services)
     {
-        services.AddSingleton<EfCoreVtxoStorage>();
-        services.AddSingleton<IVtxoStorage>(sp => sp.GetRequiredService<EfCoreVtxoStorage>());
-        services.AddSingleton<IActiveScriptsProvider>(sp => sp.GetRequiredService<EfCoreVtxoStorage>());
-
-        services.AddSingleton<EfCoreContractStorage>();
-        services.AddSingleton<IContractStorage>(sp => sp.GetRequiredService<EfCoreContractStorage>());
-        services.AddSingleton<IActiveScriptsProvider>(sp => sp.GetRequiredService<EfCoreContractStorage>());
-
-        services.AddSingleton<EfCoreIntentStorage>();
-        services.AddSingleton<IIntentStorage>(sp => sp.GetRequiredService<EfCoreIntentStorage>());
-
-        services.AddSingleton<EfCoreSwapStorage>();
-        services.AddSingleton<ISwapStorage>(sp => sp.GetRequiredService<EfCoreSwapStorage>());
-
-        services.AddSingleton<EfCoreWalletStorage>();
+        services.AddArkEfCoreStorage<ArkPluginDbContext>(opts =>
+        {
+            opts.Schema = "BTCPayServer.Plugins.Ark";
+            opts.ContractSearchProvider = (query, searchText) =>
+            {
+                var pattern = $"%{searchText}%";
+                return query.Where(c =>
+                    Microsoft.EntityFrameworkCore.EF.Functions.ILike(c.Script, pattern) ||
+                    Microsoft.EntityFrameworkCore.EF.Functions.ILike(c.Type, pattern) ||
+                    Microsoft.EntityFrameworkCore.EF.Functions.ILike(c.MetadataJson ?? "", pattern));
+            };
+        });
     }
 
     private static void RegisterNArkCore(IServiceCollection services, ArkNetworkConfig networkConfig)
     {
         // Safety service
         services.AddSingleton<ISafetyService, NArk.Safety.AsyncKeyedLock.AsyncSafetyService>();
-
-        // Wallet provider
-        services.AddSingleton<IWalletProvider, Wallet.PluginWalletAdapter>();
 
         // Chain time provider (needs NBXplorer)
         services.AddSingleton<ChainTimeProvider>(provider =>
@@ -166,6 +148,9 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         services.Configure<SimpleIntentSchedulerOptions>(options =>
             options.Threshold = TimeSpan.FromDays(1));
         services.AddSingleton<IIntentScheduler, SimpleIntentScheduler>();
+
+        // Wallet provider
+        services.AddSingleton<NArk.Abstractions.Wallets.IWalletProvider, NArk.Core.Wallet.DefaultWalletProvider>();
 
         // Core services and network config (includes caching transport by default)
         services.AddArkCoreServices();

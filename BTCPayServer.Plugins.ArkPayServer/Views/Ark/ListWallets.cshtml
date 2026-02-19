@@ -1,7 +1,7 @@
 @using BTCPayServer.Abstractions.Extensions
-@using BTCPayServer.Plugins.ArkPayServer.Data.Entities
-@using BTCPayServer.Plugins.ArkPayServer.Wallet
-@model IEnumerable<ArkWallet>
+@using NArk.Storage.EfCore.Entities
+@using NArk.Abstractions.Wallets
+@model IEnumerable<ArkWalletEntity>
 
 @{
     ViewData.SetActivePage(category: "Server", activePage: "ArkWallets", title: "Ark - Wallets");

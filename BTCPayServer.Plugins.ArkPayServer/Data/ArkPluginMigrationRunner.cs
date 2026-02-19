@@ -1,7 +1,7 @@
 ﻿using BTCPayServer.Abstractions.Contracts;
-using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using NArk.Core.Wallet;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Data;
 

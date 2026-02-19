@@ -3,13 +3,12 @@ using BTCPayServer.Models.StoreViewModels;
 using BTCPayServer.Plugins.ArkPayServer.Controllers;
 using BTCPayServer.Plugins.ArkPayServer.Models;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
-using BTCPayServer.Plugins.ArkPayServer.Storage;
-using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Stores;
 using Microsoft.AspNetCore.Mvc;
 using NArk.Abstractions.Intents;
 using NArk.Abstractions.VTXOs;
+using NArk.Abstractions.Wallets;
 using NArk.Core.Contracts;
 using NArk.Core.Transport;
 using NArk.Hosting;
@@ -26,8 +25,8 @@ public class ArkDashboardWidgetViewComponent(
     ArkNetworkConfig arkNetworkConfig,
     ArkController arkController,
     IVtxoStorage vtxoStorage,
-    EfCoreIntentStorage intentStorage,
-    EfCoreWalletStorage walletStorage,
+    IIntentStorage intentStorage,
+    IWalletStorage walletStorage,
     BoltzClient? boltzClient = null,
     BoltzLimitsValidator? boltzLimitsValidator = null) : ViewComponent
 {
@@ -64,7 +63,7 @@ public class ArkDashboardWidgetViewComponent(
                 walletIds: [walletId], take: 100,
                 states: [ArkIntentState.WaitingToSubmit, ArkIntentState.WaitingForBatch, ArkIntentState.BatchInProgress],
                 cancellationToken: ct);
-            var walletTask = walletStorage.GetWalletByIdAsync(walletId, ct);
+            var walletTask = walletStorage.GetWalletById(walletId, ct);
 
             await Task.WhenAll(vtxoTask, pendingIntentsTask, walletTask);
 

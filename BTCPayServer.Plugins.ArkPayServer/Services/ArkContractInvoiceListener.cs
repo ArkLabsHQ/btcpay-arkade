@@ -2,7 +2,6 @@
 using BTCPayServer.Client.Models;
 using BTCPayServer.Data;
 using BTCPayServer.Events;
-using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using BTCPayServer.Plugins.ArkPayServer.Models;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Services.Invoices;
@@ -19,6 +18,7 @@ using NArk.Abstractions;
 using NArk.Abstractions.Contracts;
 using NArk.Abstractions.Extensions;
 using NArk.Swaps.Services;
+using NArk.Storage.EfCore.Entities;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
 
@@ -93,8 +93,8 @@ public class ArkContractInvoiceListener(
             if (inv is null)
                 return;
 
-            // Map NNark's ArkVtxo to plugin's VTXO entity
-            var vtxoEntity = new VTXO
+            // Map NNark's ArkVtxo to plugin's VtxoEntity entity
+            var vtxoEntity = new VtxoEntity
             {
                 TransactionId = vtxo.TransactionId,
                 TransactionOutputIndex = (int)vtxo.TransactionOutputIndex,
@@ -120,7 +120,7 @@ public class ArkContractInvoiceListener(
         return Task.CompletedTask;
     }
     
-    private async Task HandlePaymentData(VTXO vtxo, InvoiceEntity invoice, ArkadePaymentMethodHandler handler)
+    private async Task HandlePaymentData(VtxoEntity vtxo, InvoiceEntity invoice, ArkadePaymentMethodHandler handler)
     {
         var pmi = ArkadePlugin.ArkadePaymentMethodId;
         var details = new ArkadePaymentData($"{vtxo.TransactionId}:{vtxo.TransactionOutputIndex}");

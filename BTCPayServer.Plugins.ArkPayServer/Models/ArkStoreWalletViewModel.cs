@@ -1,6 +1,6 @@
 namespace BTCPayServer.Plugins.ArkPayServer.Models;
 
-using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
+using NArk.Storage.EfCore.Entities;
 
 public class ArkStoreWalletViewModel
 {
@@ -8,7 +8,7 @@ public class ArkStoreWalletViewModel
     public string? Destination { get; set; }
 
     public bool SignerAvailable { get; set; }
-    public Dictionary<ArkWalletContract, VTXO[]>? Contracts { get; set; }
+    public Dictionary<ArkWalletContractEntity, VtxoEntity[]>? Contracts { get; set; }
     public bool LNEnabled { get; set; }
 
     public string? Wallet { get; set; }

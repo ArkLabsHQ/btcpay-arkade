@@ -10,7 +10,6 @@ using BTCPayServer.Payments;
 using BTCPayServer.Payments.Lightning;
 using BTCPayServer.PayoutProcessors;
 using BTCPayServer.Plugins.ArkPayServer.Data;
-using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
 using BTCPayServer.Plugins.ArkPayServer.Exceptions;
 using BTCPayServer.Plugins.ArkPayServer.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.Models;
@@ -18,12 +17,12 @@ using BTCPayServer.Plugins.ArkPayServer.Models.Api;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
 using BTCPayServer.Plugins.ArkPayServer.Services;
-using BTCPayServer.Plugins.ArkPayServer.Storage;
 using BTCPayServer.Security;
 using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Stores;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using NArk.Abstractions;
 using NArk.Abstractions.Fees;
 using NArk.Abstractions.Intents;
@@ -33,7 +32,6 @@ using NArk.Core.Contracts;
 using NArk.Hosting;
 using NArk.Core.Services;
 using NArk.Core.Transport;
-using BTCPayServer.Plugins.ArkPayServer.Wallet;
 using NArk.Abstractions.Blockchain;
 using NArk.Abstractions.Contracts;
 using NArk.Abstractions.Extensions;
@@ -41,6 +39,8 @@ using NArk.Abstractions.VTXOs;
 using NArk.Swaps.Abstractions;
 using NArk.Abstractions.Wallets;
 using NArk.Swaps.Models;
+using NArk.Storage.EfCore.Entities;
+using NArk.Core.Wallet;
 using LNURL;
 using NBitcoin;
 using NBitcoin.DataEncoders;
@@ -77,8 +77,8 @@ public class ArkController(
     IContractStorage contractStorage,
     ISwapStorage swapStorage,
     IVtxoStorage vtxoStorage,
-    EfCoreIntentStorage efCoreIntentStorage,
-    EfCoreWalletStorage walletStorage,
+    IWalletStorage walletStorage,
+    IDbContextFactory<ArkPluginDbContext> dbContextFactory,
     IHttpClientFactory httpClientFactory) : Controller
 {
     [HttpGet("stores/{storeId}/initial-setup")]
@@ -123,7 +123,7 @@ public class ArkController(
                         HttpContext.RequestAborted);
 
                     // Signer is automatically registered via WalletSaved event
-                    await walletStorage.UpsertWalletAsync(wallet, walletSettings.IsOwnedByStore, HttpContext.RequestAborted);
+                    await walletStorage.UpsertWallet(wallet, updateIfExists: true, HttpContext.RequestAborted);
                     
                     if (wallet.WalletType == WalletType.SingleKey)
                     {
@@ -208,8 +208,8 @@ public class ArkController(
         var (store, config, errorResult) = ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
-        var wallet = await walletStorage.GetWalletByIdAsync(config!.WalletId!, cancellationToken);
-        var destination = wallet?.WalletDestination;
+        var wallet = await walletStorage.GetWalletById(config!.WalletId!, cancellationToken);
+        var destination = wallet?.Destination;
 
         // Get balances with error handling - indexer service may be unavailable
         ArkBalancesViewModel? balances = null;
@@ -288,7 +288,7 @@ public class ArkController(
         IReadOnlyCollection<ArkIntent> recentIntents = [];
         try
         {
-            recentIntents = await efCoreIntentStorage.GetIntents(
+            recentIntents = await intentStorage.GetIntents(
                 walletIds:[config.WalletId!], skip: 0, take: 5, states: [ArkIntentState.BatchInProgress, ArkIntentState.BatchSucceeded, ArkIntentState.WaitingForBatch, ArkIntentState.WaitingToSubmit], cancellationToken: cancellationToken);
         }
         catch (Exception)
@@ -319,7 +319,7 @@ public class ArkController(
             SignerAvailable = signerAvailable,
             DefaultAddress = defaultAddress,
             AllowSubDustAmounts = config.AllowSubDustAmounts,
-            Wallet = wallet?.Wallet,
+            Wallet = wallet?.Secret,
             WalletType = wallet?.WalletType ?? WalletType.SingleKey,
             CanManagePrivateKeys = canManagePrivateKeys,
             ArkOperatorUrl = arkNetworkConfig.ArkUri,
@@ -352,8 +352,8 @@ public class ArkController(
         var (store, config, errorResult) = ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
-        var wallet = await walletStorage.GetWalletByIdAsync(config!.WalletId);
-        if (wallet?.Wallet == null)
+        var wallet = await walletStorage.GetWalletById(config!.WalletId);
+        if (wallet?.Secret == null)
             return NotFound();
 
         return this.RedirectToRecoverySeedBackup(new RecoverySeedBackupViewModel
@@ -362,7 +362,7 @@ public class ArkController(
             IsStored = true,
             RequireConfirm = false,
             CryptoCode = "ARK",
-            Mnemonic = wallet.Wallet
+            Mnemonic = wallet.Secret
         });
     }
 
@@ -1850,7 +1850,7 @@ public class ArkController(
 
         if (command == "clear-destination")
         {
-            await walletStorage.UpdateWalletDestinationAsync(config!.WalletId!, null, cancellationToken);
+            await UpdateWalletDestinationAsync(config!.WalletId!, null, cancellationToken);
             return RedirectWithSuccess(nameof(StoreOverview), "Auto-sweep destination cleared.", new { storeId });
         }
 
@@ -1863,7 +1863,7 @@ public class ArkController(
             {
                 var serverInfo = await clientTransport.GetServerInfoAsync(cancellationToken);
                 WalletFactory.ValidateDestination(model.Destination, serverInfo);
-                await walletStorage.UpdateWalletDestinationAsync(config.WalletId!, model.Destination, cancellationToken);
+                await UpdateWalletDestinationAsync(config.WalletId!, model.Destination, cancellationToken);
                 return RedirectWithSuccess(nameof(StoreOverview), "Auto-sweep destination updated.", new { storeId });
             }
             catch (Exception ex)
@@ -1874,8 +1874,8 @@ public class ArkController(
 
         if (command == "toggle-subdust")
         {
-            var toggleWallet = await walletStorage.GetWalletByIdAsync(config!.WalletId!, cancellationToken);
-            var destination = toggleWallet?.WalletDestination;
+            var toggleWallet = await walletStorage.GetWalletById(config!.WalletId!, cancellationToken);
+            var destination = toggleWallet?.Destination;
 
             if (!config.AllowSubDustAmounts && !string.IsNullOrEmpty(destination))
                 return RedirectWithError(nameof(StoreOverview), "Cannot enable sub-dust amounts while auto-sweep is configured. Clear the auto-sweep destination first.", new { storeId });
@@ -2240,7 +2240,7 @@ public class ArkController(
             _ => null
         });
 
-        var intents = await efCoreIntentStorage.GetIntents(
+        var intents = await intentStorage.GetIntents(
             walletIds: [config.WalletId!],
             states: stateFilter != null ? [stateFilter.Value] : null,
             searchText: searchText,
@@ -2353,7 +2353,7 @@ public class ArkController(
             if (coins.Count == 0)
                 return RedirectWithError(nameof(StoreOverview), "No VTXOs available to refresh.", new { storeId });
 
-            var refreshWallet = await walletStorage.GetWalletByIdAsync(config.WalletId!, cancellationToken);
+            var refreshWallet = await walletStorage.GetWalletById(config.WalletId!, cancellationToken);
             if (refreshWallet == null)
             {
                 TempData[WellKnownTempData.ErrorMessage] = "Wallet not found.";
@@ -2611,7 +2611,7 @@ public class ArkController(
 
             return !serverKey.ToBytes().SequenceEqual(addr!.ServerKey.ToBytes()) ? throw new Exception("Invalid destination address") : new TemporaryWalletSettings(GenerateWallet(), null, wallet, true, true);
         }
-        var existingWallet = await walletStorage.GetWalletByIdAsync(wallet, HttpContext.RequestAborted);
+        var existingWallet = await walletStorage.GetWalletById(wallet, HttpContext.RequestAborted);
         return existingWallet == null ? throw new Exception("Unsupported value. Enter a BIP-39 seed phrase (12 or 24 words), nsec private key, Ark address, or wallet ID.") : new TemporaryWalletSettings(null, wallet, null, false, false);
     }
     private static string GenerateWallet()
@@ -2775,11 +2775,11 @@ public class ArkController(
             return NotFound();
 
         // Check if wallet exists
-        var adminWallet = await walletStorage.GetWalletByIdAsync(walletId, cancellationToken);
+        var adminWallet = await walletStorage.GetWalletById(walletId, cancellationToken);
         if (adminWallet == null)
             return RedirectWithError(nameof(ListWallets), "Wallet not found.");
 
-        var destination = adminWallet.WalletDestination;
+        var destination = adminWallet.Destination;
         var balances = await GetArkBalances(walletId, cancellationToken);
         var signerAvailable = await walletProvider.GetAddressProviderAsync(walletId, cancellationToken) != null;
 
@@ -2816,7 +2816,7 @@ public class ArkController(
             WalletId = walletId,
             Destination = destination,
             SignerAvailable = signerAvailable,
-            Wallet = adminWallet.Wallet,
+            Wallet = adminWallet.Secret,
             DefaultAddress = defaultAddress,
             ArkOperatorUrl = arkNetworkConfig.ArkUri,
             ArkOperatorConnected = arkOperatorConnected,
@@ -2831,7 +2831,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyServerSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> ListWallets(CancellationToken cancellationToken)
     {
-        var wallets = await walletStorage.GetWalletsWithDetailsAsync(cancellationToken);
+        var wallets = await GetWalletsWithDetailsAsync(cancellationToken);
         return View(wallets);
     }
 
@@ -2845,22 +2845,22 @@ public class ArkController(
         try
         {
             // Check if wallet exists
-            var wallet = await walletStorage.GetWalletWithDetailsAsync(walletId, cancellationToken);
+            var wallet = await GetWalletWithDetailsAsync(walletId, cancellationToken);
             if (wallet == null)
                 return RedirectWithError(nameof(ListWallets), "Wallet not found.");
 
             // Check if wallet has any pending swaps
-            var hasPendingSwaps = await walletStorage.HasPendingSwapsAsync(walletId, cancellationToken);
+            var hasPendingSwaps = await HasPendingSwapsAsync(walletId, cancellationToken);
             if (hasPendingSwaps)
                 return RedirectWithError(nameof(AdminWalletOverview), "Cannot delete wallet: It has pending swaps.", new { walletId });
 
             // Check if wallet has any pending intents
-            var hasPendingIntents = await walletStorage.HasPendingIntentsAsync(walletId, cancellationToken);
+            var hasPendingIntents = await HasPendingIntentsAsync(walletId, cancellationToken);
             if (hasPendingIntents)
                 return RedirectWithError(nameof(AdminWalletOverview), "Cannot delete wallet: It has pending intents.", new { walletId });
 
             // Delete the wallet and all associated data
-            await walletStorage.DeleteWalletAsync(walletId, cancellationToken);
+            await walletStorage.DeleteWallet(walletId, cancellationToken);
             return RedirectWithSuccess(nameof(ListWallets), $"Wallet {walletId} and all associated data deleted successfully.");
         }
         catch (Exception ex)
@@ -3879,6 +3879,74 @@ public class ArkController(
         }
 
         return result;
+    }
+
+    #endregion
+
+    #region BTCPay-specific wallet storage helpers
+
+    /// <summary>
+    /// BTCPay-specific helper to get all wallets with their related contracts and swaps.
+    /// </summary>
+    private async Task<List<ArkWalletEntity>> GetWalletsWithDetailsAsync(CancellationToken cancellationToken = default)
+    {
+        await using var ctx = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        return await ctx.Wallets
+            .Include(w => w.Contracts)
+            .Include(w => w.Swaps)
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// BTCPay-specific helper to get a wallet with its related contracts and swaps.
+    /// </summary>
+    private async Task<ArkWalletEntity?> GetWalletWithDetailsAsync(string walletId, CancellationToken cancellationToken = default)
+    {
+        await using var ctx = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        return await ctx.Wallets
+            .Include(w => w.Contracts)
+            .Include(w => w.Swaps)
+            .FirstOrDefaultAsync(w => w.Id == walletId, cancellationToken);
+    }
+
+    /// <summary>
+    /// BTCPay-specific helper to check if a wallet has pending swaps.
+    /// </summary>
+    private async Task<bool> HasPendingSwapsAsync(string walletId, CancellationToken cancellationToken = default)
+    {
+        await using var ctx = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        return await ctx.Swaps
+            .AnyAsync(s => s.WalletId == walletId &&
+                          s.Status == ArkSwapStatus.Pending,
+                     cancellationToken);
+    }
+
+    /// <summary>
+    /// BTCPay-specific helper to check if a wallet has pending intents.
+    /// </summary>
+    private async Task<bool> HasPendingIntentsAsync(string walletId, CancellationToken cancellationToken = default)
+    {
+        await using var ctx = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        return await ctx.Intents
+            .AnyAsync(i => i.WalletId == walletId &&
+                          (i.State == ArkIntentState.WaitingToSubmit ||
+                           i.State == ArkIntentState.WaitingForBatch ||
+                           i.State == ArkIntentState.BatchInProgress),
+                     cancellationToken);
+    }
+
+    /// <summary>
+    /// BTCPay-specific helper to update a wallet's destination address.
+    /// </summary>
+    private async Task UpdateWalletDestinationAsync(string walletId, string? destination, CancellationToken cancellationToken = default)
+    {
+        await using var ctx = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var wallet = await ctx.Wallets.FirstOrDefaultAsync(w => w.Id == walletId, cancellationToken);
+        if (wallet != null)
+        {
+            wallet.WalletDestination = destination;
+            await ctx.SaveChangesAsync(cancellationToken);
+        }
     }
 
     #endregion
