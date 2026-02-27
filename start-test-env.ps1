@@ -25,9 +25,9 @@ Set-Location $ScriptDir
 if (-not $SkipEnv) {
     Log "Starting Ark development environment..."
     if ($Clean) {
-        & bash ./start-env.sh --clean
+        & bash ./submodules/NNark/NArk.Tests.End2End/Infrastructure/start-env.sh --clean
     } else {
-        & bash ./start-env.sh
+        & bash ./submodules/NNark/NArk.Tests.End2End/Infrastructure/start-env.sh
     }
     if ($LASTEXITCODE -ne 0) {
         LogError "Failed to start environment"

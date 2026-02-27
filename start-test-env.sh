@@ -48,9 +48,9 @@ cd "$SCRIPT_DIR"
 if [ "$SKIP_ENV" = false ]; then
   log "Starting Ark development environment..."
   if [ "$CLEAN" = true ]; then
-    ./start-env.sh --clean
+    ./submodules/NNark/NArk.Tests.End2End/Infrastructure/start-env.sh --clean
   else
-    ./start-env.sh
+    ./submodules/NNark/NArk.Tests.End2End/Infrastructure/start-env.sh
   fi
 else
   log "Skipping environment setup (--skip-env flag set)"
