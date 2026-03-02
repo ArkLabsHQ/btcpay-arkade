@@ -2479,8 +2479,7 @@ public class ArkController(
             if (!contracts.Any())
                 return RedirectWithError(nameof(Contracts), "Contract not found.", new { storeId });
 
-            var allContracts = await contractStorage.GetContracts(walletIds: [config.WalletId], cancellationToken: cancellationToken);
-            await vtxoSyncService.PollScriptsForVtxos(allContracts.Select(c => c.Script).ToHashSet(), cancellationToken);
+            await vtxoSyncService.PollScriptsForVtxos(contracts.Select(c => c.Script).ToHashSet(), cancellationToken);
             return RedirectWithSuccess(nameof(Contracts), "Contract VTXOs updated successfully.", new { storeId });
         }
         catch (Exception ex)
