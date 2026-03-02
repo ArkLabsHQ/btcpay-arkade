@@ -7,10 +7,11 @@
 
 @using NBitcoin
 @using System.Globalization
+@using System.Text.RegularExpressions
 @{
     // Check if Lightning should be shown for this store and invoice amount
     // The limits service handles all validation logic (store config, Boltz limits, etc.)
-    var amountSats = (long)Money.Coins(decimal.Parse(Model.Due, CultureInfo.InvariantCulture)).Satoshi;
+    var amountSats = (long)Money.Coins(decimal.Parse(Regex.Replace(Model.Due, @"\s", ""), CultureInfo.InvariantCulture)).Satoshi;
     var shouldShowLightning = await LimitsService.CanSupportLightningAsync(Model.StoreId, amountSats, CancellationToken.None);
 }
 
