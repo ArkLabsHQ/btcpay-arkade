@@ -144,6 +144,15 @@ public class ArkController(
                 }
             }
 
+            // Sync all known contracts for this wallet to pick up any existing VTXOs
+            var contracts = await contractStorage.GetContracts(
+                walletIds: [walletSettings.WalletId!], cancellationToken: HttpContext.RequestAborted);
+            if (contracts.Count > 0)
+            {
+                var scripts = contracts.Select(c => c.Script).ToHashSet();
+                await vtxoSyncService.PollScriptsForVtxos(scripts, HttpContext.RequestAborted);
+            }
+
             var config = new ArkadePaymentMethodConfig(walletSettings.WalletId!, walletSettings.IsOwnedByStore);
             store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], config);
 
