@@ -144,6 +144,15 @@ public class ArkController(
                 }
             }
 
+            // Sync all known contracts for this wallet to pick up any existing VTXOs
+            var contracts = await contractStorage.GetContracts(
+                walletIds: [walletSettings.WalletId!], cancellationToken: HttpContext.RequestAborted);
+            if (contracts.Count > 0)
+            {
+                var scripts = contracts.Select(c => c.Script).ToHashSet();
+                await vtxoSyncService.PollScriptsForVtxos(scripts, HttpContext.RequestAborted);
+            }
+
             var config = new ArkadePaymentMethodConfig(walletSettings.WalletId!, walletSettings.IsOwnedByStore);
             store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], config);
 
@@ -2329,6 +2338,8 @@ public class ArkController(
         var (store, config, errorResult) = ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
+        var walletId = config!.WalletId;
+
         var lnConfig = store!.GetPaymentMethodConfig<LightningPaymentMethodConfig>(GetLightningPaymentMethod(), paymentMethodHandlerDictionary);
         var lnEnabled = lnConfig?.ConnectionString?.StartsWith("type=arkade", StringComparison.InvariantCultureIgnoreCase) is true;
 
@@ -2337,6 +2348,13 @@ public class ArkController(
             store.SetPaymentMethodConfig(GetLightningPaymentMethod(), null);
 
         await storeRepository.UpdateStore(store);
+
+        // Delete wallet from DB if no other store references it
+        if (!string.IsNullOrEmpty(walletId) && !await IsWalletUsedByAnyStore(walletId))
+        {
+            await walletStorage.DeleteWallet(walletId, HttpContext.RequestAborted);
+        }
+
         return RedirectWithSuccess(nameof(InitialSetup), "Ark wallet configuration cleared.", new { storeId });
     }
 
@@ -2584,6 +2602,15 @@ public class ArkController(
 
         if (wallet.StartsWith("nsec", StringComparison.InvariantCultureIgnoreCase))
         {
+            // Check all possible wallet ID formats: tr(compressed), raw compressed, raw xonly, tr(xonly)
+            var candidateIds = new[] { WalletFactory.GetOutputDescriptorFromNsec(wallet) }
+                .Concat(WalletFactory.GetAlternateWalletIdsFromNsec(wallet));
+            foreach (var candidateId in candidateIds)
+            {
+                var existing = await walletStorage.GetWalletById(candidateId, HttpContext.RequestAborted);
+                if (existing is not null)
+                    return new TemporaryWalletSettings(null, candidateId, null, false, false);
+            }
             return new TemporaryWalletSettings(wallet, null, null, true, false);
         }
 
@@ -2869,6 +2896,29 @@ public class ArkController(
     }
 
     #region Helper Methods
+
+    /// <summary>
+    /// Checks whether the given wallet ID is referenced by any store's Ark or LN payment method config.
+    /// </summary>
+    private async Task<bool> IsWalletUsedByAnyStore(string walletId)
+    {
+        var allStores = await storeRepository.GetStores();
+        var lnPaymentMethod = GetLightningPaymentMethod();
+        var lnWalletRef = $"wallet-id={walletId}";
+        foreach (var s in allStores)
+        {
+            var arkConfig = s.GetPaymentMethodConfig<ArkadePaymentMethodConfig>(
+                ArkadePlugin.ArkadePaymentMethodId, paymentMethodHandlerDictionary);
+            if (arkConfig?.WalletId == walletId)
+                return true;
+
+            var lnConfig = s.GetPaymentMethodConfig<LightningPaymentMethodConfig>(
+                lnPaymentMethod, paymentMethodHandlerDictionary);
+            if (lnConfig?.ConnectionString?.Contains(lnWalletRef, StringComparison.OrdinalIgnoreCase) is true)
+                return true;
+        }
+        return false;
+    }
 
     /// <summary>
     /// Validates store data and Arkade configuration, returning an error result if validation fails.
