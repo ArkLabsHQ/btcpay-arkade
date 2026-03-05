@@ -9,7 +9,7 @@
     </header>
     @if (Model.Items.Any())
     {
-        <div class="d-flex flex-column gap-3 mt-2" style="max-height:12rem;overflow-y:auto">
+        <div class="d-flex flex-column gap-3 mt-2 w-100" style="max-height:12rem;overflow-y:auto">
             @foreach (var item in Model.Items)
             {
                 var typeLabel = item.Type switch

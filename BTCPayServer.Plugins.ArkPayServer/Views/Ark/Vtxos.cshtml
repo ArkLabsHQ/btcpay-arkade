@@ -185,46 +185,48 @@
                                     <span class="text-muted">-</span>
                                 }
                             </td>
-                            <td class="align-middle">
-                               
+                            <td class="align-middle d-flex flex-wrap gap-1">
                                 @if (vtxo.IsRecoverable(chainTime))
                                 {
                                     <span class="badge text-bg-warning">Recoverable</span>
                                 }
                                 @if (isSpendable)
                                 {
-                                    <span class="badge text-bg-info ms-1">Spendable</span>
+                                    <span class="badge text-bg-info">Spendable</span>
                                 }
                                 @if (!vtxo.Preconfirmed)
                                 {
-                                    <span class="badge text-bg-light ms-1">Settled</span>
+                                    <span class="badge text-bg-light">Settled</span>
                                 }
                                 @if (vtxo.Unrolled)
                                 {
-                                    <span class="badge text-bg-dark ms-1">Unrolled</span>
+                                    <span class="badge text-bg-dark">Unrolled</span>
                                 }
                             </td>
                             <td class="align-middle">
-                                @if(!vtxo.IsSpent()){
-                                <span class="badge text-bg-info ms-1">Unspent</span>
-                                }
-                                
-                                @if (!string.IsNullOrEmpty(vtxo.SpentByTransactionId))
+                                @if (!vtxo.IsSpent())
                                 {
-                                    var spentByLink = ArkadeLinkHelper.GetTransactionLink(ArkNetworkConfig, vtxo.SpentByTransactionId);
-                                    <vc:truncate-center link="@spentByLink" text="@vtxo.SpentByTransactionId"
-                                                        classes="truncate-center-id"/>
-                                }
-                                @if (!string.IsNullOrEmpty(vtxo.SettledByTransactionId))
-                                {
-                                    var settledByLink = ArkadeLinkHelper.GetCommitmentTransactionLink(ArkNetworkConfig, vtxo.SettledByTransactionId);
-                                    <span class="text-muted small">Settled:</span>
-                                    <vc:truncate-center link="@settledByLink" text="@vtxo.SettledByTransactionId"
-                                                        classes="truncate-center-id"/>
+                                    <span class="badge text-bg-info">Unspent</span>
                                 }
                                 else
                                 {
-                                    <span class="text-muted">-</span>
+                                    if (!string.IsNullOrEmpty(vtxo.SpentByTransactionId))
+                                    {
+                                        var spentByLink = ArkadeLinkHelper.GetTransactionLink(ArkNetworkConfig, vtxo.SpentByTransactionId);
+                                        <vc:truncate-center link="@spentByLink" text="@vtxo.SpentByTransactionId"
+                                                            classes="truncate-center-id"/>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge text-bg-secondary">Spent</span>
+                                    }
+                                    @if (!string.IsNullOrEmpty(vtxo.SettledByTransactionId))
+                                    {
+                                        var settledByLink = ArkadeLinkHelper.GetCommitmentTransactionLink(ArkNetworkConfig, vtxo.SettledByTransactionId);
+                                        <span class="text-muted small">- Settled:</span>
+                                        <vc:truncate-center link="@settledByLink" text="@vtxo.SettledByTransactionId"
+                                                            classes="truncate-center-id"/>
+                                    }
                                 }
                             </td>
                         </tr>

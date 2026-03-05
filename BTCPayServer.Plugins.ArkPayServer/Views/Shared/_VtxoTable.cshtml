@@ -114,7 +114,7 @@
                                 <span class="text-muted">-</span>
                             }
                         </td>
-                        <td>
+                        <td class="d-flex flex-wrap gap-1">
                             @if (vtxo.IsSpent())
                             {
                                 <span class="badge text-bg-secondary">Spent</span>
@@ -129,7 +129,7 @@
                             }
                             @if (showSpendableStatus && isSpendable)
                             {
-                                <span class="badge text-bg-info ms-1">Spendable</span>
+                                <span class="badge text-bg-info">Spendable</span>
                             }
                         </td>
                     </tr>
