@@ -5,7 +5,7 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
 
-        <Product>Arkade - Beta</Product>
+        <Product>Arkade - Beta2</Product>
         <Description>Programmable money for sovereign business. Easily accept payments through Arkade &amp; Lightning non-custodially without complexity.</Description>
         <Version>2.0.0</Version>
         <EmbedUntrackedSources>true</EmbedUntrackedSources>
