@@ -214,7 +214,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> StoreOverview(CancellationToken cancellationToken)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         var wallet = await walletStorage.GetWalletById(config!.WalletId!, cancellationToken);
@@ -358,7 +358,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> ShowPrivateKey(string storeId)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         var wallet = await walletStorage.GetWalletById(config!.WalletId);
@@ -382,7 +382,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> Receive(string storeId, CancellationToken cancellationToken)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         var model = new ArkReceiveViewModel();
@@ -405,7 +405,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> Receive(string storeId, string command, CancellationToken cancellationToken)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         try
@@ -600,7 +600,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> BuildIntent(string storeId, IntentBuilderViewModel model, CancellationToken token)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: true);
+        var (store, config, errorResult) = await ValidateStoreAndConfig(requireOwnedByStore: true);
         if (errorResult != null) return errorResult;
 
         // Get the selected coins
@@ -811,7 +811,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> EstimateFees(string storeId, [FromBody] FeeEstimateRequest request, CancellationToken token)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: true);
+        var (store, config, errorResult) = await ValidateStoreAndConfig(requireOwnedByStore: true);
         if (errorResult != null) return BadRequest("Invalid store configuration");
 
         try
@@ -1008,7 +1008,7 @@ public class ArkController(
         [FromBody] ParseDestinationRequest request,
         CancellationToken token)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: true);
+        var (store, config, errorResult) = await ValidateStoreAndConfig(requireOwnedByStore: true);
         if (errorResult != null) return BadRequest("Invalid store configuration");
 
         try
@@ -1052,7 +1052,7 @@ public class ArkController(
         [FromBody] SuggestCoinsRequest request,
         CancellationToken token)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: false);
+        var (store, config, errorResult) = await ValidateStoreAndConfig(requireOwnedByStore: false);
         if (errorResult != null)
             return Json(new SuggestCoinsResponse { Error = "Store not configured" });
 
@@ -1153,7 +1153,7 @@ public class ArkController(
         [FromBody] ValidateSpendRequest request,
         CancellationToken token)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: false);
+        var (store, config, errorResult) = await ValidateStoreAndConfig(requireOwnedByStore: false);
         if (errorResult != null)
             return Json(new ValidateSpendResponse { Errors = { "Store not configured" } });
 
@@ -1277,7 +1277,7 @@ public class ArkController(
         string? destination,
         CancellationToken token)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: false);
+        var (store, config, errorResult) = await ValidateStoreAndConfig(requireOwnedByStore: false);
         if (errorResult != null)
             return errorResult;
 
@@ -1419,7 +1419,7 @@ public class ArkController(
         [FromForm] string? CoinSelectionMode,
         CancellationToken token)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: false);
+        var (store, config, errorResult) = await ValidateStoreAndConfig(requireOwnedByStore: false);
         if (errorResult != null)
             return errorResult;
 
@@ -1854,7 +1854,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> UpdateWalletConfig(string storeId, StoreOverviewViewModel model, string? command = null, CancellationToken cancellationToken = default)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         if (command == "clear-destination")
@@ -1910,7 +1910,7 @@ public class ArkController(
         int count = 50,
         bool debug = false)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         if (!config!.GeneratedByStore)
@@ -1989,7 +1989,7 @@ public class ArkController(
         int count = 50,
         bool debug = false)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         if (!config!.GeneratedByStore)
@@ -2048,7 +2048,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> PollSwap(string storeId, string swapId)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         try
@@ -2102,7 +2102,7 @@ public class ArkController(
         int skip = 0,
         int count = 50)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         if (!config!.GeneratedByStore)
@@ -2232,7 +2232,7 @@ public class ArkController(
         int skip = 0,
         int count = 50)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         if (!config!.GeneratedByStore)
@@ -2295,7 +2295,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> EnableLightning(string storeId)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         var lightningPaymentMethodId = GetLightningPaymentMethod();
@@ -2323,7 +2323,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> DisableLightning(string storeId)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         store!.SetPaymentMethodConfig(GetLightningPaymentMethod(), null);
@@ -2335,7 +2335,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> ClearWallet(string storeId)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         var walletId = config!.WalletId;
@@ -2362,7 +2362,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> ForceRefresh(string storeId, CancellationToken cancellationToken)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         try
@@ -2416,7 +2416,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> CancelIntent(string storeId, string intentTxId, CancellationToken cancellationToken)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         try
@@ -2469,7 +2469,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> SyncWallet(string storeId, CancellationToken cancellationToken)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         try
@@ -2488,7 +2488,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> SyncContract(string storeId, string script, CancellationToken cancellationToken)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         try
@@ -2510,7 +2510,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> DeleteContract(string storeId, string script, CancellationToken cancellationToken)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         // Only allow deletion if wallet is generated by store
@@ -2542,7 +2542,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> ImportContract(string storeId, string contractString, CancellationToken cancellationToken)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         // Only allow import if wallet is generated by store
@@ -2922,8 +2922,9 @@ public class ArkController(
 
     /// <summary>
     /// Validates store data and Arkade configuration, returning an error result if validation fails.
+    /// Server admins bypass the <paramref name="requireOwnedByStore"/> check.
     /// </summary>
-    private (StoreData? store, ArkadePaymentMethodConfig? config, IActionResult? errorResult)
+    private async Task<(StoreData? store, ArkadePaymentMethodConfig? config, IActionResult? errorResult)>
         ValidateStoreAndConfig(bool requireOwnedByStore = false)
     {
         var store = HttpContext.GetStoreData();
@@ -2935,7 +2936,12 @@ public class ArkController(
             return (null, null, RedirectToAction(nameof(InitialSetup), new { storeId = store.Id }));
 
         if (requireOwnedByStore && !config.GeneratedByStore)
-            return (null, null, RedirectToAction(nameof(StoreOverview), new { storeId = store.Id }));
+        {
+            var isServerAdmin = (await authorizationService.AuthorizeAsync(User, null,
+                new PolicyRequirement(Policies.CanModifyServerSettings))).Succeeded;
+            if (!isServerAdmin)
+                return (null, null, RedirectToAction(nameof(StoreOverview), new { storeId = store.Id }));
+        }
 
         return (store, config, null);
     }
@@ -3026,7 +3032,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> MassActionVtxos(string storeId, string command, string[] selectedItems, CancellationToken cancellationToken)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         if (selectedItems.Length == 0)
@@ -3061,7 +3067,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> MassActionSwaps(string storeId, string command, string[] selectedItems, CancellationToken cancellationToken)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         if (selectedItems.Length == 0)
@@ -3113,7 +3119,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> MassActionContracts(string storeId, string command, string[] selectedItems, CancellationToken cancellationToken)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         if (selectedItems.Length == 0)
@@ -3163,7 +3169,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> MassActionVtxosSublist(string storeId, string contractScript, string command, string[] selectedItems, CancellationToken cancellationToken)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         if (selectedItems.Length == 0)
@@ -3191,7 +3197,7 @@ public class ArkController(
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> MassActionSwapsSublist(string storeId, string contractScript, string command, string[] selectedItems, CancellationToken cancellationToken)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig();
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
         if (errorResult != null) return errorResult;
 
         if (selectedItems.Length == 0)
@@ -3282,7 +3288,7 @@ public class ArkController(
         [FromForm] Send2ViewModel model,
         CancellationToken token = default)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: false);
+        var (store, config, errorResult) = await ValidateStoreAndConfig(requireOwnedByStore: false);
         if (errorResult != null)
             return errorResult;
 
@@ -3332,7 +3338,7 @@ public class ArkController(
         [FromForm] int removeIndex,
         CancellationToken token = default)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: false);
+        var (store, config, errorResult) = await ValidateStoreAndConfig(requireOwnedByStore: false);
         if (errorResult != null)
             return errorResult;
 
@@ -3375,7 +3381,7 @@ public class ArkController(
         [FromForm] Send2ViewModel model,
         CancellationToken token = default)
     {
-        var (store, config, errorResult) = ValidateStoreAndConfig(requireOwnedByStore: false);
+        var (store, config, errorResult) = await ValidateStoreAndConfig(requireOwnedByStore: false);
         if (errorResult != null)
             return errorResult;
 
