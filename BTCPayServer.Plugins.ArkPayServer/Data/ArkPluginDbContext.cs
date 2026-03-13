@@ -21,10 +21,14 @@ public class ArkPluginDbContext(DbContextOptions<ArkPluginDbContext> options) : 
             opts.Schema = "BTCPayServer.Plugins.Ark";
         });
 
-        // PostgreSQL-specific: jsonb column types for contract data
+        // PostgreSQL-specific: jsonb column types
         modelBuilder.Entity<ArkWalletContractEntity>(entity =>
         {
             entity.Property(e => e.ContractDataJson).HasColumnType("jsonb");
+            entity.Property(e => e.MetadataJson).HasColumnType("jsonb");
+        });
+        modelBuilder.Entity<ArkSwapEntity>(entity =>
+        {
             entity.Property(e => e.MetadataJson).HasColumnType("jsonb");
         });
     }
