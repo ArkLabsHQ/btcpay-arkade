@@ -1164,6 +1164,11 @@ else
             } else {
                 destInput?.classList.remove('opacity-50');
                 destInput?.removeAttribute('disabled');
+                // Reset badge if it still says "Resolving…" (e.g. after error or clear)
+                if (badge && badge.textContent === 'Resolving\u2026') {
+                    badge.textContent = '';
+                    badge.className = 'destination-type-badge badge';
+                }
             }
         }
 
@@ -1297,6 +1302,10 @@ else
                 const index = parseInt(e.target.dataset.index);
                 const value = e.target.value.trim();
 
+                // Clear previous error and badge on any destination edit
+                updateOutputError(index, null);
+                setDestinationLoading(index, false);
+
                 // Server-side parse for BIP21, Lightning, Ark addresses, LNURL, and Lightning Addresses
                 if (value.startsWith('bitcoin:') || value.startsWith('ln') ||
                     value.startsWith('lightning:') || value.startsWith('ark1') ||
@@ -1308,6 +1317,9 @@ else
                     suggestCoins();
                 }
             } else if (e.target.classList.contains('amount-input')) {
+                // Clear error from previous validation (e.g. "Amount is required")
+                const row = e.target.closest('.output-row');
+                if (row) updateOutputError(parseInt(row.dataset.index), null);
                 updateRemainingBalance();
                 estimateFees();
             }
