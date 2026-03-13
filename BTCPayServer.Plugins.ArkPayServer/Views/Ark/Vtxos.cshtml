@@ -1,50 +1,41 @@
 @using BTCPayServer.Abstractions.Contracts
 @using BTCPayServer.Abstractions.Extensions
-@using BTCPayServer.Plugins.ArkPayServer
-@using BTCPayServer.Plugins.ArkPayServer.Data.Entities
 @using BTCPayServer.Plugins.ArkPayServer.Helpers
-@using NArk.Services.Abstractions
+@using NArk.Abstractions.Blockchain
 @using NBitcoin
+@using NArk.Abstractions.VTXOs
+@using NArk.Core.Contracts
+@using NArk.Core.Transport
+@using static BTCPayServer.Plugins.ArkPayServer.Helpers.ArkViewHelpers
 @model BTCPayServer.Plugins.ArkPayServer.Models.StoreVtxosViewModel
 @inject IScopeProvider ScopeProvider
-@inject IOperatorTermsService Terms
-@inject ArkConfiguration ArkConfiguration
+@inject ArkNetworkConfig ArkNetworkConfig
+@inject IChainTimeProvider ChainTimeProvider
+@inject IClientTransport ClientTransport
 
 @{
     ViewData.SetActivePage(category: "Ark", activePage: "VTXOs", title: "Ark - VTXOs");
     var storeId = ScopeProvider.GetCurrentStoreId();
-    
-    var statusFilterCount = Model.Search?.ContainsFilter("status") == true ? Model.Search.GetFilterArray("status").Length : 0;
-}
+    var statusFilterCount = GetFilterCount(Model.Search, "status");
+    var chainTime = await ChainTimeProvider.GetChainTime(Context.RequestAborted);
 
-@functions
-{
-    private bool HasArrayFilter(string type, string key = null) =>
-        Model.Search?.ContainsFilter(type) == true && (key is null || Model.Search.GetFilterArray(type).Contains(key));
+    // Get network for address formatting
+    var mainnet = true;
+    Network network = Network.Main;
+    try
+    {
+        var serverInfo = await ClientTransport.GetServerInfoAsync();
+        mainnet = serverInfo.Network.ChainName == ChainName.Mainnet;
+        network = serverInfo.Network;
+    }
+    catch (Exception)
+    {
+    }
 }
 
 @section PageHeadContent
 {
-    <style>
-        .vtxo-details-row > td {
-            padding: 1.5rem 1rem 0 2.65rem;
-        }
-        .dropdown > .btn {
-            min-width: 7rem;
-            padding-left: 1rem;
-            text-align: left;
-        }
-        #SearchText {
-            flex-shrink: 0;
-            min-width: 200px;
-            max-width: 300px;
-        }
-        @@media (max-width: 568px) {
-            #SearchText {
-                width: 100%;
-            }
-        }
-    </style>
+    <link rel="stylesheet" href="~/Resources/css/ark-plugin.css" asp-append-version="true" />
 }
 
 <div class="sticky-header">
@@ -73,8 +64,8 @@
 <form class="d-flex flex-wrap flex-sm-nowrap align-items-center gap-3 mb-4 col-xxl-8" asp-action="Vtxos" asp-route-storeId="@Model.StoreId" method="get">
     <input asp-for="Count" type="hidden" />
     <input asp-for="SearchTerm" type="hidden" value="@(Model.Search?.WithoutSearchText() ?? "")"/>
-    <input asp-for="SearchText" class="form-control" placeholder="Search TXID or Script…" />
-    
+    <input asp-for="SearchText" class="form-control" placeholder="Search TXID, Address, or Contract…" />
+
     <div class="dropdown">
         <button id="StatusOptionsToggle" class="btn btn-secondary dropdown-toggle dropdown-toggle-custom-caret" type="button" data-bs-toggle="dropdown" aria-expanded="false">
             @if (statusFilterCount > 0)
@@ -87,15 +78,15 @@
             }
         </button>
         <div class="dropdown-menu" aria-labelledby="StatusOptionsToggle">
-            <a asp-action="Vtxos" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "unspent") ?? "")" class="dropdown-item @(HasArrayFilter("status", "unspent") ? "custom-active" : "")" text-translate="true">Unspent</a>
-            <a asp-action="Vtxos" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "spent") ?? "")" class="dropdown-item @(HasArrayFilter("status", "spent") ? "custom-active" : "")" text-translate="true">Spent</a>
-            <a asp-action="Vtxos" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "recoverable") ?? "")" class="dropdown-item @(HasArrayFilter("status", "recoverable") ? "custom-active" : "")" text-translate="true">Recoverable</a>
+            <a asp-action="Vtxos" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "unspent") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "status", "unspent") ? "custom-active" : "")" text-translate="true">Unspent</a>
+            <a asp-action="Vtxos" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "spent") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "status", "spent") ? "custom-active" : "")" text-translate="true">Spent</a>
+            <a asp-action="Vtxos" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "recoverable") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "status", "recoverable") ? "custom-active" : "")" text-translate="true">Recoverable</a>
             <div class="dropdown-divider"></div>
-            <a asp-action="Vtxos" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "spendable") ?? "")" class="dropdown-item @(HasArrayFilter("status", "spendable") ? "custom-active" : "")" text-translate="true">Spendable</a>
-            <a asp-action="Vtxos" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "non-spendable") ?? "")" class="dropdown-item @(HasArrayFilter("status", "non-spendable") ? "custom-active" : "")" text-translate="true">Non-Spendable</a>
+            <a asp-action="Vtxos" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "spendable") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "status", "spendable") ? "custom-active" : "")" text-translate="true">Spendable</a>
+            <a asp-action="Vtxos" asp-route-storeId="@Model.StoreId" asp-route-count="@Model.Count" asp-route-searchTerm="@(Model.Search?.Toggle("status", "non-spendable") ?? "")" class="dropdown-item @(HasArrayFilter(Model.Search, "status", "non-spendable") ? "custom-active" : "")" text-translate="true">Non-Spendable</a>
         </div>
     </div>
-    
+
     @if (statusFilterCount > 0 || !string.IsNullOrEmpty(Model.SearchText))
     {
         <button id="clearAllFiltersBtn" type="button" class="btn btn-secondary" style="min-width: 7rem;" title="Clear all filters">
@@ -108,73 +99,142 @@
 
 @if (Model.Vtxos.Any())
 {
-    <div class="table-responsive">
-        <table class="table table-hover">
-            <thead>
-                <tr>
-                    <th class="date-col">
-                        <div class="d-flex align-items-center gap-1">
-                            <span text-translate="true">Seen</span>
-                            <button type="button" class="btn btn-link p-0 switch-time-format only-for-js" title="Switch date format">
-                                <vc:icon symbol="time" />
-                            </button>
-                        </div>
-                    </th>
-                    <th text-translate="true" class="text-nowrap">TXID</th>
-                    <th text-translate="true" class="text-nowrap">Output</th>
-                    <th text-translate="true" class="text-nowrap">Amount</th>
-                    <th text-translate="true">Status</th>
-                    <th text-translate="true">Spendable</th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach (var vtxo in Model.Vtxos)
-                {
-                    var outpoint = ArkadeLinkHelper.FormatOutpoint(vtxo.TransactionId, (uint)vtxo.TransactionOutputIndex);
-                    var link = ArkadeLinkHelper.GetIndexerLinkForVtxo(ArkConfiguration.ArkUri, vtxo.TransactionId, (uint)vtxo.TransactionOutputIndex);
-                    var vtxoOutpoint = new OutPoint(uint256.Parse(vtxo.TransactionId), (uint)vtxo.TransactionOutputIndex);
-                    var isSpendable = Model.SpendableOutpoints.Contains(vtxoOutpoint);
-
-                    <tr id="vtxo_@outpoint.GetHashCode()">
-                        <td class="align-middle date-col">@vtxo.SeenAt.ToBrowserDate()</td>
-                        <td class="align-middle">
-                            <vc:truncate-center link="@link" text="@vtxo.TransactionId" classes="truncate-center-id"/>
-                        </td>
-                        <td class="align-middle">@vtxo.TransactionOutputIndex</td>
-                        <td class="align-middle">@Money.Satoshis(vtxo.Amount).ToDecimal(MoneyUnit.BTC) BTC</td>
-                        <td class="align-middle">
-                            @if (vtxo.SpentByTransactionId != null || vtxo.SettledByTransactionId != null)
-                            {
-                                <span class="badge text-bg-secondary">Spent</span>
-                            }
-                            else if (vtxo.Recoverable)
-                            {
-                                <span class="badge text-bg-warning">Recoverable</span>
-                            }
-                            else
-                            {
-                                <span class="badge text-bg-success">Unspent</span>
-                            }
-                        </td>
-                        <td class="align-middle">
-                            @if (vtxo.SpentByTransactionId != null || vtxo.SettledByTransactionId != null)
-                            {
-                                <span class="text-muted">-</span>
-                            }
-                            else if (isSpendable)
-                            {
-                                <span class="badge text-bg-success">Yes</span>
-                            }
-                            else
-                            {
-                                <span class="badge text-bg-secondary">No</span>
-                            }
-                        </td>
+    <form method="post" asp-action="MassActionVtxos" asp-route-storeId="@Model.StoreId">
+        <div class="table-responsive">
+            <table id="vtxos-table" class="table table-hover mass-action">
+                <thead class="mass-action-head">
+                    <tr>
+                        <th class="mass-action-select-col only-for-js">
+                            <input type="checkbox" class="form-check-input mass-action-select-all" />
+                        </th>
+                        <th class="date-col">
+                            <div class="d-flex align-items-center gap-1">
+                                <span text-translate="true">Seen</span>
+                                <button type="button" class="btn btn-link p-0 switch-time-format only-for-js" title="Switch date format">
+                                    <vc:icon symbol="time" />
+                                </button>
+                            </div>
+                        </th>
+                        <th text-translate="true">Outpoint</th>
+                        <th text-translate="true">Address</th>
+                        <th text-translate="true">Amount</th>
+                        <th text-translate="true">Expiry</th>
+                        <th text-translate="true">Status</th>
+                        <th text-translate="true">Spent/Settled By</th>
                     </tr>
-                }
-            </tbody>
-        </table>
-    </div>
+                </thead>
+                <thead class="mass-action-actions">
+                    <tr>
+                        <th class="mass-action-select-col only-for-js">
+                            <input type="checkbox" class="form-check-input mass-action-select-all" />
+                        </th>
+                        <th colspan="7">
+                            <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+                                <div>
+                                    <strong class="mass-action-selected-count">0</strong>
+                                    <span text-translate="true">selected</span>
+                                </div>
+                                <div class="d-inline-flex align-items-center gap-3">
+                                    <button type="submit" name="command" value="refresh-state" class="btn btn-link">
+                                        <vc:icon symbol="actions-refresh" />
+                                        <span text-translate="true">Poll</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var vtxo in Model.Vtxos)
+                    {
+                        var isSpendable = Model.SpendableOutpoints.Contains(vtxo.OutPoint);
+                        var outpointValue = $"{vtxo.TransactionId}:{vtxo.TransactionOutputIndex}";
+                        var isSpent = vtxo.IsSpent();
+
+                        // Get contract info for this VTXO
+                        Model.VtxoContracts.TryGetValue(vtxo.Script, out var contract);
+                        var arkContract = contract != null ? ArkContractParser.Parse(contract.Type, contract.AdditionalData, network) : null;
+                        var addressStr = arkContract?.GetArkAddress().ToString(mainnet);
+                        var outpointLink = ArkadeLinkHelper.GetOutpointLink(ArkNetworkConfig, vtxo.OutPoint.ToString());
+                        var addressLink = !string.IsNullOrEmpty(vtxo.Script) ? ArkadeLinkHelper.GetScriptLink(ArkNetworkConfig, vtxo.Script) : null;
+
+                        <tr id="vtxo_@vtxo.OutPoint" class="mass-action-row">
+                            <td class="only-for-js align-middle">
+                                <input name="selectedItems" type="checkbox" class="form-check-input mass-action-select"
+                                       value="@outpointValue"/>
+                            </td>
+                            <td class="align-middle date-col">@vtxo.CreatedAt.ToBrowserDate()</td>
+                            <td class="align-middle">
+                                <vc:truncate-center link="@outpointLink" text="@vtxo.OutPoint"
+                                                    classes="truncate-center-id"/>
+                            </td>
+                            <td class="align-middle">
+                                <vc:truncate-center link="@addressLink" text="@addressStr"
+                                                    classes="truncate-center-id"/>
+                            </td>
+                            <td class="align-middle">@Money.Satoshis((long)vtxo.Amount).ToDecimal(MoneyUnit.BTC) BTC</td>
+                            <td class="align-middle">
+                                @if (vtxo.ExpiresAt.HasValue)
+                                {
+                                    <span class="vtxo-expiry" data-expires="@vtxo.ExpiresAt.Value.ToUnixTimeSeconds()">
+                                        @vtxo.ExpiresAt.Value.ToTimeAgo()
+                                    </span>
+                                }
+                                else
+                                {
+                                    <span class="text-muted">-</span>
+                                }
+                            </td>
+                            <td class="align-middle d-flex flex-wrap gap-1">
+                                @if (vtxo.IsRecoverable(chainTime))
+                                {
+                                    <span class="badge text-bg-warning">Recoverable</span>
+                                }
+                                @if (isSpendable)
+                                {
+                                    <span class="badge text-bg-info">Spendable</span>
+                                }
+                                @if (!vtxo.Preconfirmed)
+                                {
+                                    <span class="badge text-bg-light">Settled</span>
+                                }
+                                @if (vtxo.Unrolled)
+                                {
+                                    <span class="badge text-bg-dark">Unrolled</span>
+                                }
+                            </td>
+                            <td class="align-middle">
+                                @if (!vtxo.IsSpent())
+                                {
+                                    <span class="badge text-bg-info">Unspent</span>
+                                }
+                                else
+                                {
+                                    if (!string.IsNullOrEmpty(vtxo.SpentByTransactionId))
+                                    {
+                                        var spentByLink = ArkadeLinkHelper.GetTransactionLink(ArkNetworkConfig, vtxo.SpentByTransactionId);
+                                        <vc:truncate-center link="@spentByLink" text="@vtxo.SpentByTransactionId"
+                                                            classes="truncate-center-id"/>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge text-bg-secondary">Spent</span>
+                                    }
+                                    @if (!string.IsNullOrEmpty(vtxo.SettledByTransactionId))
+                                    {
+                                        var settledByLink = ArkadeLinkHelper.GetCommitmentTransactionLink(ArkNetworkConfig, vtxo.SettledByTransactionId);
+                                        <span class="text-muted small">- Settled:</span>
+                                        <vc:truncate-center link="@settledByLink" text="@vtxo.SettledByTransactionId"
+                                                            classes="truncate-center-id"/>
+                                    }
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </form>
 
     <vc:pager view-model="Model" />
 }

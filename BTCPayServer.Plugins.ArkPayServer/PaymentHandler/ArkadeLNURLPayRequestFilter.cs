@@ -1,10 +1,6 @@
 using BTCPayServer.Abstractions.Services;
-using BTCPayServer.Data;
-using BTCPayServer.Payments;
-using BTCPayServer.Payments.Lightning;
 using BTCPayServer.Payments.LNURLPay;
 using BTCPayServer.Plugins.ArkPayServer.Lightning;
-using BTCPayServer.Services.Invoices;
 
 namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 

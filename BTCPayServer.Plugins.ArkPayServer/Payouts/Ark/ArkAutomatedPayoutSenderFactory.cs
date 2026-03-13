@@ -1,6 +1,5 @@
 using BTCPayServer.Data;
 using BTCPayServer.PayoutProcessors;
-using BTCPayServer.PayoutProcessors.Lightning;
 using BTCPayServer.Payouts;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;

@@ -1,4 +1,3 @@
-using BTCPayServer.Models;
 using BTCPayServer.Payments;
 using BTCPayServer.Plugins.ArkPayServer.Lightning;
 using BTCPayServer.Services.Invoices;

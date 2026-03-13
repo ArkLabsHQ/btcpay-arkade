@@ -1,321 +1,403 @@
-@using BTCPayServer
 @using BTCPayServer.Abstractions.Contracts
 @using BTCPayServer.Abstractions.Extensions
-@using BTCPayServer.Plugins.ArkPayServer
-@using BTCPayServer.Plugins.ArkPayServer.Services
-@using NArk.Services.Abstractions
-@using NArk.Contracts
-@using NArk.Services
+@using BTCPayServer.Plugins.ArkPayServer.Helpers
+@using NArk.Abstractions.Wallets
+@using NArk.Abstractions.Intents
+@using NArk.Swaps.Models
+@using NBitcoin
 @model BTCPayServer.Plugins.ArkPayServer.Models.StoreOverviewViewModel
 @inject IScopeProvider ScopeProvider
-@inject ArkConfiguration ArkConfiguration
+@inject ArkNetworkConfig ArkNetworkConfig
 
 @{
-    ViewData.SetActivePage(category: "Ark", activePage: "StoreOverview", title: "Ark - Overview");
+    ViewData.SetActivePage(category: "Ark", activePage: "StoreOverview", title: "Arkade - Overview");
     var storeId = ScopeProvider.GetCurrentStoreId();
 }
 
 <partial name="_StatusMessage" />
 
-@if (Model.Balances != null)
-{
-    <partial name="_ArkBalances" model="Model.Balances" />
-}
-else
-{
-    <div class="alert alert-warning mb-4" role="alert">
-        <vc:icon symbol="warning" /> Unable to load balance information. The indexer service may be unavailable.
-    </div>
-}
-
-<div class="row g-3 mb-4">
-    <!-- Quick Actions Card -->
-    <div class="col-xl-6">
-        <div class="card shadow-sm h-100">
-            <div class="card-header">
-                <h5 class="mb-0">Quick Actions</h5>
-            </div>
-            <div class="card-body">
-                <div class="row g-2">
-                    <div class="col-6">
-                        <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#transferModal">
-                            Transfer Funds
-                        </button>
-                    </div>
-                    <div class="col-6">
-                        <form asp-action="SyncWallet" method="post" asp-route-storeId="@storeId" class="h-100">
-                            <button type="submit" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center">
-                                Sync Wallet
-                            </button>
-                        </form>
-                    </div>
-                    <div class="col-6">
-                        <a asp-action="Vtxos" asp-route-storeId="@storeId" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center">
-                            View VTXOs
-                        </a>
-                    </div>
-                    @if(ArkConfiguration.ArkadeWalletUri is not null)
-                    {
-                        <div class="col-6">
-                            <a  href="@ArkConfiguration.ArkadeWalletUri" target="_blank" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center">
-                                Arkade Wallet
-                            </a>
-                        </div>
-                    }
-                    @* <div class="col-6"> *@
-                    @*     <a asp-action="Intents" asp-route-storeId="@storeId" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center"> *@
-                    @*         View Intents *@
-                    @*     </a> *@
-                    @* </div> *@
-                    @* <div class="col-6"> *@
-                    @*     <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#forceRefreshModal"> *@
-                    @*         Force Batch *@
-                    @*     </button> *@
-                    @* </div> *@
-                    @if (Model.SignerAvailable && !string.IsNullOrEmpty(Model.Wallet))
-                    {
-                        <div class="col-6">
-                            <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#showPrivateKeyModal">
-                                Show Private Key
-                            </button>
-                        </div>
-                    }
-                    <div class="col-6">
-                        <button type="button" class="btn btn-outline-secondary w-100 h-100 d-flex align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#clearWalletModal">
-                            Clear Wallet
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Wallet Status Card -->
-    <div class="col-xl-6">
-        <div class="card shadow-sm h-100">
-            <div class="card-header">
-                <h5 class="mb-0">Wallet Status</h5>
-            </div>
-            <div class="card-body">
-                @if (!string.IsNullOrEmpty(Model.DefaultAddress))
+<!-- Top Row: Wallet Info + Service Status -->
+<div class="row g-4 mb-4">
+    <!-- Wallet Info Tile -->
+    <div class="col-xl-8">
+        <div class="bg-tile rounded p-3 p-sm-4 h-100">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3">
+                <h2 class="h5 mb-0">Wallet</h2>
+                @if (Model.Balances != null)
                 {
-                    <div class="mb-3">
-                        <label class="text-muted small">Default Ark Address</label>
-                        <div class="input-group input-group-sm">
-                            <input type="text" class="form-control form-control-sm font-monospace" value="@Model.DefaultAddress" readonly />
-                            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="copyAddress()">
-                                📋
-                            </button>
-                        </div>
-                    </div>
+                    <partial name="_ArkBalances" model="Model.Balances" view-data='new ViewDataDictionary(ViewData) { { "CompactMode", true }, { "NoContainer", true } }' />
                 }
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                    <span class="text-muted">Wallet ID</span>
-                    @if (!string.IsNullOrEmpty(Model.WalletId))
-                    {
-                        <vc:truncate-center text="@Model.WalletId" classes="truncate-center-id"/>
-                    }
+            </div>
+
+            <!-- Receive Address -->
+            @if (!string.IsNullOrEmpty(Model.DefaultAddress) && Model.WalletType == WalletType.SingleKey)
+            {
+                <div class="mb-3">
+                    <label class="text-muted small">Receive Address</label>
+                    <div class="input-group input-group-sm">
+                        <input type="text" class="form-control form-control-sm font-monospace" value="@Model.DefaultAddress" readonly data-testid="receive-address" />
+                        <button type="button" class="btn btn-outline-secondary btn-sm" data-clipboard="@Model.DefaultAddress" data-testid="copy-address-btn" title="Copy to clipboard">
+                            <vc:icon symbol="copy" />
+                        </button>
+                    </div>
                 </div>
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                    <span class="text-muted">Private Keys</span>
-                    @if (Model.SignerAvailable)
+            }
+
+            <div class="row g-3">
+                <!-- Left Column: Wallet Info -->
+                <div class="col-md-6">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span class="text-muted">Wallet Type</span>
+                        <span class="badge @(Model.WalletType == WalletType.HD ? "text-bg-primary" : "text-bg-secondary")">
+                            @(Model.WalletType == WalletType.HD ? "HD (BIP-39)" : "Legacy (nsec)")
+                        </span>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span class="text-muted">Wallet ID</span>
+                        @if (!string.IsNullOrEmpty(Model.WalletId))
+                        {
+                            <vc:truncate-center text="@Model.WalletId" classes="truncate-center-id"/>
+                        }
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span class="text-muted">Private Keys</span>
+                        @if (Model.SignerAvailable)
+                        {
+                            <span class="badge text-bg-success">Available</span>
+                        }
+                        else
+                        {
+                            <span class="badge text-bg-warning">Watch-Only</span>
+                        }
+                    </div>
+                </div>
+
+                <!-- Right Column: Features -->
+                <div class="col-md-6">
+                    @if (!string.IsNullOrEmpty(Model.BoltzUrl))
                     {
-                        <span class="badge text-bg-success">Available</span>
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="text-muted">Lightning</span>
+                            <form asp-action="@(Model.IsLightningEnabled ? "DisableLightning" : "EnableLightning")" method="post" asp-route-storeId="@storeId" class="d-inline">
+                                <button type="submit" class="btn btn-sm  badge  text-primary @(Model.IsLightningEnabled ? "btn-outline-secondary" : "btn-outline-primary")">
+                                    @(Model.IsLightningEnabled ? "Disable" : "Enable")
+                                </button>
+                            </form>
+                        </div>
                     }
                     else
                     {
-                        <span class="badge text-bg-warning">Watch-Only</span>
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="text-muted">Lightning</span>
+                            <span class="badge text-bg-secondary" title="Boltz service required">Unavailable</span>
+                        </div>
                     }
-                </div>
-                @if (!string.IsNullOrEmpty(Model.BoltzUrl))
-                {
-                    <div class="d-flex justify-content-between align-items-center mb-3">
-                        <span class="text-muted">Lightning</span>
-                        <form asp-action="@(Model.IsLightningEnabled ? "DisableLightning" : "EnableLightning")" method="post" asp-route-storeId="@storeId" class="d-inline">
-                            <button type="submit" class="btn btn-sm @(Model.IsLightningEnabled ? "btn-outline-secondary" : "btn-primary")">
-                                @(Model.IsLightningEnabled ? "Disable" : "Enable")
+
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span class="text-muted">Auto-Sweep</span>
+                        @if (Model.CanManagePrivateKeys)
+                        {
+                            <button type="button" class="btn btn-sm badge btn-outline-secondary text-primary"
+                                    data-bs-toggle="modal" data-bs-target="#autoSweepModal"
+                                    title="@(!string.IsNullOrEmpty(Model.Destination) ? Model.Destination : "Configure auto-sweep destination")">
+                                @if (!string.IsNullOrEmpty(Model.Destination))
+                                {
+                                    <text>Enabled</text>
+                                }
+                                else
+                                {
+                                    <text>Configure</text>
+                                }
+                            </button>
+                        }
+                        else
+                        {
+                            @if (!string.IsNullOrEmpty(Model.Destination))
+                            {
+                                <span class="badge text-bg-info" title="@Model.Destination">Enabled</span>
+                            }
+                            else
+                            {
+                                <span class="badge text-bg-secondary">Disabled</span>
+                            }
+                        }
+                    </div>
+
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span class="text-muted">Sub-Dust</span>
+                        <form asp-action="UpdateWalletConfig" method="post" asp-route-storeId="@storeId" class="d-inline">
+                            <button type="submit" name="command" value="toggle-subdust"
+                                    class="btn btn-sm badge text-primary btn-outline-secondary"
+                                    @(Model.IsDestinationSweepEnabled && !Model.AllowSubDustAmounts ? "disabled" : "")
+                                    title="@(Model.IsDestinationSweepEnabled && !Model.AllowSubDustAmounts ? "Clear auto-sweep first to disable" : "Accept payments below dust threshold")">
+                                @(Model.AllowSubDustAmounts ? "Enabled" : "Disabled")
                             </button>
                         </form>
                     </div>
-                }
-                else
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Service Status Tile -->
+    <div class="col-xl-4">
+        <div class="bg-tile rounded p-3 p-sm-4 h-100">
+            <h2 class="h5 mb-3">Service Status</h2>
+            <partial name="_ServiceConnections" model="Model" view-data='new ViewDataDictionary(ViewData) { { "CompactMode", false } }' />
+        </div>
+    </div>
+</div>
+
+<!-- Bottom Row: VTXO List + Quick Actions -->
+<div class="row g-4 mb-4">
+    <!-- VTXO List Tile -->
+    <div class="col-xl-8">
+        <div class="bg-tile rounded p-3 p-sm-4 h-100">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h2 class="h5 mb-0">Recent VTXOs</h2>
+                <a asp-action="Vtxos" asp-route-storeId="@storeId" class="btn btn-sm btn-outline-secondary">
+                    View All (@Model.TotalVtxoCount)
+                </a>
+            </div>
+
+            <partial name="_VtxoTable" model="Model.RecentVtxos" view-data='new ViewDataDictionary(ViewData) {
+                { "ShowAddressColumn", true },
+                { "ShowSpendableStatus", true },
+                { "CompactMode", true },
+                { "VtxoContracts", Model.VtxoContracts },
+                { "SpendableOutpoints", Model.SpendableOutpoints }
+            }' />
+        </div>
+    </div>
+
+    <!-- Quick Actions Tile -->
+    <div class="col-xl-4">
+        <div class="bg-tile rounded p-3 p-sm-4">
+            <h2 class="h5 mb-3">Quick Actions</h2>
+            <div class="d-grid gap-2">
+                @if (Model.CanManagePrivateKeys)
                 {
-                    <div class="d-flex justify-content-between align-items-center mb-3">
-                        <span class="text-muted">Lightning</span>
-                        <span class="badge text-bg-secondary" title="Boltz service is required for Lightning functionality">Not Available</span>
-                    </div>
+                    <a asp-action="Send" asp-route-storeId="@storeId" class="btn btn-primary" data-testid="send-btn">
+                        <vc:icon symbol="actions-send" /> Send
+                    </a>
+                    <a asp-action="Receive" asp-route-storeId="@storeId" class="btn btn-outline-primary" data-testid="receive-btn">
+                        <vc:icon symbol="actions-receive" /> Receive
+                    </a>
                 }
-                @if (!string.IsNullOrEmpty(Model.Destination))
+                <form asp-action="SyncWallet" method="post" asp-route-storeId="@storeId">
+                    <button type="submit" class="btn btn-outline-secondary w-100" data-testid="sync-wallet-btn">
+                        <vc:icon symbol="actions-refresh" /> Sync Wallet
+                    </button>
+                </form>
+                @if (Model.SignerAvailable && !string.IsNullOrEmpty(Model.Wallet) && Model.CanManagePrivateKeys)
                 {
-                    <div class="d-flex justify-content-between align-items-center">
-                        <span class="text-muted">Auto-Sweep</span>
-                        <span class="badge text-bg-info">Enabled</span>
-                    </div>
+                    <form method="post" asp-controller="Ark" asp-action="ShowPrivateKey" asp-route-storeId="@storeId" style="display:inline">
+                        <button type="submit" class="btn btn-outline-secondary w-100" data-testid="show-private-key-btn">
+                            <vc:icon symbol="key" /> @(Model.WalletType == WalletType.HD ? "Show Seed" : "Show Key")
+                        </button>
+                    </form>
                 }
+                <button type="button" class="btn btn-outline-danger" data-bs-toggle="modal" data-bs-target="#clearWalletModal" data-testid="clear-wallet-btn">
+                    <vc:icon symbol="cross" /> Clear Wallet
+                </button>
             </div>
         </div>
     </div>
 </div>
-<!-- Beta Warning Alert -->
-<div class="alert alert-warning mb-4" role="alert">
-    <h5 class="alert-heading">
-        <vc:icon symbol="warning" /> Beta Notice: Arkade Wallet Companion required
-    </h5>
-    <p>
-        During the beta phase, you must use the <strong>same private key</strong> in <a href="@ArkConfiguration.ArkadeWalletUri" target="_blank" class="alert-link">Arkade Wallet</a> to properly handle batch operations for finality and expiry management. 
-        Ensure your Arkade wallet is configured with the private key shown in this BTCPay store and routinely open to join Batches. This will (soon) become built into the plugin and require no action from you. 
-    </p>
-</div>
 
-<!-- Wallet Configuration Card -->
-<div class="card shadow-sm mb-4">
-    <div class="card-header">
-        <h5 class="mb-0">Wallet Configuration</h5>
-    </div>
-    <div class="card-body">
-        <form asp-action="UpdateWalletConfig" method="post" asp-route-storeId="@storeId">
-            @if (!string.IsNullOrEmpty(Model.Destination))
+<!-- Recent Intents + Recent Swaps -->
+<div class="row g-4 mb-4">
+    <!-- Recent Intents -->
+    <div class="col-md-6">
+        <div class="bg-tile rounded p-3 p-sm-4 h-100">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h2 class="h5 mb-0">Recent Batches</h2>
+                <a asp-action="Intents" asp-route-storeId="@storeId" class="btn btn-sm btn-outline-secondary">
+                    View All
+                </a>
+            </div>
+            @if (Model.RecentIntents.Any())
             {
-                <div class="form-group mb-3">
-                    <label class="form-label">Auto-Sweep Destination</label>
-                    <div class="input-group">
-                        <input type="text" class="form-control" value="@Model.Destination" readonly />
-                        <button type="submit" name="command" value="clear-destination" class="btn btn-outline-danger">
-                            Clear
-                        </button>
-                    </div>
-                    <div class="form-text">VTXOs will automatically sweep to this Ark address</div>
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead>
+                            <tr>
+                                <th text-translate="true">Created</th>
+                                <th text-translate="true">State</th>
+                                <th text-translate="true">Batch ID</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var intent in Model.RecentIntents)
+                            {
+                                <tr>
+                                    <td>@intent.CreatedAt.ToTimeAgo()</td>
+                                    <td>
+                                        @switch (intent.State)
+                                        {
+                                            case ArkIntentState.WaitingToSubmit:
+                                                <span class="badge text-bg-secondary">Waiting</span>
+                                                break;
+                                            case ArkIntentState.WaitingForBatch:
+                                                <span class="badge text-bg-warning">Queued</span>
+                                                break;
+                                            case ArkIntentState.BatchInProgress:
+                                                <span class="badge text-bg-primary">In Progress</span>
+                                                break;
+                                            case ArkIntentState.BatchSucceeded:
+                                                <span class="badge text-bg-success">Succeeded</span>
+                                                break;
+                                            case ArkIntentState.BatchFailed:
+                                                <span class="badge text-bg-danger" title="@intent.CancellationReason">Failed</span>
+                                                break;
+                                            case ArkIntentState.Cancelled:
+                                                <span class="badge text-bg-dark" title="@intent.CancellationReason">Cancelled</span>
+                                                break;
+                                        }
+                                    </td>
+                                    <td>
+                                        @if (!string.IsNullOrEmpty(intent.BatchId))
+                                        {
+                                            <vc:truncate-center text="@intent.BatchId" classes="truncate-center-id"/>
+                                        }
+                                        else
+                                        {
+                                            <span class="text-muted">-</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
                 </div>
             }
             else
             {
-                <div class="form-group mb-3">
-                    <label asp-for="Destination" class="form-label">Auto-Sweep Destination (Optional)</label>
-                    <input asp-for="Destination" class="form-control" placeholder="ark1..."  disabled="@Model.AllowSubDustAmounts"/>
-                    <div class="form-text">
-                        Enter an Ark address to automatically sweep detected VTXOs
-                        @if (Model.AllowSubDustAmounts)
-                        {
-                            <br /><span class="text-warning small">⚠️ Cannot configure auto-sweep while sub-dust amounts are enabled</span>
-                        }
-                    </div>
-                </div>
+                <p class="text-muted text-center mb-0">No batches yet</p>
             }
-            
-            @if (string.IsNullOrEmpty(Model.Destination))
-            {
-                <button type="submit" name="command" value="save" class="btn btn-primary" 
-                        @(Model.AllowSubDustAmounts ? "disabled" : "")>Save Configuration</button>
-            }
-        </form>
-        
-        <hr class="my-4" />
-        
-        <form asp-action="UpdateWalletConfig" method="post" asp-route-storeId="@storeId">
-            <div class="form-group">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <label class="form-label mb-1">Allow Sub-Dust Amounts</label>
-                        <div class="form-text">
-                            Enable accepting Arkade payments below the operator's dust threshold
-                            @if (Model.AllowSubDustAmounts)
-                            {
-                                <span class="badge bg-success ms-2">Enabled</span>
-                            }
-                            else
-                            {
-                                <span class="badge bg-secondary ms-2">Disabled</span>
-                            }
-                            @if (Model.IsDestinationSweepEnabled && !Model.AllowSubDustAmounts)
-                            {
-                                <br /><span class="text-warning small">⚠️ Cannot enable while auto-sweep is configured</span>
-                            }
-                        </div>
-                    </div>
-                    <button type="submit" name="command" value="toggle-subdust" 
-                            class="btn btn-sm @(Model.AllowSubDustAmounts ? "btn-outline-secondary" : "btn-primary")"
-                            @(Model.IsDestinationSweepEnabled && !Model.AllowSubDustAmounts ? "disabled" : "")>
-                        @(Model.AllowSubDustAmounts ? "Disable" : "Enable")
-                    </button>
-                </div>
-            </div>
-        </form>
+        </div>
     </div>
-</div>
-<partial name="_ServiceConnections" model="Model" />
-<!-- Transfer Modal -->
-<div class="modal fade" id="transferModal" tabindex="-1" aria-labelledby="transferModalLabel" aria-hidden="true">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="transferModalLabel">Transfer Funds</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+
+    <!-- Recent Swaps -->
+    <div class="col-md-6">
+        <div class="bg-tile rounded p-3 p-sm-4 h-100">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h2 class="h5 mb-0">Recent Swaps</h2>
+                <a asp-action="Swaps" asp-route-storeId="@storeId" class="btn btn-sm btn-outline-secondary">
+                    View All
+                </a>
             </div>
-            <form asp-action="SpendOverview" method="get" asp-route-storeId="@storeId">
-                <div class="modal-body">
-                    <div class="form-group mb-3">
-                        <label class="form-label">Destination</label>
-                        <input type="text" name="destinations" class="form-control" 
-                               placeholder="BIP21 URI, Lightning invoice, or Ark address..." 
-                               required />
-                        <div class="form-text">
-                            Enter a BIP21 URI, Lightning invoice (BOLT11), or Ark address to send funds to
-                        </div>
-                    </div>
-                    @if (Model.Balances != null)
-                    {
-                        <div class="alert alert-info mb-0">
-                            <strong>Available Balance:</strong> @Model.Balances.AvailableBalance sats
-                        </div>
-                    }
-                    else
-                    {
-                        <div class="alert alert-warning mb-0">
-                            <strong>Balance unavailable</strong> - indexer service may be down
-                        </div>
-                    }
+            @if (Model.RecentSwaps.Any())
+            {
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead>
+                            <tr>
+                                <th text-translate="true">Swap ID</th>
+                                <th text-translate="true">Type</th>
+                                <th text-translate="true">Amount</th>
+                                <th text-translate="true">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var swap in Model.RecentSwaps)
+                            {
+                                var boltzSwapLink = ArkadeLinkHelper.GetSwapLink(ArkNetworkConfig, swap.SwapId);
+                                <tr>
+                                    <td>
+                                        <vc:truncate-center text="@swap.SwapId" link="@boltzSwapLink" classes="truncate-center-id"/>
+                                    </td>
+                                    <td>
+                                        @if (swap.SwapType == ArkSwapType.ReverseSubmarine)
+                                        {
+                                            <span class="badge text-bg-primary">Reverse</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge text-bg-info">Submarine</span>
+                                        }
+                                    </td>
+                                    <td>@Money.Satoshis(swap.ExpectedAmount).ToDecimal(MoneyUnit.BTC) BTC</td>
+                                    <td>
+                                        @{
+                                            var swapBadge = swap.Status switch
+                                            {
+                                                ArkSwapStatus.Pending => "text-bg-info",
+                                                ArkSwapStatus.Settled => "text-bg-success",
+                                                ArkSwapStatus.Failed => "text-bg-danger",
+                                                _ => "text-bg-warning"
+                                            };
+                                        }
+                                        <span class="badge @swapBadge">@Enum.GetName(typeof(ArkSwapStatus), swap.Status)</span>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
                 </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Continue</button>
-                </div>
-            </form>
+            }
+            else
+            {
+                <p class="text-muted text-center mb-0">No swaps yet</p>
+            }
         </div>
     </div>
 </div>
 
-<!-- Show Private Key Modal -->
-@if (Model.SignerAvailable && !string.IsNullOrEmpty(Model.Wallet))
+<!-- Auto-Sweep Configuration Modal -->
+@if (Model.CanManagePrivateKeys)
 {
-    <div class="modal fade" id="showPrivateKeyModal" tabindex="-1" aria-labelledby="showPrivateKeyModalLabel" aria-hidden="true">
+    <div class="modal fade" id="autoSweepModal" tabindex="-1" aria-labelledby="autoSweepModalLabel" aria-hidden="true">
         <div class="modal-dialog">
             <div class="modal-content">
-                <div class="modal-header bg-warning">
-                    <h5 class="modal-title" id="showPrivateKeyModalLabel">
-                        <vc:icon symbol="warning" /> Show Private Key
-                    </h5>
+                <div class="modal-header">
+                    <h5 class="modal-title" id="autoSweepModalLabel">Auto-Sweep Configuration</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
-                <div class="modal-body">
-                    <div class="alert alert-danger">
-                        <strong>Warning:</strong> Never share your private key with anyone. Anyone with access to this key can spend your funds.
+                <form asp-action="UpdateWalletConfig" method="post" asp-route-storeId="@storeId">
+                    <div class="modal-body">
+                        <p class="text-muted small mb-3">
+                            Auto-sweep automatically sends all received funds to a specified Arkade address.
+                            This is useful for forwarding payments to another wallet.
+                        </p>
+
+                        @if (!string.IsNullOrEmpty(Model.Destination))
+                        {
+                            <div class="mb-3">
+                                <label class="form-label">Current Destination</label>
+                                <div class="input-group">
+                                    <input type="text" class="form-control font-monospace" value="@Model.Destination" readonly />
+                                </div>
+                            </div>
+                            <div class="alert alert-info small">
+                                <strong>Auto-sweep is enabled.</strong> All received funds will be automatically forwarded to this address.
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="mb-3">
+                                <label asp-for="Destination" class="form-label">Destination Address</label>
+                                <input asp-for="Destination" class="form-control font-monospace" placeholder="ark1..." />
+                                <div class="form-text">Enter an Ark address to receive swept funds.</div>
+                            </div>
+                        }
                     </div>
-                    <div class="form-group mb-3">
-                        <label class="form-label fw-bold">Private Key (nsec)</label>
-                        <div class="input-group">
-                            <input type="password" id="privateKeyInput" class="form-control font-monospace" value="@Model.Wallet" readonly />
-                            <button type="button" class="btn btn-outline-secondary" onclick="togglePrivateKeyVisibility()">
-                                <span id="eyeIcon">👁️</span>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        @if (!string.IsNullOrEmpty(Model.Destination))
+                        {
+                            <button type="submit" name="command" value="clear-destination" class="btn btn-outline-danger">
+                                Disable Auto-Sweep
                             </button>
-                            <button type="button" class="btn btn-outline-secondary" onclick="copyPrivateKey()">
-                                📋
+                        }
+                        else
+                        {
+                            <button type="submit" name="command" value="save" class="btn btn-primary">
+                                Enable Auto-Sweep
                             </button>
-                        </div>
+                        }
                     </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                </div>
+                </form>
             </div>
         </div>
     </div>
@@ -334,11 +416,11 @@ else
             <form asp-action="ClearWallet" method="post" asp-route-storeId="@storeId">
                 <div class="modal-body">
                     <div class="alert alert-warning">
-                        <strong>Warning:</strong> This will remove the Ark wallet configuration from this store.
+                        <strong>Warning:</strong> This will remove the Arkade wallet configuration from this store.
                     </div>
                     <p class="mb-3">Are you sure you want to clear the wallet configuration? This action will:</p>
                     <ul>
-                        <li>Remove the Ark payment method from this store</li>
+                        <li>Remove the Arkade payment method from this store</li>
                         <li>Disable Lightning if enabled via Arkade</li>
                         <li>Not delete any funds or VTXOs (they remain on the network)</li>
                     </ul>
@@ -359,65 +441,3 @@ else
     </div>
 </div>
 
-<!-- Force Refresh Modal -->
-<div class="modal fade" id="forceRefreshModal" tabindex="-1" aria-labelledby="forceRefreshModalLabel" aria-hidden="true">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="forceRefreshModalLabel">
-                    <vc:icon symbol="actions-refresh" /> Force Batch VTXOs
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <form asp-action="ForceRefresh" method="post" asp-route-storeId="@storeId">
-                <div class="modal-body">
-                    <div class="alert alert-info">
-                        <strong>Info:</strong> This will create an intent with all your VTXOs to settle them.
-                    </div>
-                    <p class="mb-3">This action will:</p>
-                    <ul>
-                        <li>Collect all VTXOs</li>
-                        <li>Create an intent that will be submitted</li>
-                        <li>The intent will be processed in the next batch</li>
-                        <li>Your VTXOs will be settled and consolidated</li>
-                    </ul>
-                    <p class="text-muted mb-0">This is useful when you have many small VTXOs or recoverable VTXOs that need to be refreshed.</p>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Force Batch</button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
-
-<script>
-    function copyAddress() {
-        const input = document.querySelector('input[value*="ark"]');
-        if (input) {
-            navigator.clipboard.writeText(input.value).then(() => {
-                alert('Address copied to clipboard!');
-            });
-        }
-    }
-
-    function togglePrivateKeyVisibility() {
-        const input = document.getElementById('privateKeyInput');
-        const icon = document.getElementById('eyeIcon');
-        if (input.type === 'password') {
-            input.type = 'text';
-            icon.textContent = '🙈';
-        } else {
-            input.type = 'password';
-            icon.textContent = '👁️';
-        }
-    }
-
-    function copyPrivateKey() {
-        const input = document.getElementById('privateKeyInput');
-        navigator.clipboard.writeText(input.value).then(() => {
-            alert('Private key copied to clipboard!');
-        });
-    }
-</script>

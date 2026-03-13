@@ -2,22 +2,23 @@
 using BTCPayServer.Client.Models;
 using BTCPayServer.Data;
 using BTCPayServer.Events;
-using BTCPayServer.Lightning;
-using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
-using BTCPayServer.Plugins.ArkPayServer.Lightning;
-using BTCPayServer.Plugins.ArkPayServer.Lightning.Events;
 using BTCPayServer.Plugins.ArkPayServer.Models;
-using BTCPayServer.Plugins.ArkPayServer.Models.Events;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Services.Invoices;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using NArk;
-using NArk.Services.Abstractions;
+using NArk.Abstractions.VTXOs;
+using NArk.Swaps.Abstractions;
+using NArk.Core.Transport;
 using NBitcoin;
 using NBXplorer;
 using Newtonsoft.Json.Linq;
+using NArk.Abstractions;
+using NArk.Abstractions.Contracts;
+using NArk.Abstractions.Extensions;
+using NArk.Swaps.Services;
+using NArk.Storage.EfCore.Entities;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
 
@@ -25,33 +26,49 @@ public class ArkContractInvoiceListener(
     IMemoryCache memoryCache,
     InvoiceRepository invoiceRepository,
     ArkadePaymentMethodHandler arkadePaymentMethodHandler,
-    IOperatorTermsService operatorTermsService,
+    IClientTransport clientTransport,
     EventAggregator eventAggregator,
-    ArkWalletService arkWalletService,
+    IContractStorage contractStorage,
     PaymentService paymentService,
+    IVtxoStorage vtxoStorage,
+    ISwapStorage swapStorage,
     ILogger<ArkContractInvoiceListener> logger)
     : IHostedService
 {
     private readonly Channel<string> _checkInvoices = Channel.CreateUnbounded<string>();
+    private readonly SemaphoreSlim _paymentLock = new(1, 1);
     private CompositeDisposable _leases = new();
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         await QueueMonitoredInvoices(cancellationToken);
         _leases.Add(eventAggregator.SubscribeAsync<InvoiceEvent>(OnInvoiceEvent));
-        _leases.Add(eventAggregator.SubscribeAsync<VTXOsUpdated>(OnVTXOs));
-        _leases.Add(eventAggregator.SubscribeAsync<ArkSwapUpdated>(HandleSwapUpdate));
+
+        // Subscribe to NNark's storage events directly
+        vtxoStorage.VtxosChanged += OnVtxoChanged;
+        swapStorage.SwapsChanged += OnSwapChanged;
+
 
         _ = PollAllInvoices(cancellationToken);
     }
 
-    private async Task HandleSwapUpdate(ArkSwapUpdated lightningSwapUpdated)
+    private async void OnSwapChanged(object? sender, NArk.Swaps.Models.ArkSwap swap)
     {
-        var terms = await operatorTermsService.GetOperatorTerms();
-        var active = ArkLightningClient.Map(lightningSwapUpdated.Swap, terms.Network)
-            .Status == LightningInvoiceStatus.Unpaid;
-        await arkWalletService.ToggleContract(lightningSwapUpdated.Swap.WalletId, lightningSwapUpdated.Swap.ContractScript,
-            active);
+        try
+        {
+            // Only process reverse submarine swaps (Lightning -> Ark)
+            if (swap.SwapType != NArk.Swaps.Models.ArkSwapType.ReverseSubmarine)
+                return;
+
+            var activityState = swap.Status == NArk.Swaps.Models.ArkSwapStatus.Pending
+                ? ContractActivityState.Active
+                : ContractActivityState.Inactive;
+            await contractStorage.UpdateContractActivityState(swap.WalletId, swap.ContractScript, activityState);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error handling swap change for {SwapId}", swap.SwapId);
+        }
     }
 
     private async Task OnInvoiceEvent(InvoiceEvent invoiceEvent)
@@ -60,21 +77,36 @@ public class ArkContractInvoiceListener(
         _checkInvoices.Writer.TryWrite(invoiceEvent.Invoice.Id);
     }
 
-    private async Task OnVTXOs(VTXOsUpdated arg)
+    private async void OnVtxoChanged(object? sender, ArkVtxo vtxo)
     {
-        var terms = await operatorTermsService.GetOperatorTerms();
-        foreach (var scriptVtxos in arg.Vtxos.GroupBy(c => c.Script))
+        try
         {
-           var script = Script.FromHex(scriptVtxos.Key);
-            var address = ArkAddress.FromScriptPubKey(script, terms.SignerKey);
+            // Note: Auto-deactivation of AwaitingFundsBeforeDeactivate contracts is now handled
+            // by VtxoSynchronizationService in NNark library
+
+            var terms = await clientTransport.GetServerInfoAsync();
+            var serverKey = terms.SignerKey.Extract().XOnlyPubKey;
+            var script = Script.FromHex(vtxo.Script);
+            var address = ArkAddress.FromScriptPubKey(script, serverKey);
             var network = terms.Network;
-            var inv = await invoiceRepository.GetInvoiceFromAddress(ArkadePlugin.ArkadePaymentMethodId, address.ToString(network.ChainName == ChainName.Mainnet)); 
+            var inv = await invoiceRepository.GetInvoiceFromAddress(ArkadePlugin.ArkadePaymentMethodId, address.ToString(network.ChainName == ChainName.Mainnet));
             if (inv is null)
-                continue;
-            foreach (var vtxo in scriptVtxos)
+                return;
+
+            // Map NNark's ArkVtxo to plugin's VtxoEntity entity
+            var vtxoEntity = new VtxoEntity
             {
-                await HandlePaymentData(vtxo, inv, arkadePaymentMethodHandler);
-            }
+                TransactionId = vtxo.TransactionId,
+                TransactionOutputIndex = (int)vtxo.TransactionOutputIndex,
+                Amount = (long)vtxo.Amount,
+                Script = vtxo.Script,
+                SeenAt = vtxo.CreatedAt
+            };
+            await HandlePaymentData(vtxoEntity, inv, arkadePaymentMethodHandler);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error handling VTXO change for {TxId}:{Index}", vtxo.TransactionId, vtxo.TransactionOutputIndex);
         }
     }
 
@@ -88,62 +120,87 @@ public class ArkContractInvoiceListener(
         return Task.CompletedTask;
     }
     
-    private async Task HandlePaymentData(VTXO vtxo, InvoiceEntity invoice, ArkadePaymentMethodHandler handler)
+    private async Task HandlePaymentData(VtxoEntity vtxo, InvoiceEntity invoice, ArkadePaymentMethodHandler handler)
     {
         var pmi = ArkadePlugin.ArkadePaymentMethodId;
         var details = new ArkadePaymentData($"{vtxo.TransactionId}:{vtxo.TransactionOutputIndex}");
-        var paymentData = new PaymentData
+
+        // Serialize payment registration to prevent duplicate inserts from concurrent VTXO events
+        await _paymentLock.WaitAsync();
+        try
         {
-            Status = PaymentStatus.Settled,
-            Amount = Money.Satoshis(vtxo.Amount).ToDecimal(MoneyUnit.BTC),
-            Created = vtxo.SeenAt,
-            Id = details.Outpoint,
-            Currency = "BTC",
-        }.Set(invoice, handler, details);
+            // Re-fetch the invoice inside the lock to get the latest payment state
+            var freshInvoice = await invoiceRepository.GetInvoice(invoice.Id);
+            if (freshInvoice is null)
+                return;
 
-
-        var alreadyExistingPaymentThatMatches = invoice
-            .GetPayments(false)
-            .SingleOrDefault(c => c.Id == paymentData.Id && c.PaymentMethodId == pmi);
-
-        if (alreadyExistingPaymentThatMatches == null)
-        {
-            var payment = await paymentService.AddPayment(paymentData);
-            if (payment != null)
+            var paymentData = new PaymentData
             {
-                await ReceivedPayment(invoice, payment);
+                Status = PaymentStatus.Settled,
+                Amount = Money.Satoshis(vtxo.Amount).ToDecimal(MoneyUnit.BTC),
+                Created = vtxo.SeenAt,
+                Id = details.Outpoint,
+                Currency = "BTC",
+            }.Set(freshInvoice, handler, details);
+
+            var alreadyExistingPaymentThatMatches = freshInvoice
+                .GetPayments(false)
+                .SingleOrDefault(c => c.Id == paymentData.Id && c.PaymentMethodId == pmi);
+
+            if (alreadyExistingPaymentThatMatches == null)
+            {
+                var payment = await paymentService.AddPayment(paymentData);
+                if (payment != null)
+                {
+                    await ReceivedPayment(freshInvoice, payment);
+                }
+            }
+            else
+            {
+                //else update it with the new data
+                alreadyExistingPaymentThatMatches.Status = PaymentStatus.Settled;
+                alreadyExistingPaymentThatMatches.Details = JToken.FromObject(details, handler.Serializer);
+                await paymentService.UpdatePayments([alreadyExistingPaymentThatMatches]);
             }
         }
-        else
+        finally
         {
-            //else update it with the new data
-            alreadyExistingPaymentThatMatches.Status = PaymentStatus.Settled;
-            alreadyExistingPaymentThatMatches.Details = JToken.FromObject(details, handler.Serializer);
-            await paymentService.UpdatePayments([alreadyExistingPaymentThatMatches]);
+            _paymentLock.Release();
         }
 
         eventAggregator.Publish(new InvoiceNeedUpdateEvent(invoice.Id));
     }
     
     
-    public Task StopAsync(CancellationToken cancellationToken)
+    public async Task StopAsync(CancellationToken cancellationToken)
     {
+        vtxoStorage.VtxosChanged -= OnVtxoChanged;
+        swapStorage.SwapsChanged -= OnSwapChanged;
         _leases.Dispose();
         _leases = new CompositeDisposable();
-        return Task.CompletedTask;
     }
 
     public async Task ToggleArkadeContract(InvoiceEntity invoice)
     {
-        var active = invoice.Status == InvoiceStatus.New;
+        var activityState = invoice.Status == InvoiceStatus.New
+            ? ContractActivityState.Active
+            : ContractActivityState.Inactive;
         var listenedContract = GetListenedArkadeInvoice(invoice);
         if (listenedContract is null)
         {
             return;
         }
 
-        await arkWalletService.ToggleContract(listenedContract.Details.WalletId, listenedContract.Details.Contract,
-            active);
+        // Get the script from the contract string - need to parse with network
+        var serverInfo = await clientTransport.GetServerInfoAsync();
+        var contract = listenedContract.Details.GetContract(serverInfo.Network);
+        if (contract is null)
+        {
+            return;
+        }
+
+        var script = contract.GetArkAddress().ScriptPubKey.ToHex();
+        await contractStorage.UpdateContractActivityState(listenedContract.Details.WalletId, script, activityState);
     }
 
     private ArkadeListenedContract? GetListenedArkadeInvoice(InvoiceEntity invoice)

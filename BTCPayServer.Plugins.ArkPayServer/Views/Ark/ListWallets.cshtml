@@ -1,7 +1,7 @@
 @using BTCPayServer.Abstractions.Extensions
-@using BTCPayServer.Plugins.ArkPayServer.Data.Entities
-@using NArk.Extensions
-@model IEnumerable<ArkWallet>
+@using NArk.Storage.EfCore.Entities
+@using NArk.Abstractions.Wallets
+@model IEnumerable<ArkWalletEntity>
 
 @{
     ViewData.SetActivePage(category: "Server", activePage: "ArkWallets", title: "Ark - Wallets");
@@ -20,7 +20,7 @@
             <thead>
                 <tr>
                     <th text-translate="true">Wallet ID</th>
-                    <th text-translate="true">Public Key</th>
+                    <th text-translate="true">Type</th>
                     <th text-translate="true">Contracts</th>
                     <th text-translate="true">Swaps</th>
                     <th text-translate="true">Destination</th>
@@ -35,7 +35,14 @@
                             <vc:truncate-center text="@wallet.Id" classes="truncate-center-id"/>
                         </td>
                         <td>
-                            <vc:truncate-center text="@wallet.PublicKey.ToHex()" classes="truncate-center-id"/>
+                            @if (wallet.WalletType == WalletType.HD)
+                            {
+                                <span class="badge text-bg-primary">HD</span>
+                            }
+                            else
+                            {
+                                <span class="badge text-bg-secondary">Legacy</span>
+                            }
                         </td>
                         <td>
                             @if (wallet.Contracts?.Any() == true)
@@ -58,7 +65,7 @@
                             }
                         </td>
                         <td>
-                            @if (wallet.Destination != null)
+                            @if (wallet.WalletDestination != null)
                             {
                                 <vc:truncate-center text="@wallet.WalletDestination" classes="truncate-center-id"/>
                             }
@@ -100,8 +107,8 @@
                                             <div class="font-monospace small text-break">@wallet.Id</div>
                                         </div>
                                         <div class="mb-3">
-                                            <label class="text-muted small">Public Key</label>
-                                            <div class="font-monospace small text-break">@wallet.PublicKey.ToHex()</div>
+                                            <label class="text-muted small">Wallet Type</label>
+                                            <div class="font-monospace small text-break">@(wallet.WalletType == WalletType.HD ? "HD (BIP-86)" : "Legacy")</div>
                                         </div>
                                         <p class="mb-2"><strong>This will delete:</strong></p>
                                         <ul>

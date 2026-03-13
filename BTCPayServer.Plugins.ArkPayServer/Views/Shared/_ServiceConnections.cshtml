@@ -1,0 +1,224 @@
+@model BTCPayServer.Plugins.ArkPayServer.Models.StoreOverviewViewModel
+
+@{
+    var compactMode = ViewData["CompactMode"] as bool? ?? false;
+
+    // Build Arkade tooltip content
+    var arkTooltip = Model.ArkOperatorConnected
+        ? $"Arkade Operator: Connected\n{Model.ArkOperatorUrl}"
+        : $"Arkade Operator: {Model.ArkOperatorError ?? "Disconnected"}\n{Model.ArkOperatorUrl}";
+
+    // Build Boltz tooltip content
+    var boltzTooltipLines = new List<string>();
+    if (!string.IsNullOrEmpty(Model.BoltzUrl))
+    {
+        boltzTooltipLines.Add(Model.BoltzConnected ? "Boltz: Connected" : $"Boltz: {Model.BoltzError ?? "Disconnected"}");
+        boltzTooltipLines.Add(Model.BoltzUrl);
+
+        if (Model.BoltzConnected)
+        {
+            if (Model.BoltzReverseMinAmount.HasValue && Model.BoltzReverseMaxAmount.HasValue)
+            {
+                var reverseFee = "";
+                if (Model.BoltzReverseFeePercentage.HasValue)
+                {
+                    reverseFee = $" ({(Model.BoltzReverseFeePercentage.Value * 100):0.##}%";
+                    if (Model.BoltzReverseMinerFee.HasValue && Model.BoltzReverseMinerFee.Value > 0)
+                    {
+                        reverseFee += $" + {Model.BoltzReverseMinerFee.Value} sats";
+                    }
+                    reverseFee += ")";
+                }
+                boltzTooltipLines.Add($"Receive: {Model.BoltzReverseMinAmount.Value}-{Model.BoltzReverseMaxAmount.Value} sats{reverseFee}");
+            }
+            if (Model.BoltzSubmarineMinAmount.HasValue && Model.BoltzSubmarineMaxAmount.HasValue)
+            {
+                var subFee = "";
+                if (Model.BoltzSubmarineFeePercentage.HasValue)
+                {
+                    subFee = $" ({(Model.BoltzSubmarineFeePercentage.Value * 100):0.##}%";
+                    if (Model.BoltzSubmarineMinerFee.HasValue && Model.BoltzSubmarineMinerFee.Value > 0)
+                    {
+                        subFee += $" + {Model.BoltzSubmarineMinerFee.Value} sats";
+                    }
+                    subFee += ")";
+                }
+                boltzTooltipLines.Add($"Send: {Model.BoltzSubmarineMinAmount.Value}-{Model.BoltzSubmarineMaxAmount.Value} sats{subFee}");
+            }
+        }
+    }
+    var boltzTooltip = string.Join("\n", boltzTooltipLines);
+}
+
+@if (compactMode)
+{
+    <!-- Compact Mode: Status circles with hover tooltips -->
+    <div class="d-flex align-items-center gap-3">
+        <!-- Ark Status -->
+        <div class="d-flex align-items-center gap-2" data-bs-toggle="tooltip" data-bs-placement="bottom" data-bs-html="true" title="@arkTooltip.Replace("\n", "<br/>")">
+            @if (Model.ArkOperatorConnected)
+            {
+                <span class="status-circle status-connected">
+                    <vc:icon symbol="checkmark" />
+                </span>
+            }
+            else
+            {
+                <span class="status-circle status-disconnected">
+                    <vc:icon symbol="cross" />
+                </span>
+            }
+            <span class="small text-muted">Arkade</span>
+        </div>
+
+        <!-- Boltz Status -->
+        @if (!string.IsNullOrEmpty(Model.BoltzUrl))
+        {
+            <div class="d-flex align-items-center gap-2" data-bs-toggle="tooltip" data-bs-placement="bottom" data-bs-html="true" title="@boltzTooltip.Replace("\n", "<br/>")">
+                @if (Model.BoltzConnected)
+                {
+                    <span class="status-circle status-connected">
+                        <vc:icon symbol="checkmark" />
+                    </span>
+                }
+                else
+                {
+                    <span class="status-circle status-disconnected">
+                        <vc:icon symbol="cross" />
+                    </span>
+                }
+                <span class="small text-muted">Lightning</span>
+            </div>
+        }
+    </div>
+
+    <style>
+        .status-circle {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+        }
+        .status-circle svg {
+            width: 12px;
+            height: 12px;
+        }
+        .status-connected {
+            background-color: var(--btcpay-success);
+            color: white;
+        }
+        .status-disconnected {
+            background-color: var(--btcpay-danger);
+            color: white;
+        }
+    </style>
+}
+else
+{
+    <!-- Full Mode: Service status rows -->
+    <div class="d-flex flex-column gap-3">
+        <!-- Arkade Operator -->
+        <div class="d-flex align-items-start gap-3">
+            @if (Model.ArkOperatorConnected)
+            {
+                <span class="status-circle-lg status-connected flex-shrink-0">
+                    <vc:icon symbol="checkmark" />
+                </span>
+            }
+            else
+            {
+                <span class="status-circle-lg status-disconnected flex-shrink-0">
+                    <vc:icon symbol="cross" />
+                </span>
+            }
+            <div class="flex-fill min-w-0">
+                <h6 class="mb-1">Arkade Operator</h6>
+                @if (!string.IsNullOrEmpty(Model.ArkOperatorUrl))
+                {
+                    <div class="text-muted small font-monospace text-break">@Model.ArkOperatorUrl</div>
+                }
+                @if (!Model.ArkOperatorConnected && !string.IsNullOrEmpty(Model.ArkOperatorError))
+                {
+                    <div class="text-danger small mt-1">@Model.ArkOperatorError</div>
+                }
+                else if (Model.ArkOperatorConnected)
+                {
+                    <div class="text-success small mt-1">Connected</div>
+                }
+            </div>
+        </div>
+
+        <!-- Boltz -->
+        @if (!string.IsNullOrEmpty(Model.BoltzUrl))
+        {
+            <div class="d-flex align-items-start gap-3">
+                @if (Model.BoltzConnected)
+                {
+                    <span class="status-circle-lg status-connected flex-shrink-0">
+                        <vc:icon symbol="checkmark" />
+                    </span>
+                }
+                else
+                {
+                    <span class="status-circle-lg status-disconnected flex-shrink-0">
+                        <vc:icon symbol="cross" />
+                    </span>
+                }
+                <div class="flex-fill min-w-0">
+                    <h6 class="mb-1">Lightning (Boltz)</h6>
+                    <div class="text-muted small font-monospace text-break">@Model.BoltzUrl</div>
+                    @if (!Model.BoltzConnected && !string.IsNullOrEmpty(Model.BoltzError))
+                    {
+                        <div class="text-danger small mt-1">@Model.BoltzError</div>
+                    }
+                    else if (Model.BoltzConnected)
+                    {
+                        <div class="text-success small">Connected</div>
+                        @if (Model.BoltzReverseMinAmount.HasValue || Model.BoltzSubmarineMinAmount.HasValue)
+                        {
+                            <div class="text-muted small mt-1">
+                                @{
+                                    var limits = new List<string>();
+                                    if (Model.BoltzReverseMinAmount.HasValue && Model.BoltzReverseMaxAmount.HasValue)
+                                    {
+                                        limits.Add($"Recv: {Model.BoltzReverseMinAmount.Value/1000}k-{Model.BoltzReverseMaxAmount.Value/1000000}M");
+                                    }
+                                    if (Model.BoltzSubmarineMinAmount.HasValue && Model.BoltzSubmarineMaxAmount.HasValue)
+                                    {
+                                        limits.Add($"Send: {Model.BoltzSubmarineMinAmount.Value/1000}k-{Model.BoltzSubmarineMaxAmount.Value/1000000}M");
+                                    }
+                                }
+                                @string.Join(" | ", limits) sats
+                            </div>
+                        }
+                    }
+                </div>
+            </div>
+        }
+    </div>
+
+    <style>
+        .status-circle-lg {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+        }
+        .status-circle-lg svg {
+            width: 16px;
+            height: 16px;
+        }
+        .status-connected {
+            background-color: var(--btcpay-success);
+            color: white;
+        }
+        .status-disconnected {
+            background-color: var(--btcpay-danger);
+            color: white;
+        }
+    </style>
+}

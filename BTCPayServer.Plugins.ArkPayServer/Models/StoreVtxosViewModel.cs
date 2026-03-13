@@ -1,19 +1,22 @@
-using BTCPayServer.Models;
-using BTCPayServer.Plugins.ArkPayServer.Data;
-using BTCPayServer.Plugins.ArkPayServer.Data.Entities;
-using BTCPayServer.Services;
+using NArk.Abstractions.Contracts;
+using NArk.Abstractions.VTXOs;
 using NBitcoin;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Models;
 
-public class StoreVtxosViewModel : BasePagingViewModel
+public class StoreVtxosViewModel : StoreCollectionViewModelBase
 {
-    public IReadOnlyCollection<VTXO> Vtxos { get; set; } = [];
+    public IReadOnlyCollection<ArkVtxo> Vtxos { get; set; } = [];
     public HashSet<OutPoint> SpendableOutpoints { get; set; } = [];
-    public SearchString Search { get; set; } = new(null);
-    public string? SearchText { get; set; }
-    public string? SearchTerm { get; set; }
-    public string StoreId { get; set; }
+
+    /// <summary>
+    /// Maps VTXO Script to its associated contract info for display
+    /// </summary>
+    public Dictionary<string, ArkContractEntity> VtxoContracts { get; set; } = new();
+
+    // Note: SearchTerm shadows BasePagingViewModel.SearchTerm intentionally
+    // to preserve backwards compatibility with existing views
+    public new string? SearchTerm { get; set; }
 
     public override int CurrentPageCount => Vtxos.Count;
 }

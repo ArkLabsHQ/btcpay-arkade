@@ -1,25 +1,50 @@
-using NArk;
-using NArk.Contracts;
-using Newtonsoft.Json;
+using NArk.Abstractions.Contracts;
+using NArk.Core.Contracts;
+using NBitcoin;
 
 namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 
-public record ArkadePromptDetails(
-    string WalletId,
-    [property: JsonConverter(typeof(ArkContractJsonConverter))]
-    ArkContract Contract);
-
-public class ArkContractJsonConverter : JsonConverter<ArkContract>
+/// <summary>
+/// Payment prompt details for Ark payments.
+/// Stores the contract as a serialized string to avoid JSON converter issues with Network-dependent parsing.
+/// </summary>
+public record ArkadePromptDetails
 {
-    public override void WriteJson(JsonWriter writer, ArkContract? value, JsonSerializer serializer)
+    /// <summary>
+    /// Creates prompt details from a wallet ID and contract.
+    /// </summary>
+    public ArkadePromptDetails(string walletId, ArkContract contract)
+        : this(walletId, contract.ToString())
     {
-        writer.WriteValue(value?.ToString());
     }
 
-    public override ArkContract? ReadJson(JsonReader reader, Type objectType, ArkContract? existingValue, bool hasExistingValue,
-        JsonSerializer serializer)
+    /// <summary>
+    /// Payment prompt details for Ark payments.
+    /// Stores the contract as a serialized string to avoid JSON converter issues with Network-dependent parsing.
+    /// </summary>
+    public ArkadePromptDetails(string WalletId,
+        string ContractString)
     {
-        var contractString = reader.Value?.ToString() ?? string.Empty;
-        return string.IsNullOrEmpty(contractString) ? null : ArkContract.Parse(contractString);
+        this.WalletId = WalletId;
+        this.ContractString = ContractString;
     }
+    
+    public ArkadePromptDetails()
+    {
+        
+    }
+
+    public string WalletId { get; init; }
+    public string ContractString { get; init; }
+
+    /// <summary>
+    /// Parses the contract with the specified network.
+    /// </summary>
+    public ArkContract? GetContract(Network network)
+    {
+        if (string.IsNullOrEmpty(ContractString))
+            return null;
+        return ArkContractParser.Parse(ContractString, network);
+    }
+
 }
