@@ -2350,7 +2350,8 @@ public class ArkController(
         await storeRepository.UpdateStore(store);
 
         // Delete wallet from DB if no other store references it
-        if (!string.IsNullOrEmpty(walletId) && !await IsWalletUsedByAnyStore(walletId))
+        // Exclude current store since we just cleared its config above (GetStores may return cached data)
+        if (!string.IsNullOrEmpty(walletId) && !await IsWalletUsedByAnyStore(walletId, excludeStoreId: storeId))
         {
             await walletStorage.DeleteWallet(walletId, HttpContext.RequestAborted);
         }
@@ -2900,13 +2901,16 @@ public class ArkController(
     /// <summary>
     /// Checks whether the given wallet ID is referenced by any store's Ark or LN payment method config.
     /// </summary>
-    private async Task<bool> IsWalletUsedByAnyStore(string walletId)
+    private async Task<bool> IsWalletUsedByAnyStore(string walletId, string? excludeStoreId = null)
     {
         var allStores = await storeRepository.GetStores();
         var lnPaymentMethod = GetLightningPaymentMethod();
         var lnWalletRef = $"wallet-id={walletId}";
         foreach (var s in allStores)
         {
+            if (excludeStoreId != null && s.Id == excludeStoreId)
+                continue;
+
             var arkConfig = s.GetPaymentMethodConfig<ArkadePaymentMethodConfig>(
                 ArkadePlugin.ArkadePaymentMethodId, paymentMethodHandlerDictionary);
             if (arkConfig?.WalletId == walletId)
