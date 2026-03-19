@@ -107,7 +107,8 @@
 
 @if (Model.Errors.Any())
 {
-    <div class="alert alert-danger">
+    <div class="alert alert-danger alert-dismissible" id="server-errors-alert">
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
         <ul class="mb-0">
             @foreach (var error in Model.Errors)
             {
@@ -188,9 +189,10 @@ else
                                            @(output.IsReadonly && output.AmountBtc.HasValue ? "readonly" : "") />
                                     <small class="remaining-balance-hint text-muted d-none mt-1"></small>
                                 </div>
-                                <div class="col-12 col-md-2 d-flex align-items-end">
-                                    <button type="button" class="btn btn-outline-danger remove-output-btn" data-index="@i"
-                                            style="@(i == 0 && Model.Outputs.Count == 1 && string.IsNullOrWhiteSpace(output.Destination) ? "display:none" : "")">
+                                <div class="col-12 col-md-1 d-flex align-items-center" style="margin-top: 1.75rem;">
+                                    <button type="button" class="btn btn-link text-danger remove-output-btn p-0" data-index="@i"
+                                            style="@(i == 0 && Model.Outputs.Count == 1 && string.IsNullOrWhiteSpace(output.Destination) ? "display:none" : "")"
+                                            title="Remove destination">
                                         <vc:icon symbol="cross" />
                                     </button>
                                 </div>
@@ -528,11 +530,11 @@ else
                 hint.classList.remove('d-none');
 
                 if (remaining < 0) {
-                    hint.innerHTML = `<span class="text-danger">Exceeds balance by ${(-remaining).toLocaleString()} sats</span>`;
+                    hint.innerHTML = `<span class="text-danger">Exceeds balance by ${((-remaining) / 100000000).toFixed(8)} BTC</span>`;
                 } else if (!amountInput?.value) {
-                    hint.textContent = `Available: ${totalSelectedSats.toLocaleString()} sats`;
+                    hint.textContent = `Available: ${(totalSelectedSats / 100000000).toFixed(8)} BTC`;
                 } else {
-                    hint.textContent = `Remaining: ${remaining.toLocaleString()} sats`;
+                    hint.textContent = `Remaining: ${(remaining / 100000000).toFixed(8)} BTC`;
                 }
             });
         }
@@ -600,8 +602,8 @@ else
 
                 if (badge) {
                     const badgeMap = {
-                        'ArkAddress': ['Ark', 'bg-success'],
-                        'LightningInvoice': ['Lightning', 'bg-warning text-dark'],
+                        'ArkAddress': ['Arkade', 'bg-success'],
+                        'LightningInvoice': ['Lightning', 'text-bg-warning'],
                         'LnurlPay': ['LNURL', 'bg-info'],
                         'Bip21Uri': ['BIP21', 'bg-info'],
                         'BitcoinAddress': ['Bitcoin (Batch)', 'bg-primary'],
@@ -1010,9 +1012,9 @@ else
                                    data-index="${index}" />
                             <small class="remaining-balance-hint text-muted d-none mt-1"></small>
                         </div>
-                        <div class="col-12 col-md-2 d-flex align-items-end">
-                            <button type="button" class="btn btn-outline-danger remove-output-btn" data-index="${index}">
-                                <span>&times;</span>
+                        <div class="col-12 col-md-1 d-flex align-items-center" style="margin-top: 1.75rem;">
+                            <button type="button" class="btn btn-link text-danger remove-output-btn p-0" data-index="${index}" title="Remove destination">
+                                <svg role="img" class="icon icon-cross"><use href="/img/icon-sprite.svg#cross"></use></svg>
                             </button>
                         </div>
                     </div>
@@ -1177,13 +1179,18 @@ else
 
             setDestinationLoading(index, true);
             try {
+                // Include current amount from the form so the server can validate properly
+                const row = outputsContainer.querySelector(`.output-row[data-index="${index}"]`);
+                const amountVal = row?.querySelector('.amount-input')?.value;
+                const amountBtc = amountVal ? parseFloat(amountVal) : null;
+
                 const response = await fetch(`/plugins/ark/stores/@Model.StoreId/parse-destination`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'RequestVerificationToken': document.querySelector('input[name="__RequestVerificationToken"]')?.value
                     },
-                    body: JSON.stringify({ destination: destination.trim() })
+                    body: JSON.stringify({ destination: destination.trim(), amountBtc: amountBtc })
                 });
 
                 const data = await response.json();
@@ -1193,7 +1200,6 @@ else
                     return;
                 }
 
-                const row = outputsContainer.querySelector(`.output-row[data-index="${index}"]`);
                 if (!row) return;
 
                 const destInput = row.querySelector('.destination-input');
@@ -1298,6 +1304,10 @@ else
         });
 
         outputsContainer?.addEventListener('input', debounce(function(e) {
+            // Dismiss server-rendered error alert on any form interaction
+            const serverAlert = document.getElementById('server-errors-alert');
+            if (serverAlert) serverAlert.remove();
+
             if (e.target.classList.contains('destination-input')) {
                 const index = parseInt(e.target.dataset.index);
                 const value = e.target.value.trim();

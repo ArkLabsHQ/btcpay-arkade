@@ -92,8 +92,8 @@ public class ArkadeBip21Builder
             parameters.Add($"amount={_amount.Value.ToString(CultureInfo.InvariantCulture)}");
         }
         
-        // Add Ark address (always included)
-        parameters.Add($"ark={HttpUtility.UrlEncode(_arkAddress)}");
+        // Add Ark address (always included) — no URL-encoding needed, bech32m is URL-safe
+        parameters.Add($"ark={_arkAddress}");
         
         // Add lightning if provided
         if (!string.IsNullOrWhiteSpace(_lightningInvoice))

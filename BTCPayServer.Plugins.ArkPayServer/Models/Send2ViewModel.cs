@@ -81,8 +81,8 @@ public class Send2DestinationViewModel
     // Display helpers
     public string TypeBadge => Type switch
     {
-        Send2DestinationType.ArkAddress => "Ark",
-        Send2DestinationType.Bip21Ark => "BIP21 (Ark)",
+        Send2DestinationType.ArkAddress => "Arkade",
+        Send2DestinationType.Bip21Ark => "BIP21 (Arkade)",
         Send2DestinationType.Bip21Lightning => "BIP21 (Lightning)",
         Send2DestinationType.LightningInvoice => "Lightning",
         Send2DestinationType.Lnurl => "LNURL",
@@ -93,8 +93,8 @@ public class Send2DestinationViewModel
     {
         Send2DestinationType.ArkAddress => "bg-success",
         Send2DestinationType.Bip21Ark => "bg-success",
-        Send2DestinationType.Bip21Lightning => "bg-warning text-dark",
-        Send2DestinationType.LightningInvoice => "bg-warning text-dark",
+        Send2DestinationType.Bip21Lightning => "text-bg-warning",
+        Send2DestinationType.LightningInvoice => "text-bg-warning",
         Send2DestinationType.Lnurl => "bg-info",
         _ => "bg-secondary"
     };

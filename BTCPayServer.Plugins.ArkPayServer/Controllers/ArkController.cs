@@ -984,10 +984,18 @@ public class ArkController(
                 outputs.Add(new ArkTxOut(ArkTxOutType.Vtxo, Money.Satoshis(totalCoinsSats - totalOutputSats), changePlaceholder));
             }
 
-            // Estimate the fee
-            var estimatedFee = await feeEstimator.EstimateFeeAsync(coins.ToArray(), outputs.ToArray(), token);
-            response.EstimatedFeeSats = estimatedFee;
-            response.FeeDescription = hasOnchain ? "Batch transaction fee" : "Ark service fee";
+            // Estimate the fee — Arkade (offchain) sends have no fee, only Batch intents do
+            if (string.Equals(request.SpendType, "Arkade", StringComparison.OrdinalIgnoreCase) && !hasOnchain)
+            {
+                response.EstimatedFeeSats = 0;
+                response.FeeDescription = "No fee for Arkade transactions";
+            }
+            else
+            {
+                var estimatedFee = await feeEstimator.EstimateFeeAsync(coins.ToArray(), outputs.ToArray(), token);
+                response.EstimatedFeeSats = estimatedFee;
+                response.FeeDescription = hasOnchain ? "Batch transaction fee" : "Ark service fee";
+            }
 
             return Json(response);
         }
@@ -3650,8 +3658,8 @@ public class ArkController(
             result.Type = Send2DestinationType.ArkAddress;
             result.ResolvedAddress = rawDestination;
             result.AmountSats = amountSats;
-            result.IsValid = amountSats > 0;
-            if (!result.IsValid)
+            result.IsValid = true;
+            if (amountSats <= 0)
                 result.Error = "Amount is required for Ark address";
             return result;
         }
@@ -3705,8 +3713,8 @@ public class ArkController(
                 result.Type = Send2DestinationType.Bip21Ark;
                 result.ResolvedAddress = arkQs;
                 result.AmountSats = amountSats;
-                result.IsValid = amountSats > 0;
-                if (!result.IsValid)
+                result.IsValid = true;
+                if (amountSats <= 0)
                     result.Error = "Amount is required";
                 return result;
             }
@@ -3737,8 +3745,8 @@ public class ArkController(
                 result.Type = Send2DestinationType.Bip21Ark;
                 result.ResolvedAddress = host;
                 result.AmountSats = amountSats;
-                result.IsValid = amountSats > 0;
-                if (!result.IsValid)
+                result.IsValid = true;
+                if (amountSats <= 0)
                     result.Error = "Amount is required";
                 return result;
             }

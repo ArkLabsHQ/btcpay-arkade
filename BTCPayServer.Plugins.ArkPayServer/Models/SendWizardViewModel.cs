@@ -76,7 +76,7 @@ public class SendOutputViewModel
     // Display helpers
     public string TypeBadge => DetectedType switch
     {
-        DestinationType.ArkAddress => "Ark",
+        DestinationType.ArkAddress => "Arkade",
         DestinationType.BitcoinAddress => "Bitcoin (Batch)",
         DestinationType.LightningInvoice => "Lightning",
         DestinationType.Bip21Uri => "BIP21",
@@ -88,7 +88,7 @@ public class SendOutputViewModel
     {
         DestinationType.ArkAddress => "bg-success",
         DestinationType.BitcoinAddress => "bg-primary",
-        DestinationType.LightningInvoice => "bg-warning text-dark",
+        DestinationType.LightningInvoice => "text-bg-warning",
         DestinationType.Bip21Uri => "bg-info",
         DestinationType.LnurlPay => "bg-info",
         _ => "bg-secondary"
