@@ -1,6 +1,6 @@
 # Arkade for BTCPay Server
 
-> Accept Bitcoin payments through [Arkade](https://arkade.fun) — a self-custodial, off-chain Bitcoin Layer 2 — directly inside BTCPay Server.
+> Accept Bitcoin payments through [Arkade](https://arkadeos.com) — a self-custodial, off-chain Bitcoin Layer 2 — directly inside BTCPay Server.
 
 [![Version](https://img.shields.io/badge/version-2.0.4-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -10,7 +10,7 @@
 
 ## What Is This?
 
-**btcpay-arkade** is a BTCPay Server plugin that integrates [Arkade](https://arkade.fun) as a payment method. It lets merchants accept instant, low-fee Bitcoin payments off-chain while retaining full self-custody — no Lightning node required, no custodian involved.
+**btcpay-arkade** is a BTCPay Server plugin that integrates [Arkade](https://arkadeos.com) as a payment method. It lets merchants accept instant, low-fee Bitcoin payments off-chain while retaining full self-custody — no Lightning node required, no custodian involved.
 
 Payments are settled through **Virtual UTXOs (VTXOs)**, Arkade's off-chain Bitcoin outputs that are cryptographically anchored to real Bitcoin and can be unilaterally exited to the base chain at any time.
 
@@ -200,12 +200,17 @@ The setup script will:
 
 ### Running Tests
 
-Start the test environment (nigiri + arkd):
+After running `setup.sh`, start the local regtest environment (nigiri + arkd):
 ```bash
-./start-test-env.cmd
+./start-env.sh
 ```
 
-Run the E2E test suite:
+On Windows (via WSL):
+```cmd
+start-test-env.cmd
+```
+
+This spins up a regtest Bitcoin node, an Arkade server, and supporting services locally. Then run the E2E test suite:
 ```bash
 dotnet test NArk.E2E.Tests/
 ```
@@ -296,11 +301,10 @@ Pull requests are welcome. For significant changes, open an issue first to discu
 
 ## Links
 
-- [Arkade](https://arkade.fun) — the Ark protocol implementation
+- [Arkade](https://arkadeos.com) — the Ark protocol implementation
 - [Ark Labs](https://arklabs.to) — the team building Arkade
 - [BTCPay Server](https://btcpayserver.org) — the self-hosted payment processor
 - [Boltz Exchange](https://boltz.exchange) — trustless Lightning ↔ on-chain swaps
-- [Ark Protocol](https://ark-protocol.org) — the underlying Bitcoin Layer 2 protocol
 
 ---
 
