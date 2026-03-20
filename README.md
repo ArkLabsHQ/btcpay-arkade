@@ -41,7 +41,7 @@ Direct VTXO-to-VTXO off-chain payments within the Arkade network. Instant settle
 Payers with Lightning wallets pay a BOLT11 invoice. The plugin uses Boltz's trustless submarine swap to convert the Lightning payment into a VTXO in your Arkade wallet. No Lightning node needed on the merchant side.
 
 ### 3. Boarding Address
-Payers send on-chain Bitcoin to a Taproot "boarding address." The Arkade operator batches this into the next round, converting the on-chain UTXO into a VTXO. If the operator is unresponsive, the payer can reclaim funds unilaterally after a timelock.
+Payers send on-chain Bitcoin to a Taproot "boarding address." The Arkade operator batches this into the next batch, converting the on-chain UTXO into a VTXO. If the operator is unresponsive, the payer can reclaim funds unilaterally after a timelock.
 
 The checkout page presents all applicable methods in a single BIP-21 QR code, letting any wallet pay automatically.
 
@@ -257,14 +257,14 @@ git push origin v2.0.4
 ### VTXOs (Virtual UTXOs)
 Off-chain Bitcoin outputs secured via collaborative (user + operator) and unilateral (timelocked) Taproot spending paths. VTXOs are the atomic unit of value in Arkade. The operator can never steal them — the unilateral exit path is always available.
 
-### Rounds & Commitment Transactions
+### Batches & Commitment Transactions
 Periodically, the Arkade operator batches pending VTXOs into an on-chain **commitment transaction**, anchoring off-chain state to Bitcoin. This is how off-chain payments get Bitcoin-level finality.
 
 ### Contracts
 Payment flows are modeled as Taproot contracts derived from a wallet descriptor and derivation index. Each invoice gets a unique contract address.
 
 ### Boarding Addresses
-Taproot addresses that serve as the entry point into Arkade for on-chain funds. When funded, the operator converts the UTXO into a VTXO in the next round. Protected by a timelock for unilateral recovery.
+Taproot addresses that serve as the entry point into Arkade for on-chain funds. When funded, the operator converts the UTXO into a VTXO in the next batch. Protected by a timelock for unilateral recovery.
 
 ### Unilateral Exit
 At any time, a user can exit to on-chain Bitcoin without the operator's cooperation by broadcasting the VTXO tree transaction. This is the security guarantee that makes Arkade non-custodial.
