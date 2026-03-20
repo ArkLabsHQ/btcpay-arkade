@@ -16,6 +16,7 @@ using Microsoft.Extensions.DependencyInjection;
 using NArk.Abstractions.Blockchain;
 using NArk.Abstractions.Intents;
 using NArk.Abstractions.Safety;
+using NArk.Abstractions.Services;
 using NArk.Blockchain.NBXplorer;
 using NArk.Hosting;
 using NArk.Core.Models.Options;
@@ -152,6 +153,14 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         // Wallet provider
         services.AddSingleton<NArk.Abstractions.Wallets.IWalletProvider, NArk.Core.Wallet.DefaultWalletProvider>();
 
+        // Boarding UTXO detection via NBXplorer
+        services.AddSingleton<IBoardingUtxoProvider>(provider =>
+        {
+            var explorerClient = provider.GetRequiredService<ExplorerClientProvider>().GetExplorerClient("BTC");
+            return new NBXplorerBoardingUtxoProvider(explorerClient);
+        });
+        services.AddSingleton<BoardingUtxoSyncService>();
+
         // Core services and network config (includes caching transport by default)
         services.AddArkCoreServices();
         services.AddArkNetwork(networkConfig);
@@ -172,6 +181,12 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
         services.AddSingleton<ArkContractInvoiceListener>();
         services.AddHostedService(sp => sp.GetRequiredService<ArkContractInvoiceListener>());
+
+        services.AddSingleton<BoardingTransactionListener>();
+        services.AddHostedService(sp => sp.GetRequiredService<BoardingTransactionListener>());
+
+        services.AddSingleton<BoardingUtxoPollService>();
+        services.AddHostedService(sp => sp.GetRequiredService<BoardingUtxoPollService>());
     }
 
     private static void RegisterUIExtensions(IServiceCollection services)

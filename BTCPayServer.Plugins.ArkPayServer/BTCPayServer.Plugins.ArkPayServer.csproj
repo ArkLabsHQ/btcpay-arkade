@@ -7,7 +7,7 @@
 
         <Product>Arkade - Beta</Product>
         <Description>Programmable money for sovereign business. Easily accept payments through Arkade &amp; Lightning non-custodially without complexity.</Description>
-        <Version>2.0.3</Version>
+        <Version>2.0.4</Version>
         <EmbedUntrackedSources>true</EmbedUntrackedSources>
         <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
         <GenerateRuntimeConfigDevFile>true</GenerateRuntimeConfigDevFile>

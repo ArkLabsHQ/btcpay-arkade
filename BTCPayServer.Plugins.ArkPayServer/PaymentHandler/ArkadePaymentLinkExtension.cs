@@ -35,10 +35,19 @@ public class ArkadePaymentLinkExtension : IPaymentLinkExtension
             .WithArkAddress(prompt.Destination)
             .WithAmount(amount);
         
-        // Add onchain address if available
+        // Add onchain address if available, otherwise use boarding address
         if (!string.IsNullOrEmpty(onchain?.Destination))
         {
             builder.WithOnchainAddress(onchain.Destination);
+        }
+        else if (prompt.Details is not null)
+        {
+            var handler = _serviceProvider.GetRequiredService<ArkadePaymentMethodHandler>();
+            var details = handler.ParsePaymentPromptDetails(prompt.Details);
+            if (!string.IsNullOrEmpty(details.BoardingAddress))
+            {
+                builder.WithOnchainAddress(details.BoardingAddress);
+            }
         }
         
         // Add lightning invoice if available and within Boltz limits (prefer LN over LNURL)

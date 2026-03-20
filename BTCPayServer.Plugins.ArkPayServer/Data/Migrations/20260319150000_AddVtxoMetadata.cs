@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -5,7 +6,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
 {
     /// <inheritdoc />
-    public partial class AddSwapMetadata : Migration
+    public partial class AddVtxoMetadata : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
@@ -13,7 +14,7 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
             migrationBuilder.AddColumn<string>(
                 name: "Metadata",
                 schema: "BTCPayServer.Plugins.Ark",
-                table: "Swaps",
+                table: "Vtxos",
                 type: "jsonb",
                 nullable: true);
         }
@@ -24,9 +25,7 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
             migrationBuilder.DropColumn(
                 name: "Metadata",
                 schema: "BTCPayServer.Plugins.Ark",
-                table: "Swaps");
+                table: "Vtxos");
         }
     }
 }
-
-

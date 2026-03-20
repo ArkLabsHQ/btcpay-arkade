@@ -6,4 +6,5 @@ public class ArkBalancesViewModel
     public decimal LockedBalance { get; set; }
     public decimal RecoverableBalance { get; set; }
     public decimal UnspendableBalance { get; set; }
+    public decimal BoardingBalance { get; set; }
 }

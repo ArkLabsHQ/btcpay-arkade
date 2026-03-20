@@ -42,6 +42,8 @@
         try
         {
             var arkContract = ArkContractParser.Parse(contract.Type, contract.AdditionalData, network);
+            if (arkContract is ArkBoardingContract boarding)
+                return boarding.GetOnchainAddress(network).ToString();
             return arkContract?.GetArkAddress().ToString(mainnet) ?? "";
         }
         catch { return ""; }

@@ -8,6 +8,9 @@
     var returnUrl = Url.Action("StoreOverview", "Ark", new { storeId });
     Layout = "_LayoutWizard";
     ViewData.SetTitle("Receive ARK");
+    var hasAddress = !string.IsNullOrEmpty(Model.Address);
+    var hasBoarding = !string.IsNullOrEmpty(Model.BoardingAddress);
+    var hasAny = hasAddress || hasBoarding;
 }
 
 @section PageHeadContent
@@ -26,62 +29,102 @@
 </header>
 
 <form method="post" asp-action="Receive" asp-route-storeId="@storeId">
-    @if (string.IsNullOrEmpty(Model.Address))
+    @if (!hasAny)
     {
         <div class="payment-box mb-3">
             <button id="generateButton" class="btn btn-primary w-100" type="submit" name="command" value="generate-address">
                 Generate receive address
             </button>
         </div>
+        <div class="payment-box mb-3">
+            <button class="btn btn-outline-primary w-100" type="submit" name="command" value="generate-boarding-address">
+                Generate boarding address
+            </button>
+            <p class="text-muted small text-center mt-2 mb-0">Onchain Bitcoin deposit into Ark</p>
+        </div>
     }
     else
     {
-        var paymentLink = $"bitcoin:?ark={Model.Address}";
+        var paymentLink = hasAddress ? $"bitcoin:?ark={Model.Address}" : null;
         <noscript>
-            <div class="form-group">
-                <input type="text" class="form-control" readonly="readonly" value="@Model.Address" />
-            </div>
-            <div class="form-group">
-                <input type="text" class="form-control" readonly="readonly" value="@paymentLink" />
-            </div>
+            @if (hasAddress)
+            {
+                <div class="form-group">
+                    <input type="text" class="form-control" readonly="readonly" value="@Model.Address" />
+                </div>
+            }
+            @if (hasBoarding)
+            {
+                <div class="form-group">
+                    <input type="text" class="form-control" readonly="readonly" value="@Model.BoardingAddress" />
+                </div>
+            }
         </noscript>
         <div class="nav flex-wrap align-items-center justify-content-center gap-2 mb-4">
-            <a class="btcpay-pill active" data-bs-toggle="tab" href="#address-tab">Address</a>
-            <a class="btcpay-pill" data-bs-toggle="tab" href="#link-tab">Link</a>
+            @if (hasAddress)
+            {
+                <a class="btcpay-pill active" data-bs-toggle="tab" href="#address-tab">Address</a>
+                <a class="btcpay-pill" data-bs-toggle="tab" href="#link-tab">Link</a>
+            }
+            @if (hasBoarding)
+            {
+                <a class="btcpay-pill @(!hasAddress ? "active" : "")" data-bs-toggle="tab" href="#boarding-tab">Boarding</a>
+            }
         </div>
         <div class="only-for-js col-sm-10 col-xxl-8 mx-auto" id="app">
             <div class="tab-content text-center">
-                <div class="tab-pane payment-box show active" id="address-tab" role="tabpanel">
-                    <div class="qr-container" data-clipboard="@Model.Address">
-                        <vc:qr-code data="@Model.Address" />
-                    </div>
-                    <div class="input-group mt-3">
-                        <div class="form-floating">
-                            <vc:truncate-center text="@Model.Address" padding="15" elastic="true" classes="form-control-plaintext" id="Address" />
-                            <label for="Address">Address</label>
+                @if (hasAddress)
+                {
+                    <div class="tab-pane payment-box show active" id="address-tab" role="tabpanel">
+                        <div class="qr-container" data-clipboard="@Model.Address">
+                            <vc:qr-code data="@Model.Address" />
+                        </div>
+                        <div class="input-group mt-3">
+                            <div class="form-floating">
+                                <vc:truncate-center text="@Model.Address" padding="15" elastic="true" classes="form-control-plaintext" id="Address" />
+                                <label for="Address">Ark Address</label>
+                            </div>
                         </div>
                     </div>
-                </div>
-                <div class="tab-pane payment-box" id="link-tab" role="tabpanel">
-                    <div class="qr-container" data-clipboard="@paymentLink">
-                        <vc:qr-code data="@paymentLink" />
-                    </div>
-                    <div class="input-group mt-3">
-                        <div class="form-floating">
-                            <vc:truncate-center text="@paymentLink" padding="15" elastic="true" classes="form-control-plaintext" id="PaymentLink" />
-                            <label for="PaymentLink">Payment Link</label>
+                    <div class="tab-pane payment-box" id="link-tab" role="tabpanel">
+                        <div class="qr-container" data-clipboard="@paymentLink">
+                            <vc:qr-code data="@paymentLink" />
+                        </div>
+                        <div class="input-group mt-3">
+                            <div class="form-floating">
+                                <vc:truncate-center text="@paymentLink" padding="15" elastic="true" classes="form-control-plaintext" id="PaymentLink" />
+                                <label for="PaymentLink">Payment Link</label>
+                            </div>
                         </div>
                     </div>
-                </div>
+                }
+                @if (hasBoarding)
+                {
+                    <div class="tab-pane payment-box @(!hasAddress ? "show active" : "")" id="boarding-tab" role="tabpanel">
+                        <div class="qr-container" data-clipboard="@Model.BoardingAddress">
+                            <vc:qr-code data="@Model.BoardingAddress" />
+                        </div>
+                        <div class="input-group mt-3">
+                            <div class="form-floating">
+                                <vc:truncate-center text="@Model.BoardingAddress" padding="15" elastic="true" classes="form-control-plaintext" id="BoardingAddress" />
+                                <label for="BoardingAddress">Boarding Address (Onchain)</label>
+                            </div>
+                        </div>
+                        <p class="text-muted small mt-2 mb-0">Send onchain BTC to board into Ark. Requires 1 confirmation + batch round.</p>
+                    </div>
+                }
             </div>
         </div>
         <div class="payment-box">
-            <div class="mt-4">
-                <button type="submit" name="command" value="generate-address" class="btn btn-primary w-100">
-                    Generate another address
+            <div class="mt-4 d-flex gap-2">
+                <button type="submit" name="command" value="generate-address" class="btn btn-primary flex-grow-1">
+                    @(hasAddress ? "New Ark address" : "Generate Ark address")
+                </button>
+                <button type="submit" name="command" value="generate-boarding-address" class="btn btn-outline-primary flex-grow-1">
+                    @(hasBoarding ? "New boarding address" : "Generate boarding address")
                 </button>
             </div>
         </div>
-        <p class="text-muted small text-center mt-3 mb-0">Address auto-deactivates once funds arrive</p>
+        <p class="text-muted small text-center mt-3 mb-0">Addresses auto-deactivate once funds arrive</p>
     }
 </form>

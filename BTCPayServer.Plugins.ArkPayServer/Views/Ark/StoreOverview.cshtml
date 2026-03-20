@@ -89,7 +89,7 @@
                     {
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="text-muted">Lightning</span>
-                            <span class="badge text-bg-secondary" title="Boltz service required">Unavailable</span>
+                            <span class="badge text-bg-secondary" title="Requires a Boltz swap service — configure the Boltz URL in Arkade server settings">Unavailable</span>
                         </div>
                     }
 
@@ -129,11 +129,23 @@
                             <button type="submit" name="command" value="toggle-subdust"
                                     class="btn btn-sm badge text-primary btn-outline-secondary"
                                     @(Model.IsDestinationSweepEnabled && !Model.AllowSubDustAmounts ? "disabled" : "")
-                                    title="@(Model.IsDestinationSweepEnabled && !Model.AllowSubDustAmounts ? "Clear auto-sweep first to disable" : "Accept payments below dust threshold")">
+                                    title="@(Model.IsDestinationSweepEnabled && !Model.AllowSubDustAmounts ? "Cannot enable while auto-sweep is active — sub-dust VTXOs cannot be swept on-chain" : "Accept payments below the on-chain dust threshold (~330 sats)")">
                                 @(Model.AllowSubDustAmounts ? "Enabled" : "Disabled")
                             </button>
                         </form>
                     </div>
+
+                    @if (Model.WalletType == WalletType.HD)
+                    {
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="text-muted">Boarding</span>
+                            <button type="button" class="btn btn-sm badge btn-outline-secondary text-primary"
+                                    data-bs-toggle="modal" data-bs-target="#boardingModal"
+                                    title="Include a P2TR on-chain boarding address on invoices when no BTC on-chain payment method is configured">
+                                @(Model.BoardingEnabled ? "Enabled" : "Disabled")
+                            </button>
+                        </div>
+                    }
                 </div>
             </div>
         </div>
@@ -394,6 +406,55 @@
                         {
                             <button type="submit" name="command" value="save" class="btn btn-primary">
                                 Enable Auto-Sweep
+                            </button>
+                        }
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Boarding Configuration Modal -->
+@if (Model.WalletType == WalletType.HD)
+{
+    <div class="modal fade" id="boardingModal" tabindex="-1" aria-labelledby="boardingModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="boardingModalLabel">Boarding Configuration</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <form asp-action="UpdateWalletConfig" method="post" asp-route-storeId="@storeId">
+                    <div class="modal-body">
+                        <p class="text-muted small mb-3">
+                            Boarding allows customers to pay invoices using an on-chain Bitcoin transaction.
+                            The funds are moved into the Ark VTXO tree in the next batch round.
+                            Only available when the store has no on-chain BTC payment method configured.
+                        </p>
+
+                        <div class="mb-3">
+                            <label asp-for="MinBoardingAmountSats" class="form-label">Minimum Amount (sats)</label>
+                            <input asp-for="MinBoardingAmountSats" class="form-control" type="number" min="330"
+                                   value="@Model.MinBoardingAmountSats" />
+                            <div class="form-text">Invoices below this amount will not include a boarding address. Minimum: 330 sats (P2TR dust threshold).</div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        @if (Model.BoardingEnabled)
+                        {
+                            <button type="submit" name="command" value="disable-boarding" class="btn btn-outline-danger">
+                                Disable Boarding
+                            </button>
+                            <button type="submit" name="command" value="save-boarding" class="btn btn-primary">
+                                Save
+                            </button>
+                        }
+                        else
+                        {
+                            <button type="submit" name="command" value="save-boarding" class="btn btn-primary">
+                                Enable Boarding
                             </button>
                         }
                     </div>

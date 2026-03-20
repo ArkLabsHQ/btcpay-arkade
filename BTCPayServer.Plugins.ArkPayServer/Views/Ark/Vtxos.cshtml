@@ -4,6 +4,8 @@
 @using NArk.Abstractions.Blockchain
 @using NBitcoin
 @using NArk.Abstractions.VTXOs
+@using BTCPayServer.Payments
+@using BTCPayServer.Services
 @using NArk.Core.Contracts
 @using NArk.Core.Transport
 @using static BTCPayServer.Plugins.ArkPayServer.Helpers.ArkViewHelpers
@@ -12,6 +14,7 @@
 @inject ArkNetworkConfig ArkNetworkConfig
 @inject IChainTimeProvider ChainTimeProvider
 @inject IClientTransport ClientTransport
+@inject TransactionLinkProviders TransactionLinkProviders
 
 @{
     ViewData.SetActivePage(category: "Ark", activePage: "VTXOs", title: "Ark - VTXOs");
@@ -154,9 +157,17 @@
                         // Get contract info for this VTXO
                         Model.VtxoContracts.TryGetValue(vtxo.Script, out var contract);
                         var arkContract = contract != null ? ArkContractParser.Parse(contract.Type, contract.AdditionalData, network) : null;
-                        var addressStr = arkContract?.GetArkAddress().ToString(mainnet);
-                        var outpointLink = ArkadeLinkHelper.GetOutpointLink(ArkNetworkConfig, vtxo.OutPoint.ToString());
-                        var addressLink = !string.IsNullOrEmpty(vtxo.Script) ? ArkadeLinkHelper.GetScriptLink(ArkNetworkConfig, vtxo.Script) : null;
+                        var isBoarding = arkContract is ArkBoardingContract;
+                        var addressStr = isBoarding
+                            ? ((ArkBoardingContract)arkContract!).GetOnchainAddress(network).ToString()
+                            : arkContract?.GetArkAddress().ToString(mainnet);
+                        var outpointLink = isBoarding
+                            ? TransactionLinkProviders.GetTransactionLink(PaymentTypes.CHAIN.GetPaymentMethodId("BTC"), vtxo.TransactionId)
+                            : ArkadeLinkHelper.GetOutpointLink(ArkNetworkConfig, vtxo.OutPoint.ToString());
+                        var btcChainPmi = PaymentTypes.CHAIN.GetPaymentMethodId("BTC");
+                        var addressLink = isBoarding
+                            ? TransactionLinkProviders.GetBlockExplorerLink(btcChainPmi)?.Replace("/tx/{0}", $"/address/{addressStr}")
+                            : (!string.IsNullOrEmpty(vtxo.Script) ? ArkadeLinkHelper.GetScriptLink(ArkNetworkConfig, vtxo.Script) : null);
 
                         <tr id="vtxo_@vtxo.OutPoint" class="mass-action-row">
                             <td class="only-for-js align-middle">

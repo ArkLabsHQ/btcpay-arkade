@@ -79,7 +79,8 @@ public class ArkController(
     IVtxoStorage vtxoStorage,
     IWalletStorage walletStorage,
     IDbContextFactory<ArkPluginDbContext> dbContextFactory,
-    IHttpClientFactory httpClientFactory) : Controller
+    IHttpClientFactory httpClientFactory,
+    BoardingUtxoSyncService boardingUtxoSyncService) : Controller
 {
     [HttpGet("stores/{storeId}/initial-setup")]
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
@@ -149,8 +150,15 @@ public class ArkController(
                 walletIds: [walletSettings.WalletId!], cancellationToken: HttpContext.RequestAborted);
             if (contracts.Count > 0)
             {
-                var scripts = contracts.Select(c => c.Script).ToHashSet();
-                await vtxoSyncService.PollScriptsForVtxos(scripts, HttpContext.RequestAborted);
+                var initBoardingContracts = contracts
+                    .Where(c => c.Type == ArkBoardingContract.ContractType).ToList();
+                var initNonBoardingScripts = contracts
+                    .Where(c => c.Type != ArkBoardingContract.ContractType)
+                    .Select(c => c.Script).ToHashSet();
+                if (initNonBoardingScripts.Count > 0)
+                    await vtxoSyncService.PollScriptsForVtxos(initNonBoardingScripts, HttpContext.RequestAborted);
+                if (initBoardingContracts.Count > 0)
+                    await boardingUtxoSyncService.SyncAsync(initBoardingContracts, HttpContext.RequestAborted);
             }
 
             var config = new ArkadePaymentMethodConfig(walletSettings.WalletId!, walletSettings.IsOwnedByStore);
@@ -328,6 +336,8 @@ public class ArkController(
             SignerAvailable = signerAvailable,
             DefaultAddress = defaultAddress,
             AllowSubDustAmounts = config.AllowSubDustAmounts,
+            BoardingEnabled = config.BoardingEnabled,
+            MinBoardingAmountSats = config.MinBoardingAmountSats,
             Wallet = wallet?.Secret,
             WalletType = wallet?.WalletType ?? WalletType.SingleKey,
             CanManagePrivateKeys = canManagePrivateKeys,
@@ -392,6 +402,10 @@ public class ArkController(
             var existingAddress = await FindManualReceiveAddress(config!.WalletId!, cancellationToken);
             if (existingAddress != null)
                 model.Address = existingAddress;
+
+            var existingBoarding = await FindManualBoardingAddress(config.WalletId!, cancellationToken);
+            if (existingBoarding != null)
+                model.BoardingAddress = existingBoarding;
         }
         catch (Exception ex)
         {
@@ -410,21 +424,43 @@ public class ArkController(
 
         try
         {
-            var contract = await contractService.DeriveContract(
-                config!.WalletId!,
-                NextContractPurpose.Receive,
-                ContractActivityState.AwaitingFundsBeforeDeactivate,
-                metadata: new Dictionary<string, string> { ["Source"] = "manual" },
-                cancellationToken: cancellationToken);
-
+            var model = new ArkReceiveViewModel();
             var terms = await clientTransport.GetServerInfoAsync(cancellationToken);
-            var address = contract.GetArkAddress().ToString(terms.Network.ChainName == ChainName.Mainnet);
 
-            return View(new ArkReceiveViewModel { Address = address });
+            if (command == "generate-boarding-address")
+            {
+                var boardingContract = (ArkBoardingContract)await contractService.DeriveContract(
+                    config!.WalletId!,
+                    NextContractPurpose.Boarding,
+                    ContractActivityState.AwaitingFundsBeforeDeactivate,
+                    metadata: new Dictionary<string, string> { ["Source"] = "manual-boarding" },
+                    cancellationToken: cancellationToken);
+                model.BoardingAddress = boardingContract.GetOnchainAddress(terms.Network).ToString();
+
+                // Preserve existing ark address if any
+                var existingAddress = await FindManualReceiveAddress(config.WalletId!, cancellationToken);
+                if (existingAddress != null) model.Address = existingAddress;
+            }
+            else
+            {
+                var contract = await contractService.DeriveContract(
+                    config!.WalletId!,
+                    NextContractPurpose.Receive,
+                    ContractActivityState.AwaitingFundsBeforeDeactivate,
+                    metadata: new Dictionary<string, string> { ["Source"] = "manual" },
+                    cancellationToken: cancellationToken);
+                model.Address = contract.GetArkAddress().ToString(terms.Network.ChainName == ChainName.Mainnet);
+
+                // Preserve existing boarding address if any
+                var existingBoarding = await FindManualBoardingAddress(config.WalletId!, cancellationToken);
+                if (existingBoarding != null) model.BoardingAddress = existingBoarding;
+            }
+
+            return View(model);
         }
         catch (Exception ex)
         {
-            TempData[WellKnownTempData.ErrorMessage] = $"Failed to generate receive address: {ex.Message}";
+            TempData[WellKnownTempData.ErrorMessage] = $"Failed to generate address: {ex.Message}";
         }
 
         return RedirectToAction(nameof(Receive), new { storeId });
@@ -449,6 +485,26 @@ public class ArkController(
         var serverKey = terms.SignerKey.Extract().XOnlyPubKey;
         var arkAddr = ArkAddress.FromScriptPubKey(script, serverKey);
         return arkAddr.ToString(terms.Network.ChainName == ChainName.Mainnet);
+    }
+
+    private async Task<string?> FindManualBoardingAddress(string walletId, CancellationToken cancellationToken)
+    {
+        var existingContracts = await contractStorage.GetContracts(
+            walletIds: [walletId],
+            isActive: true,
+            contractTypes: [ArkBoardingContract.ContractType],
+            cancellationToken: cancellationToken);
+
+        var boardingEntity = existingContracts
+            .FirstOrDefault(c =>
+                c.ActivityState == ContractActivityState.AwaitingFundsBeforeDeactivate &&
+                c.Metadata?.GetValueOrDefault("Source") == "manual-boarding");
+
+        if (boardingEntity == null) return null;
+
+        var terms = await clientTransport.GetServerInfoAsync(cancellationToken);
+        var boardingContract = (ArkBoardingContract)ArkContractParser.Parse(boardingEntity.Type, boardingEntity.AdditionalData, terms.Network)!;
+        return boardingContract.GetOnchainAddress(terms.Network).ToString();
     }
 
     /// <summary>
@@ -1905,6 +1961,26 @@ public class ArkController(
                 new { storeId });
         }
 
+        if (command == "save-boarding")
+        {
+            var minAmount = model.MinBoardingAmountSats > 0 ? model.MinBoardingAmountSats : 330L;
+            if (minAmount < 330)
+                return RedirectWithError(nameof(StoreOverview), "Boarding minimum cannot be below the P2TR dust threshold (330 sats).", new { storeId });
+
+            var newConfig = config! with { BoardingEnabled = true, MinBoardingAmountSats = minAmount };
+            store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], newConfig);
+            await storeRepository.UpdateStore(store);
+            return RedirectWithSuccess(nameof(StoreOverview), $"Boarding enabled with minimum {minAmount} sats.", new { storeId });
+        }
+
+        if (command == "disable-boarding")
+        {
+            var newConfig = config! with { BoardingEnabled = false };
+            store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], newConfig);
+            await storeRepository.UpdateStore(store);
+            return RedirectWithSuccess(nameof(StoreOverview), "Boarding disabled.", new { storeId });
+        }
+
         return RedirectToAction(nameof(StoreOverview), new { storeId });
     }
 
@@ -2768,14 +2844,17 @@ public class ArkController(
             all.Where(vtxo => !allSpendableOutpoints.Contains(vtxo.OutPoint))
             .Sum(vtxo => (long)vtxo.Amount);
 
-        var availableBalance = coinsByRecoverableStatus[false].Sum(coin => coin.Amount.Satoshi);
+        var availableBalance = coinsByRecoverableStatus[false]
+            .Where(coin => !coin.Unrolled)
+            .Sum(coin => coin.Amount.Satoshi);
         var recoverableBalance = coinsByRecoverableStatus[true].Sum(coin => coin.Amount.Satoshi);
+        var boardingBalance = allCoins.Where(coin => coin.Unrolled).Sum(coin => coin.Amount.Satoshi);
 
         // Locked: VTXOs committed to active intents (WaitingToSubmit, WaitingForBatch)
         var lockedOutpoints = await intentStorage.GetLockedVtxoOutpoints(walletId, cancellationToken);
         var lockedSet = new HashSet<NBitcoin.OutPoint>(lockedOutpoints);
         var lockedBalance = coinsByRecoverableStatus[false]
-            .Where(coin => lockedSet.Contains(coin.Outpoint))
+            .Where(coin => !coin.Unrolled && lockedSet.Contains(coin.Outpoint))
             .Sum(coin => coin.Amount.Satoshi);
 
         return new ArkBalancesViewModel
@@ -2784,6 +2863,7 @@ public class ArkController(
             LockedBalance = lockedBalance,
             RecoverableBalance = recoverableBalance,
             UnspendableBalance = unspendableBalance,
+            BoardingBalance = boardingBalance,
         };
     }
 
@@ -3060,9 +3140,24 @@ public class ArkController(
                     return RedirectToAction(nameof(Send), new { storeId, vtxos = string.Join(",", selectedItems) });
 
                 case "refresh-state":
-                    // Get wallet scripts and poll for updates
-                    var contracts = await contractStorage.GetContracts(walletIds: [config!.WalletId], cancellationToken: cancellationToken);
-                    await vtxoSyncService.PollScriptsForVtxos(contracts.Select(c => c.Script).ToHashSet(), cancellationToken);
+                    // Look up selected VTXOs to get their scripts, then resolve contracts
+                    var outpoints = selectedItems
+                        .Select(s => NBitcoin.OutPoint.Parse(s.Replace('-', ':')))
+                        .ToArray();
+                    var selectedVtxos = await vtxoStorage.GetVtxos(
+                        outpoints: outpoints, includeSpent: true, cancellationToken: cancellationToken);
+                    var vtxoScripts = selectedVtxos.Select(v => v.Script).Distinct().ToArray();
+                    var contracts = await contractStorage.GetContracts(
+                        scripts: vtxoScripts, cancellationToken: cancellationToken);
+                    var boardingContracts = contracts
+                        .Where(c => c.Type == ArkBoardingContract.ContractType).ToList();
+                    var nonBoardingScripts = contracts
+                        .Where(c => c.Type != ArkBoardingContract.ContractType)
+                        .Select(c => c.Script).ToHashSet();
+                    if (nonBoardingScripts.Count > 0)
+                        await vtxoSyncService.PollScriptsForVtxos(nonBoardingScripts, cancellationToken);
+                    if (boardingContracts.Count > 0)
+                        await boardingUtxoSyncService.SyncAsync(boardingContracts, cancellationToken);
                     return RedirectWithSuccess(nameof(Vtxos), $"Refreshed state for {selectedItems.Length} VTXOs.", new { storeId });
 
                 default:
@@ -3142,8 +3237,18 @@ public class ArkController(
             switch (command)
             {
                 case "sync-selected":
-                    // Poll all scripts for VTXO updates
-                    await vtxoSyncService.PollScriptsForVtxos(selectedItems.ToHashSet(), cancellationToken);
+                    // Poll scripts for VTXO updates, routing boarding contracts to UTXO provider
+                    var selectedContracts = await contractStorage.GetContracts(
+                        scripts: selectedItems, cancellationToken: cancellationToken);
+                    var selectedBoarding = selectedContracts
+                        .Where(c => c.Type == ArkBoardingContract.ContractType).ToList();
+                    var selectedNonBoardingScripts = selectedContracts
+                        .Where(c => c.Type != ArkBoardingContract.ContractType)
+                        .Select(c => c.Script).ToHashSet();
+                    if (selectedNonBoardingScripts.Count > 0)
+                        await vtxoSyncService.PollScriptsForVtxos(selectedNonBoardingScripts, cancellationToken);
+                    if (selectedBoarding.Count > 0)
+                        await boardingUtxoSyncService.SyncAsync(selectedBoarding, cancellationToken);
                     return RedirectWithSuccess(nameof(Contracts), $"Synced {selectedItems.Length} contracts.", new { storeId });
 
                 case "set-active":

@@ -178,7 +178,8 @@
                     {
                         var contractEntity = Model.SwapContracts.GetValueOrDefault(swap.ContractScript);
                         var arkContract = contractEntity != null ? ArkContractParser.Parse(contractEntity.Type, contractEntity.AdditionalData, network) : null;
-                        var link = arkContract != null ? ArkadeLinkHelper.GetContractLink(ArkNetworkConfig, arkContract) : "#";
+                        var link = arkContract is ArkBoardingContract ? ArkadeLinkHelper.GetScriptLink(ArkNetworkConfig, swap.ContractScript)
+                            : arkContract != null ? ArkadeLinkHelper.GetContractLink(ArkNetworkConfig, arkContract) : "#";
                         var boltzSwapLink = ArkadeLinkHelper.GetSwapLink(ArkNetworkConfig, swap.SwapId);
 
                         <tr id="swap_@swap.SwapId.GetHashCode()" class="mass-action-row">
@@ -205,7 +206,9 @@
                             <td class="align-middle">
                                 @if (arkContract != null)
                                 {
-                                    var arkAddress = arkContract.GetArkAddress().ToString(mainnet);
+                                    var arkAddress = arkContract is ArkBoardingContract boardingSwapContract
+                                        ? boardingSwapContract.GetOnchainAddress(network).ToString()
+                                        : arkContract.GetArkAddress().ToString(mainnet);
                                     <vc:truncate-center text="@arkAddress" link="@link" classes="truncate-center-id"/>
                                 }
                                 else

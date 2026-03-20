@@ -18,6 +18,8 @@ public class StoreOverviewViewModel
     public string? Wallet { get; set; }
     public string? DefaultAddress { get; set; }
     public bool AllowSubDustAmounts { get; set; }
+    public bool BoardingEnabled { get; set; }
+    public long MinBoardingAmountSats { get; set; }
 
     /// <summary>
     /// The type of wallet (SingleKey/legacy or HD/mnemonic).

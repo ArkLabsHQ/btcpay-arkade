@@ -112,3 +112,26 @@ jobs:
         git push origin "v${{ steps.version.outputs.version }}"
         echo "✅ Created and pushed tag v${{ steps.version.outputs.version }}"
         echo "🔗 Build URL: ${{ steps.build.outputs.build_url }}"
+
+    - name: Extract changelog for version
+      if: steps.tag_check.outputs.exists == 'false'
+      id: changelog
+      run: |
+        VERSION="${{ steps.version.outputs.version }}"
+        # Extract the section for this version from CHANGELOG.md
+        # Match from "## [VERSION]" to the next "## [" or end of file
+        BODY=$(awk "/^## \\[$VERSION\\]/{found=1; next} /^## \\[/{if(found) exit} found{print}" CHANGELOG.md)
+        if [ -z "$BODY" ]; then
+          BODY="Release v$VERSION"
+        fi
+        # Write to file to preserve newlines
+        echo "$BODY" > /tmp/release-notes.md
+
+    - name: Create GitHub Release
+      if: steps.tag_check.outputs.exists == 'false'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh release create "v${{ steps.version.outputs.version }}" \
+          --title "v${{ steps.version.outputs.version }}" \
+          --notes-file /tmp/release-notes.md

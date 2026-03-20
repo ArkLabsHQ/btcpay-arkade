@@ -1,14 +1,19 @@
 using BTCPayServer.Data;
 using BTCPayServer.Payments;
+using Newtonsoft.Json.Linq;
 
 namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 
 public class ArkadeCheckoutModelExtension: ICheckoutModelExtension, IGlobalCheckoutModelExtension
 {
     private readonly IPaymentLinkExtension _arkadePaymentLinkExtension;
+    private readonly ArkadePaymentMethodHandler _handler;
 
-    public ArkadeCheckoutModelExtension(IEnumerable<IPaymentLinkExtension> paymentLinkExtensions)
+    public ArkadeCheckoutModelExtension(
+        IEnumerable<IPaymentLinkExtension> paymentLinkExtensions,
+        ArkadePaymentMethodHandler handler)
     {
+        _handler = handler;
         _arkadePaymentLinkExtension =
             paymentLinkExtensions
                 .SingleOrDefault(p => p.PaymentMethodId == ArkadePlugin.ArkadePaymentMethodId) ??
@@ -36,6 +41,14 @@ public class ArkadeCheckoutModelExtension: ICheckoutModelExtension, IGlobalCheck
         context.Model.InvoiceBitcoinUrlQR = UpperCaseQrUri(paymentLink);
         // Full BIP21 with all params for "Pay in wallet" link
         context.Model.InvoiceBitcoinUrl = paymentLink;
+
+        // Pass boarding flag to checkout component
+        if (context.Prompt.Details is not null)
+        {
+            var details = _handler.ParsePaymentPromptDetails(context.Prompt.Details);
+            if (!string.IsNullOrEmpty(details.BoardingAddress))
+                context.Model.AdditionalData["hasBoardingAddress"] = JToken.FromObject(true);
+        }
     }
 
     void IGlobalCheckoutModelExtension.ModifyCheckoutModel(CheckoutModelContext context)

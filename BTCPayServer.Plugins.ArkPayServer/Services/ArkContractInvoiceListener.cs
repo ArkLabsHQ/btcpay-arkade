@@ -85,13 +85,46 @@ public class ArkContractInvoiceListener(
             // by VtxoSynchronizationService in NNark library
 
             var terms = await clientTransport.GetServerInfoAsync();
-            var serverKey = terms.SignerKey.Extract().XOnlyPubKey;
-            var script = Script.FromHex(vtxo.Script);
-            var address = ArkAddress.FromScriptPubKey(script, serverKey);
             var network = terms.Network;
-            var inv = await invoiceRepository.GetInvoiceFromAddress(ArkadePlugin.ArkadePaymentMethodId, address.ToString(network.ChainName == ChainName.Mainnet));
+            var script = Script.FromHex(vtxo.Script);
+
+            // Try to find the invoice by address — handle both Ark and boarding contracts
+            InvoiceEntity? inv = null;
+            string? paymentDestination = null;
+
+            // Check if this is a boarding contract (P2TR on-chain address)
+            var contracts = await contractStorage.GetContracts(
+                scripts: [vtxo.Script],
+                contractTypes: [NArk.Core.Contracts.ArkBoardingContract.ContractType],
+                cancellationToken: CancellationToken.None);
+
+            var isBoarding = contracts.Count > 0;
+            if (isBoarding)
+            {
+                // Boarding VTXO: look up invoice by P2TR Bitcoin address
+                var btcAddress = script.GetDestinationAddress(network);
+                if (btcAddress is not null)
+                {
+                    paymentDestination = btcAddress.ToString();
+                    inv = await invoiceRepository.GetInvoiceFromAddress(
+                        ArkadePlugin.ArkadePaymentMethodId, paymentDestination);
+                }
+            }
+            else
+            {
+                // Standard Ark VTXO: look up invoice by Ark address
+                var serverKey = terms.SignerKey.Extract().XOnlyPubKey;
+                var address = ArkAddress.FromScriptPubKey(script, serverKey);
+                paymentDestination = address.ToString(network.ChainName == ChainName.Mainnet);
+                inv = await invoiceRepository.GetInvoiceFromAddress(
+                    ArkadePlugin.ArkadePaymentMethodId, paymentDestination);
+            }
+
             if (inv is null)
                 return;
+
+            // Boarding payments: Processing until confirmed, then Settled
+            var isConfirmed = !isBoarding || vtxo.Metadata?.GetValueOrDefault("Confirmed") == "True";
 
             // Map NNark's ArkVtxo to plugin's VtxoEntity entity
             var vtxoEntity = new VtxoEntity
@@ -102,7 +135,7 @@ public class ArkContractInvoiceListener(
                 Script = vtxo.Script,
                 SeenAt = vtxo.CreatedAt
             };
-            await HandlePaymentData(vtxoEntity, inv, arkadePaymentMethodHandler);
+            await HandlePaymentData(vtxoEntity, inv, arkadePaymentMethodHandler, paymentDestination, isConfirmed);
         }
         catch (Exception ex)
         {
@@ -120,10 +153,11 @@ public class ArkContractInvoiceListener(
         return Task.CompletedTask;
     }
     
-    private async Task HandlePaymentData(VtxoEntity vtxo, InvoiceEntity invoice, ArkadePaymentMethodHandler handler)
+    private async Task HandlePaymentData(VtxoEntity vtxo, InvoiceEntity invoice, ArkadePaymentMethodHandler handler, string? destination = null, bool isConfirmed = true)
     {
         var pmi = ArkadePlugin.ArkadePaymentMethodId;
-        var details = new ArkadePaymentData($"{vtxo.TransactionId}:{vtxo.TransactionOutputIndex}");
+        var details = new ArkadePaymentData($"{vtxo.TransactionId}:{vtxo.TransactionOutputIndex}", destination);
+        var status = isConfirmed ? PaymentStatus.Settled : PaymentStatus.Processing;
 
         // Serialize payment registration to prevent duplicate inserts from concurrent VTXO events
         await _paymentLock.WaitAsync();
@@ -136,12 +170,20 @@ public class ArkContractInvoiceListener(
 
             var paymentData = new PaymentData
             {
-                Status = PaymentStatus.Settled,
+                Status = status,
                 Amount = Money.Satoshis(vtxo.Amount).ToDecimal(MoneyUnit.BTC),
                 Created = vtxo.SeenAt,
                 Id = details.Outpoint,
                 Currency = "BTC",
             }.Set(freshInvoice, handler, details);
+
+            // Override destination if payment came via boarding address (not the Ark contract address)
+            if (destination is not null)
+            {
+                var blob = JObject.Parse(paymentData.Blob2);
+                blob["Destination"] = destination;
+                paymentData.Blob2 = blob.ToString(Newtonsoft.Json.Formatting.None);
+            }
 
             var alreadyExistingPaymentThatMatches = freshInvoice
                 .GetPayments(false)
@@ -157,8 +199,8 @@ public class ArkContractInvoiceListener(
             }
             else
             {
-                //else update it with the new data
-                alreadyExistingPaymentThatMatches.Status = PaymentStatus.Settled;
+                // Update existing payment — upgrade Processing→Settled on confirmation
+                alreadyExistingPaymentThatMatches.Status = status;
                 alreadyExistingPaymentThatMatches.Details = JToken.FromObject(details, handler.Serializer);
                 await paymentService.UpdatePayments([alreadyExistingPaymentThatMatches]);
             }

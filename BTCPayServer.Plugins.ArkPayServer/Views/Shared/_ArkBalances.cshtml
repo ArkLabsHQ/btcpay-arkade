@@ -6,7 +6,7 @@
 @{
     var compactMode = ViewData["CompactMode"] as bool? ?? false;
     var noContainer = ViewData["NoContainer"] as bool? ?? false;
-    var totalBalance = (Model?.AvailableBalance ?? 0) + (Model?.LockedBalance ?? 0) + (Model?.RecoverableBalance ?? 0) + (Model?.UnspendableBalance ?? 0);
+    var totalBalance = (Model?.AvailableBalance ?? 0) + (Model?.LockedBalance ?? 0) + (Model?.RecoverableBalance ?? 0) + (Model?.UnspendableBalance ?? 0) + (Model?.BoardingBalance ?? 0);
 
     string FormatBtc(decimal sats) =>
         DisplayFormatter.Currency(Money.Satoshis((long)sats).ToDecimal(MoneyUnit.BTC), "BTC");
@@ -41,6 +41,13 @@
                 <div class="d-flex align-items-center gap-2">
                     <span class="text-muted small">Unspendable:</span>
                     <span class="fw-semibold text-secondary" data-testid="unspendable-balance" data-sensitive>@FormatBtc(Model.UnspendableBalance)</span>
+                </div>
+            }
+            @if (Model.BoardingBalance > 0)
+            {
+                <div class="d-flex align-items-center gap-2">
+                    <span class="text-muted small">Boarding:</span>
+                    <span class="fw-semibold" style="color: var(--btcpay-body-text-muted)" data-testid="boarding-balance" data-sensitive>@FormatBtc(Model.BoardingBalance)</span>
                 </div>
             }
         </div>
@@ -102,6 +109,18 @@
                 </div>
             }
 
+            @if (Model.BoardingBalance > 0)
+            {
+                <div class="d-flex justify-content-between align-items-center py-2 border-top">
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="badge rounded-pill" style="width: 10px; height: 10px; padding: 0; background-color: var(--btcpay-body-text-muted);"></span>
+                        <span>Boarding</span>
+                        <small class="text-muted">Pending batch settlement</small>
+                    </div>
+                    <span class="fw-semibold" data-testid="boarding-balance" data-sensitive>@FormatBtc(Model.BoardingBalance)</span>
+                </div>
+            }
+
             @if (totalBalance > Model.AvailableBalance)
             {
                 <div class="d-flex justify-content-between align-items-center py-2 border-top mt-1">
@@ -130,6 +149,12 @@
                         <div class="progress-bar bg-secondary" role="progressbar"
                              style="width: @((Model.UnspendableBalance * 100m / totalBalance).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))%"
                              title="Unspendable"></div>
+                    }
+                    @if (Model.BoardingBalance > 0)
+                    {
+                        <div class="progress-bar" role="progressbar"
+                             style="width: @((Model.BoardingBalance * 100m / totalBalance).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))%; background-color: var(--btcpay-body-text-muted);"
+                             title="Boarding"></div>
                     }
                 </div>
             }
