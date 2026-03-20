@@ -16,20 +16,6 @@ Payments are settled through **Virtual UTXOs (VTXOs)**, Arkade's off-chain Bitco
 
 ---
 
-## Why Arkade?
-
-| Feature | Lightning | Arkade |
-|---|---|---|
-| Self-custodial | ✅ | ✅ |
-| Instant payments | ✅ | ✅ |
-| No channel management | ❌ | ✅ |
-| No inbound liquidity | ❌ | ✅ |
-| Receive while offline | ❌ | ✅ |
-| Unilateral on-chain exit | ❌ | ✅ |
-| Bitcoin-only, no soft fork | ❌ | ✅ |
-
-Arkade is complementary to Lightning, not a replacement. This plugin supports **both** natively — Lightning payments route through [Boltz](https://boltz.exchange) submarine swaps, giving you unified coverage across all payers.
-
 ---
 
 ## Payment Flows
