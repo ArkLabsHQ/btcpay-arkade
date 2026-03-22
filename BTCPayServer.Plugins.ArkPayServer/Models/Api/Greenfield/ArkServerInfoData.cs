@@ -11,6 +11,4 @@ public class ArkServerInfoData
     public int UnilateralExitBlocks { get; set; }
     public int BoardingExitBlocks { get; set; }
     public string? ForfeitAddress { get; set; }
-    public int MaxOpReturnOutputs { get; set; }
-    public long MaxTxWeight { get; set; }
 }

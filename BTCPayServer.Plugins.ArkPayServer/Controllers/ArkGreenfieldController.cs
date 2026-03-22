@@ -514,9 +514,7 @@ public class ArkGreenfieldController(
                 SignerPubKey = Convert.ToHexString(info.SignerKey.Extract().XOnlyPubKey.ToBytes()).ToLowerInvariant(),
                 UnilateralExitBlocks = (int)info.UnilateralExit.Value,
                 BoardingExitBlocks = (int)info.BoardingExit.Value,
-                ForfeitAddress = info.ForfeitAddress?.ToString(),
-                MaxOpReturnOutputs = info.MaxOpReturnOutputs,
-                MaxTxWeight = info.MaxTxWeight
+                ForfeitAddress = info.ForfeitAddress?.ToString()
             });
         }
         catch (Exception ex)
