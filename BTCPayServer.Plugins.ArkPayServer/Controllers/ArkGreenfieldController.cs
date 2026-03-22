@@ -9,6 +9,8 @@ using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Services;
 using BTCPayServer.Security;
 using BTCPayServer.Services.Invoices;
+using BTCPayServer.Services.Stores;
+using LNURL;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Cors;
 using Microsoft.AspNetCore.Mvc;
@@ -22,6 +24,7 @@ using NArk.Abstractions.Wallets;
 using NArk.Core.Contracts;
 using NArk.Core.Services;
 using NArk.Core.Transport;
+using NArk.Core.Wallet;
 using NArk.Hosting;
 using NArk.Swaps.Abstractions;
 using NArk.Swaps.Boltz;
@@ -40,6 +43,7 @@ namespace BTCPayServer.Plugins.ArkPayServer.Controllers;
 [EnableCors(CorsPolicies.All)]
 public class ArkGreenfieldController(
     ArkNetworkConfig arkNetworkConfig,
+    StoreRepository storeRepository,
     PaymentMethodHandlerDictionary paymentMethodHandlerDictionary,
     IClientTransport clientTransport,
     ArkadeSpendingService arkadeSpendingService,
@@ -102,6 +106,192 @@ public class ArkGreenfieldController(
             MinBoardingAmountSats = config.MinBoardingAmountSats,
             LightningEnabled = IsArkadeLightningEnabled()
         });
+    }
+
+    /// <summary>
+    /// Create or import an Arkade wallet for a store.
+    /// </summary>
+    [HttpPost("~/api/v1/stores/{storeId}/arkade/wallet")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Greenfield)]
+    public async Task<IActionResult> SetupWallet(string storeId, [FromBody] ArkWalletSetupRequest request,
+        CancellationToken cancellationToken)
+    {
+        var store = HttpContext.GetStoreData();
+        if (store == null) return NotFound();
+
+        var existingConfig = GetConfig<ArkadePaymentMethodConfig>(ArkadePlugin.ArkadePaymentMethodId, store);
+        if (existingConfig?.WalletId != null)
+            return this.CreateAPIError(409, "wallet-already-configured",
+                "Arkade wallet is already configured for this store. Delete it first to set up a new one.");
+
+        try
+        {
+            var (walletInfo, walletId, isNew, mnemonic) = await ResolveWalletInput(
+                request.Wallet, request.Destination, cancellationToken);
+
+            if (walletInfo != null)
+            {
+                await walletStorage.UpsertWallet(walletInfo, updateIfExists: true, cancellationToken);
+
+                if (walletInfo.WalletType == WalletType.SingleKey)
+                {
+                    await contractService.DeriveContract(
+                        walletInfo.Id,
+                        NextContractPurpose.SendToSelf,
+                        ContractActivityState.Active,
+                        metadata: new Dictionary<string, string> { ["Source"] = "Default" },
+                        cancellationToken: cancellationToken);
+                }
+
+                walletId = walletInfo.Id;
+            }
+
+            // Sync existing contracts if linking an existing wallet
+            var contracts = await contractStorage.GetContracts(
+                walletIds: [walletId!], cancellationToken: cancellationToken);
+            if (contracts.Count > 0)
+            {
+                var boardingContracts = contracts
+                    .Where(c => c.Type == ArkBoardingContract.ContractType).ToList();
+                var nonBoardingScripts = contracts
+                    .Where(c => c.Type != ArkBoardingContract.ContractType)
+                    .Select(c => c.Script).ToHashSet();
+                if (nonBoardingScripts.Count > 0)
+                    await vtxoSyncService.PollScriptsForVtxos(nonBoardingScripts, cancellationToken);
+                if (boardingContracts.Count > 0)
+                    await boardingUtxoSyncService.SyncAsync(boardingContracts, cancellationToken);
+            }
+
+            var config = new ArkadePaymentMethodConfig(walletId!, isNew);
+            store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], config);
+            store.SetDefaultPaymentId(ArkadePlugin.ArkadePaymentMethodId);
+
+            // Enable Lightning if requested
+            var lightningEnabled = false;
+            if (request.EnableLightning)
+            {
+                lightningEnabled = ConfigureLightning(store, walletId!);
+            }
+
+            await storeRepository.UpdateStore(store);
+
+            return Ok(new ArkWalletSetupResponse
+            {
+                WalletId = walletId!,
+                WalletType = (walletInfo?.WalletType ?? WalletType.SingleKey).ToString(),
+                IsNewWallet = isNew,
+                LightningEnabled = lightningEnabled,
+                Mnemonic = mnemonic
+            });
+        }
+        catch (Exception ex)
+        {
+            return this.CreateAPIError("wallet-setup-failed", ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Update Arkade wallet settings for a store.
+    /// </summary>
+    [HttpPatch("~/api/v1/stores/{storeId}/arkade/wallet/settings")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Greenfield)]
+    public async Task<IActionResult> UpdateWalletSettings(string storeId,
+        [FromBody] ArkWalletSettingsRequest request, CancellationToken cancellationToken)
+    {
+        var store = HttpContext.GetStoreData();
+        if (store == null) return NotFound();
+
+        var (config, error) = GetStoreConfig();
+        if (error != null) return error;
+
+        var newConfig = config!;
+
+        // Handle destination update
+        if (request.Destination != null)
+        {
+            if (request.Destination == "")
+            {
+                // Clear destination
+                await walletStorage.UpdateDestination(config.WalletId, null, cancellationToken);
+            }
+            else
+            {
+                if (config.AllowSubDustAmounts)
+                    return this.CreateAPIError("invalid-settings",
+                        "Cannot set auto-sweep destination while sub-dust amounts are enabled.");
+
+                var serverInfo = await clientTransport.GetServerInfoAsync(cancellationToken);
+                WalletFactory.ValidateDestination(request.Destination, serverInfo);
+                await walletStorage.UpdateDestination(config.WalletId, request.Destination, cancellationToken);
+            }
+        }
+
+        // Handle sub-dust toggle
+        if (request.AllowSubDustAmounts is { } allowSubDust)
+        {
+            if (allowSubDust)
+            {
+                var wallet = await walletStorage.GetWalletById(config.WalletId, cancellationToken);
+                if (!string.IsNullOrEmpty(wallet?.Destination))
+                    return this.CreateAPIError("invalid-settings",
+                        "Cannot enable sub-dust amounts while auto-sweep destination is configured.");
+            }
+            newConfig = newConfig with { AllowSubDustAmounts = allowSubDust };
+        }
+
+        // Handle boarding settings
+        if (request.BoardingEnabled is { } boardingEnabled)
+        {
+            newConfig = newConfig with { BoardingEnabled = boardingEnabled };
+        }
+
+        if (request.MinBoardingAmountSats is { } minAmount)
+        {
+            if (minAmount < 330)
+                return this.CreateAPIError("invalid-settings",
+                    "Boarding minimum cannot be below the P2TR dust threshold (330 sats).");
+            newConfig = newConfig with { MinBoardingAmountSats = minAmount };
+        }
+
+        store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], newConfig);
+        await storeRepository.UpdateStore(store);
+
+        // Return updated wallet info
+        return await GetWallet(storeId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Remove the Arkade wallet configuration from a store.
+    /// This does NOT delete the underlying wallet data — it only unlinks it from the store.
+    /// </summary>
+    [HttpDelete("~/api/v1/stores/{storeId}/arkade/wallet")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Greenfield)]
+    public async Task<IActionResult> RemoveWallet(string storeId, CancellationToken cancellationToken)
+    {
+        var store = HttpContext.GetStoreData();
+        if (store == null) return NotFound();
+
+        var (config, error) = GetStoreConfig();
+        if (error != null) return error;
+
+        // Remove Arkade payment method config
+        store.SetPaymentMethodConfig(ArkadePlugin.ArkadePaymentMethodId, null);
+
+        // Remove Arkade Lightning if it was configured
+        var lnPaymentMethodId = PaymentTypes.LN.GetPaymentMethodId("BTC");
+        var lnConfig = store.GetPaymentMethodConfig<LightningPaymentMethodConfig>(
+            lnPaymentMethodId, paymentMethodHandlerDictionary);
+        if (lnConfig?.ConnectionString?.StartsWith("type=arkade", StringComparison.InvariantCultureIgnoreCase) is true)
+        {
+            store.SetPaymentMethodConfig(lnPaymentMethodId, null);
+
+            var lnurlPaymentMethodId = PaymentTypes.LNURL.GetPaymentMethodId("BTC");
+            store.SetPaymentMethodConfig(lnurlPaymentMethodId, null);
+        }
+
+        await storeRepository.UpdateStore(store);
+
+        return Ok(new { removed = true, walletId = config!.WalletId });
     }
 
     #endregion
@@ -753,6 +943,104 @@ public class ArkGreenfieldController(
             UnspendableSats = unspendableBalance,
             BoardingSats = boardingBalance
         };
+    }
+
+    /// <summary>
+    /// Resolves wallet input into wallet info, following the same logic as ArkController.GetFromInputWallet.
+    /// Returns: (walletInfo if new wallet needs creating, walletId, isNewlyGenerated, mnemonic if generated).
+    /// </summary>
+    private async Task<(ArkWalletInfo? WalletInfo, string? WalletId, bool IsNew, string? Mnemonic)> ResolveWalletInput(
+        string? wallet, string? destination, CancellationToken cancellationToken)
+    {
+        var serverInfo = await clientTransport.GetServerInfoAsync(cancellationToken);
+
+        // Empty input → generate a new wallet
+        if (string.IsNullOrWhiteSpace(wallet))
+        {
+            var mnemonic = new Mnemonic(Wordlist.English, WordCount.Twelve);
+            var mnemonicStr = mnemonic.ToString();
+            var walletInfo = await WalletFactory.CreateWallet(mnemonicStr, destination, serverInfo, cancellationToken);
+            return (walletInfo, walletInfo.Id, true, mnemonicStr);
+        }
+
+        // nsec import
+        if (wallet.StartsWith("nsec", StringComparison.OrdinalIgnoreCase))
+        {
+            // Check if wallet already exists
+            var candidateIds = new[] { WalletFactory.GetOutputDescriptorFromNsec(wallet) }
+                .Concat(WalletFactory.GetAlternateWalletIdsFromNsec(wallet));
+            foreach (var candidateId in candidateIds)
+            {
+                var existing = await walletStorage.GetWalletById(candidateId, cancellationToken);
+                if (existing != null)
+                    return (null, candidateId, false, null);
+            }
+
+            var walletInfo = await WalletFactory.CreateWallet(wallet, destination, serverInfo, cancellationToken);
+            return (walletInfo, walletInfo.Id, true, null);
+        }
+
+        // BIP-39 mnemonic (12 or 24 words)
+        var words = wallet.Trim().Split([' ', '\t', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length is 12 or 24)
+        {
+            try
+            {
+                var mnemonic = new Mnemonic(wallet.Trim(), Wordlist.English);
+                var walletInfo = await WalletFactory.CreateWallet(
+                    mnemonic.ToString(), destination, serverInfo, cancellationToken);
+                return (walletInfo, walletInfo.Id, true, null);
+            }
+            catch
+            {
+                // Not a valid mnemonic, fall through
+            }
+        }
+
+        // Ark address → generate wallet with destination
+        if (ArkAddress.TryParse(wallet, out var addr))
+        {
+            var serverKey = serverInfo.SignerKey.Extract().XOnlyPubKey;
+            if (!serverKey.ToBytes().SequenceEqual(addr!.ServerKey.ToBytes()))
+                throw new InvalidOperationException("Ark address server key does not match the connected operator.");
+
+            var mnemonic = new Mnemonic(Wordlist.English, WordCount.Twelve);
+            var mnemonicStr = mnemonic.ToString();
+            var walletInfo = await WalletFactory.CreateWallet(mnemonicStr, wallet, serverInfo, cancellationToken);
+            return (walletInfo, walletInfo.Id, true, mnemonicStr);
+        }
+
+        // Existing wallet ID
+        var existingWallet = await walletStorage.GetWalletById(wallet, cancellationToken);
+        if (existingWallet != null)
+            return (null, wallet, false, null);
+
+        throw new InvalidOperationException(
+            "Unsupported wallet input. Provide a BIP-39 mnemonic (12/24 words), nsec key, Ark address, or existing wallet ID.");
+    }
+
+    private bool ConfigureLightning(StoreData store, string walletId)
+    {
+        var lightningPaymentMethodId = PaymentTypes.LN.GetPaymentMethodId("BTC");
+        var existingLnConfig = store.GetPaymentMethodConfig<LightningPaymentMethodConfig>(
+            lightningPaymentMethodId, paymentMethodHandlerDictionary);
+        if (existingLnConfig != null) return false;
+
+        var lnurlPaymentMethodId = PaymentTypes.LNURL.GetPaymentMethodId("BTC");
+
+        var lnConfig = new LightningPaymentMethodConfig
+        {
+            ConnectionString = $"type=arkade;wallet-id={walletId}",
+        };
+
+        store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[lightningPaymentMethodId], lnConfig);
+        store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[lnurlPaymentMethodId], new LNURLPaymentMethodConfig
+        {
+            UseBech32Scheme = true,
+            LUD12Enabled = true
+        });
+
+        return true;
     }
 
     private async Task<string?> FindManualReceiveAddress(string walletId, CancellationToken cancellationToken)
