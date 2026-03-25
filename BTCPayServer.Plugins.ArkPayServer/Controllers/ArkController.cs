@@ -1111,6 +1111,7 @@ public class ArkController(
     /// Suggests optimal coin selection based on destination type and amount.
     /// </summary>
     [HttpPost("stores/{storeId}/suggest-coins")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> SuggestCoins(
         string storeId,
         [FromBody] SuggestCoinsRequest request,
@@ -1212,6 +1213,7 @@ public class ArkController(
     /// Pre-flight validation before executing spend.
     /// </summary>
     [HttpPost("stores/{storeId}/validate-spend")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> ValidateSpend(
         string storeId,
         [FromBody] ValidateSpendRequest request,
