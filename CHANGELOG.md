@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.0.5] - 2026-03-25
+
+### Bug Fixes
+- **Critical: fix plugin crash on SuggestCoins/ValidateSpend endpoints** — missing `[Authorize(Policy = CanModifyStoreSettings)]` attribute meant BTCPay's store-resolution filter never ran, causing `StoreData is not set` exception that disabled the entire plugin server-wide
+
+### Other
+- Add detailed README and MIT license (#41)
+
+### SDK
+- NNark: fix `ComputeExpiresAt` incorrect `IsRBF` guard (1292501)
+- NNark: CI permissions fix for publish job (9d06e8b)
+- NNark: cache nigiri binary to fix E2E infrastructure timeouts (3254221)
+- NNark: various test assertion and capture fixes
+
 ## [2.0.4] - 2026-03-20
 
 ### Features
