@@ -1,0 +1,16 @@
+- name: Getting Started
+  href: getting-started.md
+- name: Architecture
+  href: architecture.md
+- name: Payment Flows
+  href: payment-flows.md
+- name: Wallet Types
+  href: wallet-types.md
+- name: Ark Protocol Concepts
+  href: ark-concepts.md
+- name: Configuration
+  href: configuration.md
+- name: Development Guide
+  href: development.md
+- name: Changelog
+  href: changelog.md

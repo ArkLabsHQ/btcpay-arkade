@@ -2,9 +2,10 @@
 
 > Accept Bitcoin payments through [Arkade](https://arkadeos.com) — a self-custodial, off-chain Bitcoin Layer 2 — directly inside BTCPay Server.
 
-[![Version](https://img.shields.io/badge/version-2.0.4-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.1.0-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![BTCPay Plugin](https://img.shields.io/badge/BTCPay%20Server-Plugin-orange)](https://btcpayserver.org)
+[![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://arklabshq.github.io/btcpay-arkade/)
 
 ---
 
@@ -57,7 +58,7 @@ The plugin persists all state (VTXOs, contracts, swaps, intents, wallets) in BTC
 - **BTCPay Server** (self-hosted, any recent version)
 - **PostgreSQL** (bundled with standard BTCPay deployments)
 - **Arkade server (arkd)** v0.9.0 or later — accessible over gRPC from your BTCPay host
-- **.NET 8** SDK (if building from source)
+- **.NET 10** SDK (if building from source)
 
 > ⚠️ **Alpha software.** This plugin is actively developed and not yet recommended for high-value production deployments. Always maintain a backup of your seed phrase.
 
@@ -180,7 +181,7 @@ The setup script will:
 ## Development
 
 ### Prerequisites
-- .NET 8 SDK
+- .NET 10 SDK
 - Docker (for test environment)
 - PostgreSQL
 

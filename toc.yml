@@ -1,0 +1,7 @@
+- name: Articles
+  href: docs/articles/
+  homepage: docs/articles/getting-started.md
+- name: Plugin API
+  href: api/
+- name: SDK API
+  href: sdk-api/

@@ -1,0 +1,94 @@
+{
+  "metadata": [
+    {
+      "src": [
+        {
+          "files": [
+            "BTCPayServer.Plugins.ArkPayServer/BTCPayServer.Plugins.ArkPayServer.csproj"
+          ]
+        }
+      ],
+      "dest": "api",
+      "properties": {
+        "TargetFramework": "net10.0"
+      },
+      "filter": "docs/filterConfig.yml"
+    },
+    {
+      "src": [
+        {
+          "files": [
+            "submodules/NNark/NArk.Abstractions/NArk.Abstractions.csproj",
+            "submodules/NNark/NArk.Core/NArk.Core.csproj",
+            "submodules/NNark/NArk.Swaps/NArk.Swaps.csproj",
+            "submodules/NNark/NArk.Storage.EfCore/NArk.Storage.EfCore.csproj"
+          ]
+        }
+      ],
+      "dest": "sdk-api",
+      "properties": {
+        "TargetFramework": "net8.0"
+      },
+      "filter": "docs/filterConfig.yml"
+    }
+  ],
+  "build": {
+    "content": [
+      {
+        "files": [
+          "api/**.yml",
+          "api/index.md"
+        ]
+      },
+      {
+        "files": [
+          "sdk-api/**.yml",
+          "sdk-api/index.md"
+        ]
+      },
+      {
+        "files": [
+          "docs/articles/**.md",
+          "docs/articles/**/toc.yml",
+          "docs/toc.yml",
+          "docs/index.md"
+        ]
+      },
+      {
+        "files": [
+          "toc.yml",
+          "index.md"
+        ]
+      }
+    ],
+    "resource": [
+      {
+        "files": [
+          "docs/images/**"
+        ]
+      }
+    ],
+    "output": "_site",
+    "globalMetadataFiles": [],
+    "fileMetadataFiles": [],
+    "template": [
+      "default",
+      "modern"
+    ],
+    "globalMetadata": {
+      "_appTitle": "Arkade BTCPay Plugin",
+      "_appName": "Arkade Docs",
+      "_appFooter": "© Ark Labs — MIT License",
+      "_enableSearch": true,
+      "_gitContribute": {
+        "repo": "https://github.com/ArkLabsHQ/btcpay-arkade",
+        "branch": "master",
+        "apiSpecFolder": "docs"
+      }
+    },
+    "postProcessors": [],
+    "noLangKeyword": false,
+    "keepFileLink": false,
+    "disableGitFeatures": false
+  }
+}

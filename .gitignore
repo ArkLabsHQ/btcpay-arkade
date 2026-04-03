@@ -8,3 +8,10 @@ nigiri/
 CLAUDE.md
 nul
 .superpowers
+
+# DocFX
+_site/
+api/*.yml
+api/.manifest
+sdk-api/*.yml
+sdk-api/.manifest

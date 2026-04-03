@@ -1,0 +1,9 @@
+apiRules:
+  # Exclude internal types and migrations
+  - exclude:
+      uidRegex: \.Migrations\.
+  - exclude:
+      uidRegex: \.Internal\.
+  - exclude:
+      hasAttribute:
+        uid: System.Runtime.CompilerServices.CompilerGeneratedAttribute
