@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.1.0] - 2026-04-10
+
+### Breaking Changes
+- **Migrate to .NET 10**: target framework updated from `net8.0` to `net10.0`; requires BTCPay Server >= 2.3.7
+
+### Features
+- **DocFX documentation**: API reference docs with GitHub Pages deployment (`docs.yml` workflow)
+- **Wallet sample app**: Blazor WASM wallet with EF Core SQLite (BeSql), QR codes, Lightning receive, LNURL, settings, backup/restore, smart send, and contract display
+
+### Improvements
+- Package dependency updates (Microsoft.Extensions.* 10.0.4, NBitcoin 9.0.5, etc.)
+
+### SDK
+- NNark: dedicated list and detail pages, contract persistence fix
+- NNark: backup support, smart send, LNURL integration, server info display
+- NNark: wallet UI polish — QR styling, asset receive mode, VTXO-gated minting
+- NNark: wallet features — real QR codes, Lightning receive, settings page
+- NNark: fix wallet creation, mutinynet network name resolution, SPA 404 fallback
+- NNark: payment tracking repository for outbound payments and inbound requests
+- NNark: `UnknownArkContract` handling fix in spending and sweeper services
+- NNark: `BoardingAllowed` and vtxo/utxo amount bounds from server info
+- NNark: `GetVtxosByOutpoints` transport method + VTXO polling race fix
+
 ## [2.0.5] - 2026-03-25
 
 ### Bug Fixes
