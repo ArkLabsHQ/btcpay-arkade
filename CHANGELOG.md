@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.1.9] - 2026-04-24
+
+### Bug Fixes
+- **Swap still stalls when arkd's subscription stream drops / misses the VTXO-arrival event.** v2.1.8 fixed the internal script→swap map, but that only helps if `OnVtxosChanged` fires — and it only fires if the VTXO actually reaches `VtxoStorage`. arkd's subscription doesn't retroactively replay, so a VTXO that arrives between "subscribe" and "first read of the stream" (or during a reconnect) is invisible to us. `SwapsManagementService.PollSwapState` now does a direct `GetVtxoByScriptsAsSnapshot` call for the swap's contract script on every non-terminal status probe — same pattern as the existing refund path — so we catch anything the stream missed.
+
 ## [2.1.8] - 2026-04-24
 
 ### Bug Fixes
