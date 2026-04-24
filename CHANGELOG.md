@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.1.14] - 2026-04-24
+
+### Bug Fixes
+- **Faster detection when arkd's subscription push is ahead of its indexer.** v2.1.13 added a 30-second safety-net poll, but user's repro showed arkd's indexer sometimes takes ~28 seconds to make a VTXO queryable after the subscription event fires — invoice detection was still noticeably slow. Tightened to 5-second interval, and each stream push now fires three polls (750ms / 3s / 8s) instead of one to cover the full observed commit-lag range.
+- **Explorer links pointed to the arkd operator instead of arkade.space.** `ArkPlugin.LoadNetworkConfig` dropped `ExplorerUri` when merging `ark.json` with the preset; the Mainnet preset's `https://arkade.space` never reached the plugin views, so the helper fell through to the `ArkUri/v1/indexer/vtxos?...` fallback. Signet preset also didn't set `ExplorerUri`. Both fixed.
+
+### Performance
+- `_readyToPoll` channel moved from Bounded(5) to Unbounded so stream-event processing never back-pressures on a full queue when retry schedules + RoutinePoll coincide.
+
 ## [2.1.13] - 2026-04-24
 
 ### Bug Fixes

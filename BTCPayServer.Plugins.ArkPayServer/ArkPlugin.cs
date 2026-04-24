@@ -240,7 +240,8 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         return new ArkNetworkConfig(
             ArkUri: !string.IsNullOrEmpty(fileConfig?.ArkUri) ? fileConfig.ArkUri : preset.ArkUri,
             ArkadeWalletUri: !string.IsNullOrEmpty(fileConfig?.ArkadeWalletUri) ? fileConfig.ArkadeWalletUri : preset.ArkadeWalletUri,
-            BoltzUri: !string.IsNullOrEmpty(fileConfig?.BoltzUri) ? fileConfig.BoltzUri : preset.BoltzUri
+            BoltzUri: !string.IsNullOrEmpty(fileConfig?.BoltzUri) ? fileConfig.BoltzUri : preset.BoltzUri,
+            ExplorerUri: !string.IsNullOrEmpty(fileConfig?.ExplorerUri) ? fileConfig.ExplorerUri : preset.ExplorerUri
         );
     }
 
@@ -256,7 +257,8 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
             return new ArkNetworkConfig(
                 ArkUri: "https://signet.arkade.sh",
                 ArkadeWalletUri: "https://signet.arkade.money",
-                BoltzUri: null);
+                BoltzUri: null,
+                ExplorerUri: "https://explorer.signet.arkade.sh");
 
         return null;
     }
