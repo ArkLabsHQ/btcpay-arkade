@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.1.11] - 2026-04-24
+
+### Bug Fixes
+- **VTXO subscription pipeline could silently die**, which matches the "stream isn't working" symptom. Three leaks plugged in `VtxoSynchronizationService`:
+  1. **Graceful stream end** — if arkd closed `GetSubscription` without throwing, the loop exited, `_streamTask` completed successfully and nothing restarted. Now detected and restarted via `UpdateScriptsView`.
+  2. **`StartQueryLogic` had no error handling** — a single transport/storage exception killed the task permanently, and every subsequent stream event piled up in the `_readyToPoll` channel with no reader. Now each poll iteration is try/caught and the loop survives.
+  3. **No observability on stream events** — the subscribe was logged at Debug and nothing else. Now each arkd push logs the scripts at Info, plus poll-result counts at Debug.
+
 ## [2.1.10] - 2026-04-24
 
 ### Observability
