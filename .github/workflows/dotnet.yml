@@ -21,6 +21,9 @@ jobs:
     - name: Restore dependencies
       run: dotnet restore
     - name: Build
-      run: dotnet build --no-restore
+      # -m:1 serializes the MSBuild graph to work around a known parallel-build
+      # race in multi-target projects (BTCPayServer.Client / BTCPayServer.Common)
+      # where the per-TFM GenerateDepsFile task can collide on the shared deps.json.
+      run: dotnet build --no-restore -m:1
     - name: Test
       run: dotnet test --no-build --verbosity normal
