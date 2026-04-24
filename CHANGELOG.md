@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.1.13] - 2026-04-24
+
+### Bug Fixes
+- **Invoice stays pending after customer pays — arkd's script-subscription sometimes doesn't push VTXO events.** Reproduced: paid VTXO was visible via arkd's REST indexer but the plugin never received a stream push for the invoice's Receive script. Two related fixes:
+  1. **Routine safety-net poll every 30s.** `VtxoSynchronizationService` now re-queries all active scripts with a 2-minute `after` window. Cheap (recent changes only, no historical re-fetch) and catches any event arkd silently drops from the subscription stream.
+  2. **750ms delay between stream push and follow-up poll.** arkd can emit the event before its indexer query path has committed the VTXO; immediate polls returned the stale prior state and the stream never fired again. The brief delay lets the indexer catch up.
+
+### Performance
+- **Stream pushes no longer re-fetch full VTXO history per touched script.** Previously every arkd push re-queried the whole script's VTXO history (observed: 2849 VTXOs fetched for 2 scripts in 5s on every push, mostly unchanged). Stream-triggered polls now use a 5-minute `after` window; `UpdateScriptsView` only full-fetches the *newly-added* scripts instead of the whole subscribed set.
+
 ## [2.1.12] - 2026-04-24
 
 ### Observability
