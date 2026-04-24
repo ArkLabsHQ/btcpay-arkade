@@ -88,9 +88,13 @@ public class ArkadeSpendingService(
                             Money.Coins(amount), address)],
                         cancellationToken);
 
-                    // Poll for VTXO updates on active contracts
+                    // Poll for VTXO updates on active contracts — constrain to the last few
+                    // minutes so wallets with large historical VTXO counts don't re-fetch everything.
                     var activeContracts = await contractStorage.GetContracts(walletIds: [config.WalletId], isActive: true, cancellationToken: cancellationToken);
-                    await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), cancellationToken);
+                    await vtxoSyncService.PollScriptsForVtxos(
+                        activeContracts.Select(c => c.Script).ToHashSet(),
+                        after: DateTimeOffset.UtcNow - TimeSpan.FromMinutes(5),
+                        cancellationToken);
 
                     return txId.ToString();
                 }

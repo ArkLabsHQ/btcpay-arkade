@@ -84,6 +84,12 @@ public class ArkController(
     BoardingUtxoSyncService boardingUtxoSyncService,
     ILogger<ArkController> logger) : Controller
 {
+    // Post-operation VTXO refresh only needs to catch updates since the operation
+    // started. A 5-minute buffer absorbs clock skew and batch-round latency while
+    // keeping the arkd indexer query bounded for wallets with lots of history.
+    private static readonly TimeSpan PostOpVtxoPollBuffer = TimeSpan.FromMinutes(5);
+    private static DateTimeOffset PostOpVtxoPollSince() => DateTimeOffset.UtcNow - PostOpVtxoPollBuffer;
+
     [HttpGet("stores/{storeId}/initial-setup")]
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public IActionResult InitialSetup(string storeId)
@@ -769,7 +775,7 @@ public class ArkController(
 
             // Poll for VTXO updates
             var activeContracts = await contractStorage.GetContracts(walletIds: [config.WalletId!], isActive: true, cancellationToken: token);
-            await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), token);
+            await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), PostOpVtxoPollSince(), token);
 
             TempData[WellKnownTempData.SuccessMessage] = $"Successfully joined batch. Your VTXOs will be updated in the next round. Transaction ID: {txId}";
 
@@ -1645,7 +1651,7 @@ public class ArkController(
 
                 // Poll for VTXO updates
                 var activeContracts = await contractStorage.GetContracts(walletIds: [config.WalletId!], isActive: true, cancellationToken: token);
-                await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), token);
+                await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), PostOpVtxoPollSince(), token);
 
                 return RedirectWithSuccess(nameof(StoreOverview), $"Coins consolidated successfully! TxId: {txId}", new { storeId });
             }
@@ -1837,7 +1843,7 @@ public class ArkController(
 
                 // Poll for VTXO updates
                 var activeContracts = await contractStorage.GetContracts(walletIds: [config.WalletId!], isActive: true, cancellationToken: token);
-                await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), token);
+                await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), PostOpVtxoPollSince(), token);
 
                 // Mark payouts as paid if any outputs fulfill payouts
                 foreach (var output in validOutputs.Where(o => !string.IsNullOrEmpty(o.PayoutId)))
@@ -3616,7 +3622,7 @@ public class ArkController(
 
                 // Poll for VTXO updates
                 var activeContracts = await contractStorage.GetContracts(walletIds: [config.WalletId!], isActive: true, cancellationToken: token);
-                await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), token);
+                await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), PostOpVtxoPollSince(), token);
 
                 // Mark payouts as paid if this was initiated from payout handler
                 foreach (var dest in newModel.Destinations.Where(d => !string.IsNullOrEmpty(d.PayoutId)))

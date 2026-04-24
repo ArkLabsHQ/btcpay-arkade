@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.1.5] - 2026-04-24
+
+### Bug Fixes / Performance
+- **Time-window post-op VTXO polling.** After a spend, the plugin was asking arkd's indexer for *all* VTXOs on every active contract script, which scales with a wallet's whole history. Post-spend and post-batch catch-up now passes a 5-minute `after` filter so arkd only returns recently-changed VTXOs. Explicit user actions ("Sync wallet", "Import contract", etc.) still do a full poll.
+
+### SDK (NNark)
+- `VtxoSynchronizationService.PollScriptsForVtxos(scripts, after, ...)` — new overload that forwards the `after` filter to the arkd indexer via `GetVtxoByScriptsAsSnapshot`.
+- `PostSpendVtxoPollingHandler` and `PostBatchVtxoPollingHandler` now pass a 5-minute `after` window to the indexer.
+
 ## [2.1.4] - 2026-04-24
 
 ### Bug Fixes
