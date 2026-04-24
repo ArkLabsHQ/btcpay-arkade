@@ -2689,14 +2689,16 @@ public class ArkController(
 
         if (wallet.StartsWith("nsec", StringComparison.InvariantCultureIgnoreCase))
         {
-            // Check all possible wallet ID formats: tr(compressed), raw compressed, raw xonly, tr(xonly)
+            // Check all possible wallet ID formats: tr(compressed), raw compressed, raw xonly, tr(xonly).
+            // If we find a match, the user is re-importing a wallet that already exists in storage —
+            // IsOwnedByStore is still true because they proved ownership by presenting the nsec.
             var candidateIds = new[] { WalletFactory.GetOutputDescriptorFromNsec(wallet) }
                 .Concat(WalletFactory.GetAlternateWalletIdsFromNsec(wallet));
             foreach (var candidateId in candidateIds)
             {
                 var existing = await walletStorage.GetWalletById(candidateId, HttpContext.RequestAborted);
                 if (existing is not null)
-                    return new TemporaryWalletSettings(null, candidateId, null, false, false);
+                    return new TemporaryWalletSettings(null, candidateId, null, true, false);
             }
             return new TemporaryWalletSettings(wallet, null, null, true, false);
         }

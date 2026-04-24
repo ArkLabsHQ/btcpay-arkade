@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.1.3] - 2026-04-24
+
+### Bug Fixes
+- **Imported nsec wallet shows empty VTXOs / Contracts / Intents / Swaps pages.** `GetFromInputWallet` was returning `IsOwnedByStore=false` when the imported nsec matched a wallet already present in storage (e.g., re-importing after a failed attempt or importing the same key on a second store). Presenting the raw nsec is itself proof of ownership, so `IsOwnedByStore=true` now applies in that case too. The home-screen balance was unaffected since it doesn't gate on `GeneratedByStore`; the management pages were, which is why they silently rendered empty.
+
+## [2.1.2] - 2026-04-24
+
+### SDK (NNark)
+- Disable one-by-one VTXO script polling workaround (reverted now that arkd's multi-script query is fixed)
+
 ## [2.1.1] - 2026-04-24
 
 ### Breaking Changes
