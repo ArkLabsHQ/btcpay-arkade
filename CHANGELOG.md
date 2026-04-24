@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.1.10] - 2026-04-24
+
+### Observability
+- **Verbose logging around swap state transitions.** After the recent detection fixes it was still hard to tell from the logs whether `OnVtxosChanged` had dispatched to a swap, whether `_scriptToSwapId` was populated on time, and what Boltz was actually reporting on each poll. Added info-level log lines for: VTXO-to-swap dispatch, script→swap map updates/evictions, every Boltz status probe, and how many VTXOs arkd returned during the per-swap contract-script refresh.
+
 ## [2.1.9] - 2026-04-24
 
 ### Bug Fixes
