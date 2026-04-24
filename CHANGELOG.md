@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.1.8] - 2026-04-24
+
+### Bug Fixes
+- **Invoice listener NRE on prompts with no details.** `ArkContractInvoiceListener.GetListenedArkadeInvoice` blindly passed `prompt.Details` through to `ArkadePaymentMethodHandler.ParsePaymentPromptDetails`, which `ToObject<>`s it and NREs when null. Now returns `null` if the prompt has no details.
+- **Swap stuck "pending" when VTXO arrived before first poll.** `SwapsManagementService._scriptToSwapId` was only populated inside `PollSwapState`, so VTXOs arriving on a swap contract before the first `RoutinePoll` (1-minute cadence) — or in the race window immediately after `InitiateReverseSwap` / `InitiateBtcToArkChainSwap` — fell through `OnVtxosChanged` and never triggered a swap-state refresh. Seeded at startup from storage and kept in sync with `SwapsChanged` synchronously.
+
+### SDK (NNark)
+- REST transport pagination off-by-one fix (mirrors the gRPC fix from v2.1.7).
+
 ## [2.1.7] - 2026-04-24
 
 ### Bug Fixes

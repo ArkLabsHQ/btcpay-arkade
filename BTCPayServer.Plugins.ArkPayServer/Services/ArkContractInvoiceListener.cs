@@ -248,13 +248,12 @@ public class ArkContractInvoiceListener(
     private ArkadeListenedContract? GetListenedArkadeInvoice(InvoiceEntity invoice)
     {
         var prompt = invoice.GetPaymentPrompt(ArkadePlugin.ArkadePaymentMethodId);
-        return prompt is null
-            ? null
-            : new ArkadeListenedContract(
+        if (prompt?.Details is null)
+            return null;
 
-                arkadePaymentMethodHandler.ParsePaymentPromptDetails(prompt.Details),
-                invoice.Id
-            );
+        return new ArkadeListenedContract(
+            arkadePaymentMethodHandler.ParsePaymentPromptDetails(prompt.Details),
+            invoice.Id);
     }
 
     private static DateTimeOffset GetExpiration(InvoiceEntity invoice)
