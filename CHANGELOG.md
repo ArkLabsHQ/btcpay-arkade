@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.1.4] - 2026-04-24
+
+### Bug Fixes
+- **Initial-setup timeout when importing an nsec with a long history.** The handler was synchronously polling arkd once per known contract during import; wallets with hundreds of prior contracts blew past the HTTP timeout. The VTXO and boarding-UTXO catchup now runs on a background task so the user is redirected immediately; funds appear as the sync completes.
+
 ## [2.1.3] - 2026-04-24
 
 ### Bug Fixes

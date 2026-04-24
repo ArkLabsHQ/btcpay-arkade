@@ -23,6 +23,7 @@ using BTCPayServer.Services.Stores;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using NArk.Abstractions;
 using NArk.Abstractions.Fees;
 using NArk.Abstractions.Intents;
@@ -80,7 +81,8 @@ public class ArkController(
     IWalletStorage walletStorage,
     IDbContextFactory<ArkPluginDbContext> dbContextFactory,
     IHttpClientFactory httpClientFactory,
-    BoardingUtxoSyncService boardingUtxoSyncService) : Controller
+    BoardingUtxoSyncService boardingUtxoSyncService,
+    ILogger<ArkController> logger) : Controller
 {
     [HttpGet("stores/{storeId}/initial-setup")]
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
@@ -145,7 +147,10 @@ public class ArkController(
                 }
             }
 
-            // Sync all known contracts for this wallet to pick up any existing VTXOs
+            // Sync all known contracts for this wallet to pick up any existing VTXOs.
+            // For wallets with a long history this can poll arkd once per contract (the
+            // indexer currently requires one-by-one script queries), so do it in the
+            // background instead of blocking the HTTP request and timing out.
             var contracts = await contractStorage.GetContracts(
                 walletIds: [walletSettings.WalletId!], cancellationToken: HttpContext.RequestAborted);
             if (contracts.Count > 0)
@@ -155,10 +160,21 @@ public class ArkController(
                 var initNonBoardingScripts = contracts
                     .Where(c => c.Type != ArkBoardingContract.ContractType)
                     .Select(c => c.Script).ToHashSet();
-                if (initNonBoardingScripts.Count > 0)
-                    await vtxoSyncService.PollScriptsForVtxos(initNonBoardingScripts, HttpContext.RequestAborted);
-                if (initBoardingContracts.Count > 0)
-                    await boardingUtxoSyncService.SyncAsync(initBoardingContracts, HttpContext.RequestAborted);
+                var importedWalletId = walletSettings.WalletId!;
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        if (initNonBoardingScripts.Count > 0)
+                            await vtxoSyncService.PollScriptsForVtxos(initNonBoardingScripts, CancellationToken.None);
+                        if (initBoardingContracts.Count > 0)
+                            await boardingUtxoSyncService.SyncAsync(initBoardingContracts, CancellationToken.None);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Background import sync failed for wallet {WalletId}", importedWalletId);
+                    }
+                });
             }
 
             var config = new ArkadePaymentMethodConfig(walletSettings.WalletId!, walletSettings.IsOwnedByStore);
