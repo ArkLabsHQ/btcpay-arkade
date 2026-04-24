@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.1.1] - 2026-04-24
+
+### Breaking Changes
+- **Minimum BTCPay Server version raised to 2.3.8** (up from 2.3.7)
+
+### Bug Fixes
+- **Plugin no longer crashes BTCPay when arkd is unreachable on startup.** `SwapsManagementService` now defers the arkd readiness check to a background retry loop instead of blocking `StartAsync`; the host comes up cleanly and swap operations queue until arkd is available.
+- **Quieter logs while arkd warms up.** gRPC `FailedPrecondition` ("wallet is locked or syncing") from the batch event stream now logs a single-line warning with the retry cadence instead of a full `Error` stack trace every 5 seconds.
+- **DI validation fix:** `DelegationService` no longer fails to construct when the plugin doesn't opt into delegation (it was requiring `IDelegatorProvider` that is only registered by `AddArkDelegation`).
+
+### SDK (NNark)
+- **Vendored `NBitcoin.Scripting.OutputDescriptor`** into `NArk.Abstractions/Scripting/` — NBitcoin 10 removed the classic descriptor subsystem in favor of BIP388 Wallet Policies. NArk continues to use `OutputDescriptor` so 33-byte compressed keys with correct parity flow through the whole stack (arkd → SignerKey → contracts → MuSig2).
+- **Opt-in payment tracking:** `AddArkPaymentTracking()` + `ConfigureArkPaymentEntities()`. Consumers that don't need payment-request tracking carry no extra schema or services.
+- **Opt-in delegation:** `DelegationService` / `IDelegationTransformer` moved from `AddArkCoreServices` into `AddArkDelegation` so plugins without a Fulmine delegator aren't forced to register unreachable services.
+- **Regtest tooling:** `clean-env.sh` now chowns nigiri volumes via a throwaway root container before `nigiri stop --delete`, eliminating the "openfdat ... permission denied" postgres warning during teardown.
+- **Docs refresh:** articles updated to match current APIs (real SwapsManagementService / IAssetManager / ConfigureArkEntities / regtest path).
+
 ## [2.1.0] - 2026-04-10
 
 ### Breaking Changes

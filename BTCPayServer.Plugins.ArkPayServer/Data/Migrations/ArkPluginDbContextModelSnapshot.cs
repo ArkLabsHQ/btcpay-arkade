@@ -18,7 +18,7 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
 #pragma warning disable 612, 618
             modelBuilder
                 .HasDefaultSchema("BTCPayServer.Plugins.Ark")
-                .HasAnnotation("ProductVersion", "8.0.16")
+                .HasAnnotation("ProductVersion", "10.0.6")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -140,13 +140,13 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<string>("MetadataJson")
-                        .HasColumnType("jsonb")
-                        .HasColumnName("Metadata");
-
                     b.Property<string>("Invoice")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<string>("MetadataJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("Metadata");
 
                     b.Property<int>("Status")
                         .HasColumnType("integer");
@@ -261,6 +261,10 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
                     b.Property<long?>("ExpiresAtHeight")
                         .HasColumnType("bigint");
 
+                    b.Property<string>("MetadataJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("Metadata");
+
                     b.Property<bool>("Preconfirmed")
                         .HasColumnType("boolean");
 
@@ -282,10 +286,6 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
 
                     b.Property<bool>("Unrolled")
                         .HasColumnType("boolean");
-
-                    b.Property<string>("MetadataJson")
-                        .HasColumnType("jsonb")
-                        .HasColumnName("Metadata");
 
                     b.HasKey("TransactionId", "TransactionOutputIndex");
 

@@ -3419,25 +3419,39 @@ public class ArkController(
         // Parse and add new destination
         if (!string.IsNullOrWhiteSpace(model.NewDestination))
         {
-            var serverInfo = await clientTransport.GetServerInfoAsync(token);
-            var parsed = ParseSend2Destination(model.NewDestination.Trim(), model.NewAmountBtc, serverInfo.Network);
-
-            if (!parsed.IsValid)
+            try
             {
-                newModel.Errors.Add(parsed.Error ?? "Invalid destination");
+                var serverInfo = await clientTransport.GetServerInfoAsync(token);
+                var parsed = await ParseSend2DestinationAsync(model.NewDestination.Trim(), model.NewAmountBtc, serverInfo.Network, token);
+
+                if (!parsed.IsValid)
+                {
+                    newModel.Errors.Add(parsed.Error ?? "Invalid destination");
+                }
+                else
+                {
+                    parsed.Index = newModel.Destinations.Count;
+                    newModel.Destinations.Add(parsed);
+
+                    // Estimate fees for all destinations
+                    await EstimateSend2Fees(newModel, config.WalletId!, token);
+                }
             }
-            else
+            catch (Exception ex)
             {
-                parsed.Index = newModel.Destinations.Count;
-                newModel.Destinations.Add(parsed);
-
-                // Estimate fees for all destinations
-                await EstimateSend2Fees(newModel, config.WalletId!, token);
+                newModel.Errors.Add($"Failed to parse destination: {ex.Message}");
             }
         }
         else
         {
             newModel.Errors.Add("Please enter a destination");
+        }
+
+        // Preserve user input on errors so the form re-renders with what they typed
+        if (newModel.Errors.Any())
+        {
+            newModel.NewDestination = model.NewDestination;
+            newModel.NewAmountBtc = model.NewAmountBtc;
         }
 
         // Serialize state for next round-trip

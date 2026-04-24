@@ -43,7 +43,7 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
     public override IBTCPayServerPlugin.PluginDependency[] Dependencies { get; } =
     [
-        new() { Identifier = nameof(BTCPayServer), Condition = ">=2.3.7" }
+        new() { Identifier = nameof(BTCPayServer), Condition = ">=2.3.8" }
     ];
 
     public override void Execute(IServiceCollection services)
@@ -99,19 +99,9 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
     private static void RegisterDatabase(IServiceCollection services)
     {
+        
         services.AddSingleton<ArkPluginDbContextFactory>();
-
-        services.AddDbContext<ArkPluginDbContext>((provider, o) =>
-        {
-            var factory = provider.GetRequiredService<ArkPluginDbContextFactory>();
-            factory.ConfigureBuilder(o);
-        });
-
-        services.AddDbContextFactory<ArkPluginDbContext>((provider, o) =>
-        {
-            var factory = provider.GetRequiredService<ArkPluginDbContextFactory>();
-            factory.ConfigureBuilder(o);
-        });
+        services.AddSingleton<IDbContextFactory<ArkPluginDbContext>>(sp => sp.GetRequiredService<ArkPluginDbContextFactory>());
 
         services.AddStartupTask<ArkPluginMigrationRunner>();
     }

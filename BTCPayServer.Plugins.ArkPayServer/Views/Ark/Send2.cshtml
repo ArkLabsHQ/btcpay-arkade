@@ -24,7 +24,8 @@
 
 @if (Model.Errors.Any())
 {
-    <div class="alert alert-danger">
+    <div class="alert alert-danger alert-dismissible" id="server-errors-alert">
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
         <ul class="mb-0">
             @foreach (var error in Model.Errors)
             {
@@ -129,6 +130,7 @@ else
                     <input type="text"
                            name="NewDestination"
                            class="form-control font-monospace"
+                           value="@Model.NewDestination"
                            placeholder="ark1... / lnbc... / bitcoin:...?ark=..."
                            autofocus />
                     <button type="button" class="btn btn-secondary px-3 only-for-js" data-bs-toggle="modal" data-bs-target="#scanModal" title="Scan QR code">
@@ -142,31 +144,39 @@ else
 
             <div class="form-group mb-3">
                 <label class="form-label">Amount (BTC)</label>
-                <input type="number"
-                       name="NewAmountBtc"
-                       id="NewAmountBtc"
-                       class="form-control"
-                       step="0.00000001"
-                       min="0"
-                       placeholder="Required for addresses, optional for invoices" />
+                <div class="input-group">
+                    <input type="number"
+                           name="NewAmountBtc"
+                           id="NewAmountBtc"
+                           class="form-control"
+                           step="0.00000001"
+                           min="0"
+                           value="@(Model.NewAmountBtc?.ToString("0.########", System.Globalization.CultureInfo.InvariantCulture))"
+                           placeholder="Required for addresses, optional for invoices" />
+                    @if (!Model.Destinations.Any())
+                    {
+                        <button type="button" class="btn btn-outline-secondary" onclick="document.getElementById('NewAmountBtc').value = '@Model.AvailableBalanceBtc.ToString("0.00000000", System.Globalization.CultureInfo.InvariantCulture)';">
+                            Max
+                        </button>
+                    }
+                    else if (Model.RemainingSats > 0)
+                    {
+                        <button type="button" class="btn btn-outline-secondary" onclick="document.getElementById('NewAmountBtc').value = '@Model.RemainingBtc.ToString("0.00000000", System.Globalization.CultureInfo.InvariantCulture)';">
+                            Max
+                        </button>
+                    }
+                </div>
                 @if (!Model.Destinations.Any())
                 {
                     <div class="form-text">
-                        <a href="#" id="sendAllLink" class="text-primary" onclick="document.getElementById('NewAmountBtc').value = '@Model.AvailableBalanceBtc.ToString("0.00000000", System.Globalization.CultureInfo.InvariantCulture)'; return false;">
-                            Send all (<span data-sensitive>@DisplayFormatter.Currency(Model.AvailableBalanceBtc, "BTC")</span>)
-                        </a>
+                        Available: <span data-sensitive>@DisplayFormatter.Currency(Model.AvailableBalanceBtc, "BTC")</span>
                     </div>
                 }
-                else
+                else if (Model.RemainingSats > 0)
                 {
-                    @if (Model.RemainingSats > 0)
-                    {
-                        <div class="form-text">
-                            <a href="#" id="sendRemainingLink" class="text-primary" onclick="document.getElementById('NewAmountBtc').value = '@Model.RemainingBtc.ToString("0.00000000", System.Globalization.CultureInfo.InvariantCulture)'; return false;">
-                                Send remaining (<span data-sensitive>@DisplayFormatter.Currency(Model.RemainingBtc, "BTC")</span>)
-                            </a>
-                        </div>
-                    }
+                    <div class="form-text">
+                        Remaining: <span data-sensitive>@DisplayFormatter.Currency(Model.RemainingBtc, "BTC")</span>
+                    </div>
                 }
             </div>
 

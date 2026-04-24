@@ -28,14 +28,14 @@ if (-not (Test-Path Env:CI)) {
 $appsettings = "submodules/btcpayserver/BTCPayServer/appsettings.dev.json"
 if (-not (Test-Path $appsettings -PathType Leaf)) {
     Write-Host "Creating $appsettings..."
-    $content = '{ "DEBUG_PLUGINS": "../../../BTCPayServer.Plugins.ArkPayServer/bin/Debug/net8.0/BTCPayServer.Plugins.ArkPayServer.dll" }'
+    $content = '{ "DEBUG_PLUGINS": "../../../BTCPayServer.Plugins.ArkPayServer/bin/Debug/net10.0/BTCPayServer.Plugins.ArkPayServer.dll" }'
     Set-Content -Path $appsettings -Value $content -Encoding UTF8
 }
 
 # Publish plugin (NNark dependencies are included via ProjectReferences)
 $root = Get-Location
 $pluginDir = "BTCPayServer.Plugins.ArkPayServer"
-$publishDir = Join-Path $root "$pluginDir/bin/Debug/net8.0"
+$publishDir = Join-Path $root "$pluginDir/bin/Debug/net10.0"
 
 # Remove old build artifacts
 if (Test-Path $publishDir) {

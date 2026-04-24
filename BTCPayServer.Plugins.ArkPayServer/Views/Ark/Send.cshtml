@@ -178,15 +178,18 @@ else
                                 </div>
                                 <div class="col-12 col-md-3">
                                     <label class="form-label" text-translate="true">Amount (BTC)</label>
-                                    <input type="number"
-                                           name="Outputs[@i].AmountBtc"
-                                           value="@output.AmountBtc"
-                                           class="form-control amount-input"
-                                           placeholder="Optional"
-                                           step="0.00000001"
-                                           min="0"
-                                           data-index="@i"
-                                           @(output.IsReadonly && output.AmountBtc.HasValue ? "readonly" : "") />
+                                    <div class="input-group">
+                                        <input type="number"
+                                               name="Outputs[@i].AmountBtc"
+                                               value="@output.AmountBtc"
+                                               class="form-control amount-input"
+                                               placeholder="Optional"
+                                               step="0.00000001"
+                                               min="0"
+                                               data-index="@i"
+                                               @(output.IsReadonly && output.AmountBtc.HasValue ? "readonly" : "") />
+                                        <button type="button" class="btn btn-outline-secondary max-amount-btn only-for-js" data-index="@i" title="Fill remaining balance">Max</button>
+                                    </div>
                                     <small class="remaining-balance-hint text-muted d-none mt-1"></small>
                                 </div>
                                 <div class="col-12 col-md-1 d-flex align-items-center" style="margin-top: 1.75rem;">
@@ -1003,13 +1006,16 @@ else
                         </div>
                         <div class="col-12 col-md-3">
                             <label class="form-label">Amount (BTC)</label>
-                            <input type="number"
-                                   name="Outputs[${index}].AmountBtc"
-                                   class="form-control amount-input"
-                                   placeholder="Optional"
-                                   step="0.00000001"
-                                   min="0"
-                                   data-index="${index}" />
+                            <div class="input-group">
+                                <input type="number"
+                                       name="Outputs[${index}].AmountBtc"
+                                       class="form-control amount-input"
+                                       placeholder="Optional"
+                                       step="0.00000001"
+                                       min="0"
+                                       data-index="${index}" />
+                                <button type="button" class="btn btn-outline-secondary max-amount-btn" data-index="${index}" title="Fill remaining balance">Max</button>
+                            </div>
                             <small class="remaining-balance-hint text-muted d-none mt-1"></small>
                         </div>
                         <div class="col-12 col-md-1 d-flex align-items-center" style="margin-top: 1.75rem;">
@@ -1299,6 +1305,34 @@ else
                 if (modalEl) {
                     var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
                     modal.show();
+                }
+                return;
+            }
+            const maxBtn = e.target.closest('.max-amount-btn');
+            if (maxBtn) {
+                const index = parseInt(maxBtn.dataset.index);
+                const row = outputsContainer.querySelector(`.output-row[data-index="${index}"]`);
+                const amountInput = row?.querySelector('.amount-input');
+                if (!amountInput || amountInput.readOnly) return;
+
+                let totalSelectedSats = 0;
+                coinsTable.querySelectorAll('.coin-checkbox:checked').forEach(cb => {
+                    const tr = cb.closest('tr');
+                    totalSelectedSats += Math.round(parseFloat(tr.cells[2].textContent) * 100000000);
+                });
+
+                let otherAllocated = 0;
+                outputsContainer.querySelectorAll('.output-row').forEach(r => {
+                    const ai = r.querySelector('.amount-input');
+                    if (ai && ai !== amountInput && ai.value) {
+                        otherAllocated += Math.round(parseFloat(ai.value) * 100000000);
+                    }
+                });
+
+                const remaining = totalSelectedSats - otherAllocated;
+                if (remaining > 0) {
+                    amountInput.value = (remaining / 100000000).toFixed(8);
+                    amountInput.dispatchEvent(new Event('input', { bubbles: true }));
                 }
             }
         });

@@ -7,7 +7,7 @@
 
         <Product>Arkade - Beta</Product>
         <Description>Programmable money for sovereign business. Easily accept payments through Arkade &amp; Lightning non-custodially without complexity.</Description>
-        <Version>2.1.0</Version>
+        <Version>2.1.1</Version>
         <EmbedUntrackedSources>true</EmbedUntrackedSources>
         <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
         <GenerateRuntimeConfigDevFile>true</GenerateRuntimeConfigDevFile>
@@ -48,26 +48,26 @@
             <Private>true</Private>
         </ProjectReference>
         <!-- NNark transitive dependencies (must be explicit for plugin publish) -->
-        <PackageReference Include="AsyncKeyedLock" Version="8.0.1" />
-        <PackageReference Include="BTCPayServer.Lightning.Common" Version="1.5.2" />
+        <PackageReference Include="AsyncKeyedLock" Version="8.0.2" />
+        <PackageReference Include="BTCPayServer.Lightning.Common" Version="1.5.3" />
         <PackageReference Include="Cel" Version="0.3.2" />
         <PackageReference Include="Google.Api.CommonProtos" Version="2.17.0" />
         <PackageReference Include="Grpc.Net.Client" Version="2.76.0" />
-        <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.4" />
-        <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.4" />
-        <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.4" />
-        <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.4" />
-        <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.4" />
-        <PackageReference Include="NBitcoin" Version="9.0.5" />
-        <PackageReference Include="NBitcoin.Secp256k1" Version="3.2.0" />
-        <PackageReference Include="NBXplorer.Client" Version="5.0.5" />
+        <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.6" />
+        <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.6" />
+        <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.6" />
+        <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.6" />
+        <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.6" />
+        <PackageReference Include="NBitcoin" Version="10.0.1" />
+        <PackageReference Include="NBitcoin.Secp256k1" Version="4.0.0" />
+        <PackageReference Include="NBXplorer.Client" Version="5.0.6" />
         <!-- Additional packages -->
         <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
         <PackageReference Include="Grpc.Net.ClientFactory" Version="2.76.0" />
         <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.3.0" />
-        <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.4"/>
-        <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.0" />
-        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.4" />
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.6"/>
+        <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.6" />
         <EmbeddedResource Include="Resources\**" />
         <EmbeddedResource Include="arkade.svg" />
     </ItemGroup>
