@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.1.7] - 2026-04-24
+
+### Bug Fixes
+- **Wallet import was actually silently capping at exactly 11 × 1000 = 11000 VTXOs, not 121M-row stalling.** arkd's paginator is 1-based and clamps the response's `next` to `total` on the final page; the client's loop condition `Next != Total` therefore exited one page early, dropping the last page entirely. Switched to `Current < Total`. The previous 2.1.6 `ActiveScriptsChanged` fix is still correct — it removed the quadratic event cascade — but was insufficient by itself because the underlying pagination was dropping pages.
+
 ## [2.1.6] - 2026-04-24
 
 ### Bug Fixes / Performance
