@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.1.12] - 2026-04-24
+
+### Observability
+- **Full stream→upsert chain now visible at Info level.** Previous logs showed "arkd pushed update" at Info but then went quiet until the swap detection path fired again. Promoted `StartQueryLogic` poll-entry and poll-result (with count and elapsed ms) to Info; `EfCoreVtxoStorage.UpsertVtxo` now logs inserted/updated at Info with outpoint, script, amount, and spent/settled flags. No-op writes stay at Debug. This is purely diagnostic — no behavioural changes.
+
 ## [2.1.11] - 2026-04-24
 
 ### Bug Fixes
