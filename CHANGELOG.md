@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.1.6] - 2026-04-24
+
+### Bug Fixes / Performance
+- **VTXO import on wallets with deep history stopped around ~11k entries.** `UpsertVtxo` was firing `ActiveScriptsChanged` on every row, which ran `VtxoSynchronizationService.UpdateScriptsView` → `IVtxoStorage.GetActiveScripts` (whose default implementation scans every unspent VTXO). 11k upserts × a full VTXO scan each is ~121M row reads — the sync appears to stall. Fixed by not firing the event from VTXO upserts (VTXOs only ever arrive on scripts we already know about, so a new VTXO cannot introduce a new script).
+
 ## [2.1.5] - 2026-04-24
 
 ### Bug Fixes / Performance
