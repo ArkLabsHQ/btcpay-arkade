@@ -17,6 +17,7 @@ using BTCPayServer.Plugins.ArkPayServer.Models.Api;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
 using BTCPayServer.Plugins.ArkPayServer.Services;
+using BTCPayServer.Plugins.ArkPayServer.Services.WalletLogger;
 using BTCPayServer.Security;
 using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Stores;
@@ -82,6 +83,7 @@ public class ArkController(
     IDbContextFactory<ArkPluginDbContext> dbContextFactory,
     IHttpClientFactory httpClientFactory,
     BoardingUtxoSyncService boardingUtxoSyncService,
+    IWalletLogStore walletLogStore,
     ILogger<ArkController> logger) : Controller
 {
     // Post-operation VTXO refresh only needs to catch updates since the operation
@@ -384,6 +386,27 @@ public class ArkController(
             RecentIntents = recentIntents,
             RecentSwaps = recentSwaps
         });
+    }
+
+    [HttpGet("stores/{storeId}/wallet-log")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> DownloadWalletLog(string storeId)
+    {
+        var (_, config, errorResult) = await ValidateStoreAndConfig();
+        if (errorResult != null) return errorResult;
+
+        var walletId = config!.WalletId!;
+        var stream = walletLogStore.OpenForRead(walletId);
+        if (stream is null)
+        {
+            TempData[WellKnownTempData.SuccessMessage] =
+                "No diagnostic log entries have been recorded for this wallet yet. " +
+                "Use the wallet (send / receive / sync) and try again.";
+            return RedirectToAction(nameof(StoreOverview), new { storeId });
+        }
+
+        var filename = $"arkade-wallet-{walletId}-{DateTime.UtcNow:yyyyMMddTHHmmssZ}.log";
+        return File(stream, "text/plain; charset=utf-8", filename);
     }
 
     [HttpPost("stores/{storeId}/show-private-key")]
