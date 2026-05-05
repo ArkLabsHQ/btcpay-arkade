@@ -387,7 +387,12 @@ else
             estimatedFee: null,
             isLightning: false,
             hasBitcoinAddress: false,
-            userSpendType: 'Arkade' // User's choice - influences auto coin selection
+            userSpendType: 'Arkade', // User's choice - influences auto coin selection
+            // Set when the user clicks "Max" so that the next estimate-fees
+            // response can revise the amount to (gross - fee). Without this,
+            // batch / collab-exit sends were filled to the full balance and
+            // the user had to subtract the fee by hand to submit.
+            pendingMaxAdjustment: null
         };
 
         // DOM elements
@@ -696,11 +701,31 @@ else
                 const data = await response.json();
 
                 if (data.error) {
+                    state.pendingMaxAdjustment = null;
                     sendBtn.disabled = true;
                     updateReviewContent(data.error);
                 } else {
                     state.estimatedFee = data.estimatedFeeSats;
                     sendBtn.disabled = false;
+
+                    // Apply pending "Max" adjustment: when the user clicked
+                    // Max we filled the gross balance so the fee estimator
+                    // had a real output to price; now we know the fee, so
+                    // revise the amount down to (gross − fee). For Arkade
+                    // (offchain) sends the fee is 0 — nothing to subtract.
+                    if (state.pendingMaxAdjustment !== null) {
+                        const adj = state.pendingMaxAdjustment;
+                        state.pendingMaxAdjustment = null;
+                        if (data.estimatedFeeSats && data.estimatedFeeSats > 0) {
+                            const adjRow = outputsContainer.querySelector(`.output-row[data-index="${adj.index}"]`);
+                            const adjInput = adjRow?.querySelector('.amount-input');
+                            if (adjInput && !adjInput.readOnly) {
+                                const netSats = Math.max(0, adj.grossSats - data.estimatedFeeSats);
+                                adjInput.value = (netSats / 100000000).toFixed(8);
+                                updateRemainingBalance();
+                            }
+                        }
+                    }
 
                     // In auto mode, sync coin checkboxes from server selection
                     if (isAuto && data.selectedOutpoints?.length) {
@@ -723,6 +748,7 @@ else
                     updateReviewSection(reviewCoins, outputs, data);
                 }
             } catch (err) {
+                state.pendingMaxAdjustment = null;
                 console.error('Fee estimation failed:', err);
                 sendBtn.disabled = true;
                 updateReviewContent('Error estimating fee');
@@ -1331,6 +1357,11 @@ else
 
                 const remaining = totalSelectedSats - otherAllocated;
                 if (remaining > 0) {
+                    // Mark this output for fee-aware Max adjustment. The fee
+                    // estimator runs on the dispatched 'input' event below;
+                    // when it returns, the response handler reads this flag
+                    // and revises the value to (gross − estimated fee).
+                    state.pendingMaxAdjustment = { index, grossSats: remaining };
                     amountInput.value = (remaining / 100000000).toFixed(8);
                     amountInput.dispatchEvent(new Event('input', { bubbles: true }));
                 }
