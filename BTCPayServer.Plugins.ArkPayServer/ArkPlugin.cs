@@ -198,6 +198,11 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
             services.AddHttpClient<CachedBoltzClient>();
             services.AddArkSwapServices();
 
+            // Tag every Boltz swap-creation request with the BTCPay-Arkade
+            // referral so Boltz can credit the integration. Mirrors the
+            // wallet-side `arkade-money` referral added in arkade-os/wallet#606.
+            services.Configure<NArk.Swaps.Boltz.Models.BoltzClientOptions>(o => o.ReferralId = "btcpay-arkade");
+
             services.AddUIExtension("ln-payment-method-setup-tabhead", "/Views/Ark/ArkLNSetupTabhead.cshtml");
 
             services.AddSingleton<ArkadeLNURLPayRequestFilter>();
