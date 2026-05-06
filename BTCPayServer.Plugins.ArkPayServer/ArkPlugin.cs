@@ -131,7 +131,11 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         services.AddSingleton<ChainTimeProvider>(provider =>
         {
             var explorerClientProvider = provider.GetRequiredService<ExplorerClientProvider>();
-            return new ChainTimeProvider(explorerClientProvider.GetExplorerClient("BTC"));
+            // Pass the inner provider's logger so the cache-fallback warning
+            // (emitted when Bitcoin Core RPC blips and we serve a stale
+            // chain time) is visible in plugin logs rather than swallowed.
+            var logger = provider.GetService<Microsoft.Extensions.Logging.ILogger<NArk.Blockchain.NBXplorer.RPCChainTimeProvider>>();
+            return new ChainTimeProvider(explorerClientProvider.GetExplorerClient("BTC"), logger);
         });
         services.AddSingleton<IChainTimeProvider>(sp => sp.GetRequiredService<ChainTimeProvider>());
 
