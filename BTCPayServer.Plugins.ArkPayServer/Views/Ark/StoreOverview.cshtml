@@ -146,6 +146,16 @@
                             </button>
                         </div>
                     }
+
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span class="text-muted">Diagnostic Log</span>
+                        <a asp-action="DownloadWalletLog" asp-route-storeId="@storeId"
+                           class="btn btn-sm badge btn-outline-secondary text-primary"
+                           title="Download this wallet's diagnostic log to share with support"
+                           data-testid="download-wallet-log-btn">
+                            Download
+                        </a>
+                    </div>
                 </div>
             </div>
         </div>

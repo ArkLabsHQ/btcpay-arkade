@@ -11,8 +11,10 @@ using BTCPayServer.Plugins.ArkPayServer.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
 using BTCPayServer.Plugins.ArkPayServer.Services;
+using BTCPayServer.Plugins.ArkPayServer.Services.WalletLogger;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using NArk.Abstractions.Blockchain;
 using NArk.Abstractions.Intents;
 using NArk.Abstractions.Safety;
@@ -158,6 +160,21 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
     private static void RegisterPluginServices(IServiceCollection services)
     {
+        // Per-wallet diagnostic log store. Captures NArk + plugin log
+        // entries that carry a `WalletId` (either via BeginScope or the
+        // structured-log args) into a rolling file per wallet so the
+        // merchant can download a wallet-scoped log when asking for
+        // support. See Services/WalletLogger/.
+        services.AddSingleton<IWalletLogStore>(sp =>
+        {
+            var configuration = sp.GetRequiredService<IConfiguration>();
+            var dataDir = new DataDirectories().Configure(configuration).DataDir;
+            var logDir = Path.Combine(dataDir, "Plugins", "ArkPayServer", "wallet-logs");
+            return new RollingFileWalletLogStore(logDir, sp.GetService<ILogger<RollingFileWalletLogStore>>());
+        });
+        services.AddSingleton<ILoggerProvider>(sp =>
+            new WalletScopedLoggerProvider(sp.GetRequiredService<IWalletLogStore>()));
+
         services.AddSingleton<ArkadeSpendingService>();
 
         services.AddSingleton<ISweepPolicy, DestinationSweepPolicy>();
