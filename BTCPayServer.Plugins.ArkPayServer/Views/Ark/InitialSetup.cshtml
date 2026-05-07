@@ -4,7 +4,10 @@
 @inject IScopeProvider ScopeProvider
 
 @{
-    Layout = "_LayoutWizard";
+    // _LayoutWalletSetup wraps _LayoutWizard and adds the close X linking
+    // to the BTCPay store dashboard — same chrome BTCPay's own wallet
+    // setup wizard uses, which is what this page is modelled after.
+    Layout = "_LayoutWalletSetup.cshtml";
     ViewData.SetActivePage(category: "Ark", activePage: "initialSetup", title: "Ark - Getting Started");
     var storeId = ScopeProvider.GetCurrentStoreId();
     var hasValidationError = !ViewData.ModelState.IsValid;
