@@ -29,16 +29,31 @@ public class ArkadePaymentLinkExtension : IPaymentLinkExtension
         var lnurl = prompt.ParentEntity.GetPaymentPrompt(PaymentTypes.LNURL.GetPaymentMethodId("BTC"));
 
         var amount = prompt.Calculate().Due;
-        
+
         // Build BIP21 URI using the helper
         var builder = ArkadeBip21Builder.Create()
             .WithArkAddress(prompt.Destination)
             .WithAmount(amount);
-        
-        // Add onchain address if available, otherwise use boarding address
+
+        // Add onchain address if available, otherwise use boarding address.
+        // When an onchain payment method is present, also delegate to its own
+        // IPaymentLinkExtension so any params other plugins attached to the
+        // upstream BIP21 (PayJoin's `pj=`, Branta's `branta_*`, etc.) carry
+        // through to the unified Arkade QR. Without this the Arkade tab
+        // clobbers those params (issue: Branta + PayJoin lose their hooks).
         if (!string.IsNullOrEmpty(onchain?.Destination))
         {
             builder.WithOnchainAddress(onchain.Destination);
+
+            var onchainLink = _serviceProvider.GetServices<IPaymentLinkExtension>()
+                .FirstOrDefault(p => p.PaymentMethodId == onchain.PaymentMethodId);
+            if (onchainLink is not null)
+            {
+                var upstream = onchainLink.GetPaymentLink(onchain, urlHelper);
+                var qIdx = upstream?.IndexOf('?') ?? -1;
+                if (qIdx >= 0)
+                    builder.WithExtraQuery(upstream![(qIdx + 1)..]);
+            }
         }
         else if (prompt.Details is not null)
         {
