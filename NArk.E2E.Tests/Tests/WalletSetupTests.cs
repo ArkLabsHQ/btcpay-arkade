@@ -29,11 +29,19 @@ public class WalletSetupTests : TestBase
         var isSetup = await arkWallet.IsWalletSetupAsync();
         Assert.That(isSetup, Is.False, "Wallet should not be set up initially");
 
-        // Should see the wallet setup options
+        // Should see the wallet setup options. Capture URL + body snippet
+        // in the failure message so CI logs reveal what page actually
+        // rendered (overview should redirect to initial-setup when no
+        // wallet is configured).
         var hdOption = await Page.QuerySelectorAsync("[data-testid='hd-wallet-option']");
         var legacyOption = await Page.QuerySelectorAsync("[data-testid='legacy-wallet-option']");
-        Assert.That(hdOption, Is.Not.Null, "Should see HD wallet creation option");
-        Assert.That(legacyOption, Is.Not.Null, "Should see legacy wallet import option");
+        if (hdOption is null || legacyOption is null)
+        {
+            var bodyText = await Page.InnerTextAsync("body");
+            var snippet = bodyText.Length > 500 ? bodyText[..500] : bodyText;
+            Assert.Fail(
+                $"Setup options missing. URL={Page.Url}, hdOption={hdOption is not null}, legacyOption={legacyOption is not null}. Body snippet:\n{snippet}");
+        }
     }
 
     [Test]
