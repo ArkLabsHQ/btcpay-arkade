@@ -122,25 +122,34 @@ jobs:
           # to true on first admin, which breaks subsequent test users.
           nohup dotnet run --no-build --no-launch-profile -- \
             --disable-registration=false \
-            --verbose \
             > ${{ github.workspace }}/btcpay-stdout.log 2>&1 &
-          echo $! > ${{ github.workspace }}/btcpay.pid
+          BTCPAY_PID=$!
+          echo $BTCPAY_PID > ${{ github.workspace }}/btcpay.pid
 
-          # Wait up to 3 min for BTCPay to respond.
-          for i in {1..90}; do
+          # Wait up to 6 min for BTCPay to respond. With the Arkade plugin
+          # loaded, BTCPay runs both its own EF Core migrations and the
+          # plugin's, which can extend cold-start substantially on a fresh
+          # Postgres instance.
+          for i in {1..180}; do
+            # Bail early if BTCPay crashed — no point waiting the full 6min.
+            if ! kill -0 "$BTCPAY_PID" 2>/dev/null; then
+              echo "❌ BTCPay process exited"
+              tail -200 ${{ github.workspace }}/btcpay-stdout.log
+              exit 1
+            fi
             STATUS=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:14142/ || echo "000")
             case "$STATUS" in
               200|302)
-                echo "✅ BTCPay ready (HTTP $STATUS)"
+                echo "✅ BTCPay ready (HTTP $STATUS) after ${i}x2s"
                 exit 0
                 ;;
             esac
             sleep 2
           done
-          echo "❌ BTCPay didn't come up in 3 min"
+          echo "❌ BTCPay didn't come up in 6 min"
           tail -200 ${{ github.workspace }}/btcpay-stdout.log
           exit 1
-        timeout-minutes: 5
+        timeout-minutes: 8
 
       - name: Run E2E tests
         run: dotnet test NArk.E2E.Tests/NArk.E2E.Tests.csproj --no-build --verbosity normal --logger "console;verbosity=detailed"
