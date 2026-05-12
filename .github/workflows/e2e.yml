@@ -95,13 +95,27 @@ jobs:
           BTCPAY_POSTGRES: "Host=localhost;Port=5432;Database=btcpay_e2e_test;Username=postgres;Password=postgres"
           BTCPAY_BTCEXPLORERURL: "http://localhost:32838/"
         run: |
+          # Absolute path to the plugin DLL — passed as DEBUG_PLUGINS so
+          # BTCPay's #if DEBUG plugin-preload branch loads it. The
+          # appsettings.dev.json file in the submodule references the
+          # same DLL via a relative path, but command-line args are
+          # unambiguous about working directory.
+          PLUGIN_DLL="${{ github.workspace }}/BTCPayServer.Plugins.ArkPayServer/bin/Debug/net10.0/BTCPayServer.Plugins.ArkPayServer.dll"
+          if [ ! -f "$PLUGIN_DLL" ]; then
+            echo "❌ Plugin DLL not found at $PLUGIN_DLL"
+            ls -1 ${{ github.workspace }}/BTCPayServer.Plugins.ArkPayServer/bin/Debug/ 2>/dev/null || echo "(bin/Debug missing)"
+            exit 1
+          fi
           cd submodules/btcpayserver/BTCPayServer
           # `--disable-registration=false` keeps /register open after the
           # first admin is created. BTCPay's default flips LockSubscription
           # to true on first admin, which breaks subsequent test users.
-          # The flag maps directly to the `disable-registration` config
-          # key consumed in BTCPayServerOptions.LoadArgs.
-          nohup dotnet run --no-build --no-launch-profile -- --disable-registration=false > ${{ github.workspace }}/btcpay-stdout.log 2>&1 &
+          # `--DEBUG_PLUGINS=...` pre-loads the Arkade plugin DLL — see
+          # BTCPay's PluginManager.AddPlugins #if DEBUG block.
+          nohup dotnet run --no-build --no-launch-profile -- \
+            --disable-registration=false \
+            --DEBUG_PLUGINS="$PLUGIN_DLL" \
+            > ${{ github.workspace }}/btcpay-stdout.log 2>&1 &
           echo $! > ${{ github.workspace }}/btcpay.pid
 
           # Wait up to 3 min for BTCPay to respond.
