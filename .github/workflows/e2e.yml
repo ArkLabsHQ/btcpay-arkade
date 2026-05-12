@@ -55,11 +55,16 @@ jobs:
           ./submodules/NNark/regtest/start-env.sh
         timeout-minutes: 12
 
-      - name: Restore + Build solution
+      - name: Restore + Build solution and E2E test project
+        # NArk.E2E.Tests is NOT in NArk.sln — it sits at the repo root as a
+        # standalone csproj that references the NNark submodule via
+        # ProjectReference. Build both explicitly.
         run: |
           dotnet restore NArk.sln
           dotnet build NArk.sln --no-restore -m:1
-        timeout-minutes: 10
+          dotnet restore NArk.E2E.Tests/NArk.E2E.Tests.csproj
+          dotnet build NArk.E2E.Tests/NArk.E2E.Tests.csproj --no-restore
+        timeout-minutes: 12
 
       - name: Install Playwright browsers
         # Microsoft.Playwright's targets file copies playwright.ps1 to the
