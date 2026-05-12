@@ -62,8 +62,14 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Playwright browsers
+        # Use the Microsoft.Playwright.CLI global tool — survives whether
+        # or not the test project's build emits playwright.ps1 (the
+        # behaviour of the auto-generated script depends on the Playwright
+        # package's targets matching the SDK/TFM, which has been
+        # inconsistent on net10.0 SDKs).
         run: |
-          pwsh NArk.E2E.Tests/bin/Debug/net10.0/playwright.ps1 install --with-deps chromium
+          dotnet tool install --global Microsoft.Playwright.CLI
+          $HOME/.dotnet/tools/playwright install --with-deps chromium
         timeout-minutes: 5
 
       - name: Start BTCPayServer
