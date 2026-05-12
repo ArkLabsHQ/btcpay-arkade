@@ -16,9 +16,6 @@ public class BoltzSwapTests : TestBase
     [Description("Tests receiving Lightning payment via Boltz reverse swap")]
     public async Task ReverseSwap_PayLightningInvoice_ArkWalletReceivesFunds()
     {
-        // Skip if services not available
-        await SkipIfArkUnavailableAsync();
-        await SkipIfBoltzUnavailableAsync();
         await SkipIfNoLightningChannelAsync();
 
         // Arrange - Create store with Ark wallet configured as Lightning backend
@@ -76,9 +73,6 @@ public class BoltzSwapTests : TestBase
     [Description("Tests sending from Ark to pay a Lightning invoice via Boltz submarine swap")]
     public async Task SubmarineSwap_SpendArkToPayLightning_PaymentSucceeds()
     {
-        // Skip if services not available
-        await SkipIfArkUnavailableAsync();
-        await SkipIfBoltzUnavailableAsync();
         await SkipIfNoLightningChannelAsync();
 
         // Arrange - Create store with funded Ark wallet
@@ -127,9 +121,6 @@ public class BoltzSwapTests : TestBase
     [Description("Tests that Boltz swap status is tracked correctly")]
     public async Task BoltzSwap_StatusTracking_ShowsCorrectStatus()
     {
-        // Skip if services not available
-        await SkipIfArkUnavailableAsync();
-        await SkipIfBoltzUnavailableAsync();
 
         // Arrange
         await RegisterNewUserAsync(isAdmin: true);
@@ -161,9 +152,6 @@ public class BoltzSwapTests : TestBase
     [Description("Tests small Lightning payment via Boltz")]
     public async Task SmallPayment_BoltzHandlesMinimumAmount()
     {
-        // Skip if services not available
-        await SkipIfArkUnavailableAsync();
-        await SkipIfBoltzUnavailableAsync();
         await SkipIfNoLightningChannelAsync();
 
         // Arrange

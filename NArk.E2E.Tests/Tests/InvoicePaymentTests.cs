@@ -15,9 +15,6 @@ public class InvoicePaymentTests : TestBase
     [Description("Tests creating an invoice and paying it with Ark")]
     public async Task CreateInvoice_PayWithArk_InvoiceSettles()
     {
-        // Skip if Ark daemon not available
-        await SkipIfArkUnavailableAsync();
-
         // Arrange - Register user and create store with wallet
         await RegisterNewUserAsync(isAdmin: true);
         var storeId = await CreateStoreAsync("Invoice Payment Test Store");
@@ -68,9 +65,6 @@ public class InvoicePaymentTests : TestBase
     [Description("Tests partial payment of an invoice")]
     public async Task CreateInvoice_PartialPayment_ShowsPartialStatus()
     {
-        // Skip if Ark daemon not available
-        await SkipIfArkUnavailableAsync();
-
         // Arrange
         await RegisterNewUserAsync(isAdmin: true);
         var storeId = await CreateStoreAsync("Partial Payment Test");
@@ -112,9 +106,6 @@ public class InvoicePaymentTests : TestBase
     [Description("Tests that wallet balance increases after receiving payment")]
     public async Task ReceivePayment_WalletBalanceUpdates()
     {
-        // Skip if Ark daemon not available
-        await SkipIfArkUnavailableAsync();
-
         // Arrange
         await RegisterNewUserAsync(isAdmin: true);
         var storeId = await CreateStoreAsync("Balance Update Test");
@@ -145,9 +136,6 @@ public class InvoicePaymentTests : TestBase
     [Description("Tests multiple payments to the same invoice")]
     public async Task CreateInvoice_MultiplePayments_AccumulatesCorrectly()
     {
-        // Skip if Ark daemon not available
-        await SkipIfArkUnavailableAsync();
-
         // Arrange
         await RegisterNewUserAsync(isAdmin: true);
         var storeId = await CreateStoreAsync("Multiple Payments Test");

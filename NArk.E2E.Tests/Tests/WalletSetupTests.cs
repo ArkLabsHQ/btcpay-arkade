@@ -99,15 +99,9 @@ public class WalletSetupTests : TestBase
 
     [Test]
     [Category("Integration")]
-    [Description("Requires running Ark daemon - skipped in CI without full environment")]
+    [Description("Requires running Ark daemon")]
     public async Task FundWallet_BalanceUpdates()
     {
-        // Skip if Ark daemon not available
-        if (!await IsArkDaemonAvailableAsync())
-        {
-            Assert.Ignore("Ark daemon not available - skipping integration test");
-        }
-
         // Arrange
         await RegisterNewUserAsync(isAdmin: true);
         var storeId = await CreateStoreAsync("Fund Test Store");

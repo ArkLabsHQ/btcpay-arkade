@@ -15,9 +15,6 @@ public class SpendingTests : TestBase
     [Description("Tests sending Ark to another Ark address")]
     public async Task SendToArkAddress_TransactionCreated_BalanceDecreases()
     {
-        // Skip if Ark daemon not available
-        await SkipIfArkUnavailableAsync();
-
         // Arrange - Create store with funded wallet
         await RegisterNewUserAsync(isAdmin: true);
         var storeId = await CreateStoreAsync("Ark Send Test");
@@ -61,9 +58,6 @@ public class SpendingTests : TestBase
     [Description("Tests the transfer modal UI flow")]
     public async Task OpenTransferModal_FillDetails_ModalBehavesCorrectly()
     {
-        // Skip if Ark daemon not available
-        await SkipIfArkUnavailableAsync();
-
         // Arrange
         await RegisterNewUserAsync(isAdmin: true);
         var storeId = await CreateStoreAsync("Transfer Modal Test");
@@ -111,9 +105,6 @@ public class SpendingTests : TestBase
     [Description("Tests spending with insufficient balance")]
     public async Task SendMoreThanBalance_ShowsError()
     {
-        // Skip if Ark daemon not available
-        await SkipIfArkUnavailableAsync();
-
         // Arrange
         await RegisterNewUserAsync(isAdmin: true);
         var storeId = await CreateStoreAsync("Insufficient Balance Test");
@@ -155,9 +146,6 @@ public class SpendingTests : TestBase
     [Description("Tests that sending to invalid address shows error")]
     public async Task SendToInvalidAddress_ShowsValidationError()
     {
-        // Skip if Ark daemon not available
-        await SkipIfArkUnavailableAsync();
-
         // Arrange
         await RegisterNewUserAsync(isAdmin: true);
         var storeId = await CreateStoreAsync("Invalid Address Test");
@@ -191,9 +179,6 @@ public class SpendingTests : TestBase
     [Description("Tests the SpendOverview page flow")]
     public async Task SpendOverview_ShowsCorrectBalanceAndOptions()
     {
-        // Skip if Ark daemon not available
-        await SkipIfArkUnavailableAsync();
-
         // Arrange
         await RegisterNewUserAsync(isAdmin: true);
         var storeId = await CreateStoreAsync("Spend Overview Test");
@@ -226,9 +211,6 @@ public class SpendingTests : TestBase
     [Description("Tests sending multiple small transactions")]
     public async Task SendMultipleTransactions_AllSucceed_BalanceTrackedCorrectly()
     {
-        // Skip if Ark daemon not available
-        await SkipIfArkUnavailableAsync();
-
         // Arrange
         await RegisterNewUserAsync(isAdmin: true);
         var storeId = await CreateStoreAsync("Multiple Sends Test");

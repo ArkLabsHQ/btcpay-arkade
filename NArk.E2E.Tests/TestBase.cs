@@ -210,63 +210,12 @@ public abstract class TestBase : PlaywrightFixture
     }
 
     /// <summary>
-    /// Check if the Ark daemon is available.
-    /// </summary>
-    protected async Task<bool> IsArkDaemonAvailableAsync()
-    {
-        try
-        {
-            using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-            var response = await httpClient.GetAsync("http://localhost:7070/health");
-            return response.IsSuccessStatusCode;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Check if the Boltz service is available.
-    /// </summary>
-    protected async Task<bool> IsBoltzAvailableAsync()
-    {
-        try
-        {
-            using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-            var response = await httpClient.GetAsync("http://localhost:9001/version");
-            return response.IsSuccessStatusCode;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Skip test if Ark daemon is not available.
-    /// </summary>
-    protected async Task SkipIfArkUnavailableAsync()
-    {
-        if (!await IsArkDaemonAvailableAsync())
-        {
-            Assert.Ignore("Ark daemon not available - skipping test");
-        }
-    }
-
-    /// <summary>
-    /// Skip test if Boltz service is not available.
-    /// </summary>
-    protected async Task SkipIfBoltzUnavailableAsync()
-    {
-        if (!await IsBoltzAvailableAsync())
-        {
-            Assert.Ignore("Boltz service not available - skipping test");
-        }
-    }
-
-    /// <summary>
-    /// Skip test if Lightning channels are not available.
+    /// Skip the current test if Lightning channels are not available. This
+    /// is a genuine runtime check: channels need funding/opening, which
+    /// happens during nigiri setup but is sensitive to timing. The Ark and
+    /// Boltz reachability checks that used to live here were removed —
+    /// <see cref="TestServerFixture"/> validates those once at suite
+    /// start, and silently skipping mid-suite hides real failures.
     /// </summary>
     protected async Task SkipIfNoLightningChannelAsync()
     {
