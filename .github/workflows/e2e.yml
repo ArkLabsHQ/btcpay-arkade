@@ -95,26 +95,33 @@ jobs:
           BTCPAY_POSTGRES: "Host=localhost;Port=5432;Database=btcpay_e2e_test;Username=postgres;Password=postgres"
           BTCPAY_BTCEXPLORERURL: "http://localhost:32838/"
         run: |
-          # Absolute path to the plugin DLL — passed as DEBUG_PLUGINS so
-          # BTCPay's #if DEBUG plugin-preload branch loads it. The
-          # appsettings.dev.json file in the submodule references the
-          # same DLL via a relative path, but command-line args are
-          # unambiguous about working directory.
-          PLUGIN_DLL="${{ github.workspace }}/BTCPayServer.Plugins.ArkPayServer/bin/Debug/net10.0/BTCPayServer.Plugins.ArkPayServer.dll"
-          if [ ! -f "$PLUGIN_DLL" ]; then
-            echo "❌ Plugin DLL not found at $PLUGIN_DLL"
+          # Copy the plugin's build output into BTCPay's default plugins
+          # directory so `PluginManager.AddPlugins` discovers it on
+          # startup. BTCPay expects: <PluginsDir>/<Identifier>/<Identifier>.dll
+          # alongside its referenced DLLs. The bin output already contains
+          # the plugin DLL plus its dependencies (NArk.*.dll, etc.), so
+          # we just mirror that directory.
+          #
+          # This path (`~/.btcpayserver/Plugins`) is BTCPay's default for
+          # Linux + regtest, which matches what the BTCPay startup log
+          # reports: "Loading plugins from /home/runner/.btcpayserver/Plugins".
+          PLUGIN_SRC="${{ github.workspace }}/BTCPayServer.Plugins.ArkPayServer/bin/Debug/net10.0"
+          if [ ! -f "$PLUGIN_SRC/BTCPayServer.Plugins.ArkPayServer.dll" ]; then
+            echo "❌ Plugin DLL not found at $PLUGIN_SRC/BTCPayServer.Plugins.ArkPayServer.dll"
             ls -1 ${{ github.workspace }}/BTCPayServer.Plugins.ArkPayServer/bin/Debug/ 2>/dev/null || echo "(bin/Debug missing)"
             exit 1
           fi
+          PLUGIN_DEST="$HOME/.btcpayserver/Plugins/BTCPayServer.Plugins.ArkPayServer"
+          mkdir -p "$PLUGIN_DEST"
+          cp -r "$PLUGIN_SRC"/. "$PLUGIN_DEST/"
+          echo "Plugin installed → $PLUGIN_DEST ($(ls "$PLUGIN_DEST" | wc -l) files)"
+
           cd submodules/btcpayserver/BTCPayServer
           # `--disable-registration=false` keeps /register open after the
           # first admin is created. BTCPay's default flips LockSubscription
           # to true on first admin, which breaks subsequent test users.
-          # `--DEBUG_PLUGINS=...` pre-loads the Arkade plugin DLL — see
-          # BTCPay's PluginManager.AddPlugins #if DEBUG block.
           nohup dotnet run --no-build --no-launch-profile -- \
             --disable-registration=false \
-            --DEBUG_PLUGINS="$PLUGIN_DLL" \
             > ${{ github.workspace }}/btcpay-stdout.log 2>&1 &
           echo $! > ${{ github.workspace }}/btcpay.pid
 
