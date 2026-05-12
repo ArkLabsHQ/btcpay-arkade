@@ -4,164 +4,57 @@ using System.Net.Http;
 namespace NArk.E2E.Tests;
 
 /// <summary>
-/// Fixture that manages the test environment:
-/// - Ensures Ark stack is running (docker-compose.ark.yml)
-/// - Starts BTCPayServer with the Arkade plugin loaded
-/// - Provides URLs for tests to connect to
+/// Fixture that waits for the test environment to be reachable. The
+/// environment itself is provisioned outside the test runner:
+/// <list type="bullet">
+///   <item>nigiri/Ark stack (bitcoin, nbxplorer, arkd, boltz, lnd, fulmine)
+///     started via <c>submodules/NNark/regtest/start-env.sh</c>.</item>
+///   <item>Postgres started as a service container (CI) or by the dev
+///     locally before invoking the tests.</item>
+///   <item>BTCPayServer started in the background by the CI workflow with
+///     the Arkade plugin DLL discoverable on its plugin path.</item>
+/// </list>
+/// This fixture used to <c>docker-compose up</c> and spawn BTCPay itself,
+/// but those paths were unreliable (hardcoded compose location, LND
+/// macaroon placeholder, postgres assumptions). Moving startup into the
+/// CI workflow gives each piece its own log stream and clearer failure
+/// signal.
 /// </summary>
 [SetUpFixture]
 public class TestServerFixture
 {
-    public static string ServerUrl => "http://localhost:14142";
-    public static string ArkDaemonUrl => "http://localhost:7070";
-    public static string BoltzUrl => "http://localhost:9001";
+    /// <summary>BTCPayServer endpoint (CI binds to 0.0.0.0:14142).</summary>
+    public static string ServerUrl =>
+        Environment.GetEnvironmentVariable("BTCPAY_E2E_SERVER_URL") ?? "http://localhost:14142";
 
-    private static Process? _btcpayProcess;
+    /// <summary>arkd gRPC-rest gateway exposed by nigiri.</summary>
+    public static string ArkDaemonUrl =>
+        Environment.GetEnvironmentVariable("BTCPAY_E2E_ARKD_URL") ?? "http://localhost:7070";
+
+    /// <summary>Boltz REST endpoint (Node.js service in the nigiri overlay).</summary>
+    public static string BoltzUrl =>
+        Environment.GetEnvironmentVariable("BTCPAY_E2E_BOLTZ_URL") ?? "http://localhost:9001";
+
     private static readonly HttpClient _httpClient = new();
-
-    private static string SolutionDir => Path.GetFullPath(
-        Path.Combine(TestContext.CurrentContext.TestDirectory, "..", "..", "..", ".."));
 
     [OneTimeSetUp]
     public async Task GlobalSetup()
     {
-        TestContext.Progress.WriteLine("Starting test environment...");
+        TestContext.Progress.WriteLine("Waiting for test environment to be reachable...");
 
-        // Check if Ark stack is running
-        await EnsureArkStackRunning();
+        await WaitForService(ArkDaemonUrl, "/v1/info", TimeSpan.FromSeconds(60),
+            "Ark daemon (start the nigiri stack via submodules/NNark/regtest/start-env.sh)");
 
-        // Start BTCPayServer with plugin
-        await StartBTCPayServer();
+        await WaitForService(ServerUrl, "/", TimeSpan.FromMinutes(3),
+            "BTCPayServer (CI starts it; locally run `dotnet run` in submodules/btcpayserver/BTCPayServer with the env vars from .github/workflows/e2e.yml)");
 
-        // Wait for BTCPay to be ready
-        await WaitForBTCPayReady();
-
-        TestContext.Progress.WriteLine("Test environment ready.");
+        TestContext.Progress.WriteLine("Test environment is reachable.");
     }
 
-    [OneTimeTearDown]
-    public async Task GlobalTeardown()
-    {
-        TestContext.Progress.WriteLine("Stopping test environment...");
-
-        if (_btcpayProcess is { HasExited: false })
-        {
-            _btcpayProcess.Kill(entireProcessTree: true);
-            await _btcpayProcess.WaitForExitAsync();
-        }
-
-        _btcpayProcess?.Dispose();
-        TestContext.Progress.WriteLine("Test environment stopped.");
-    }
-
-    private static async Task EnsureArkStackRunning()
-    {
-        TestContext.Progress.WriteLine("Checking Ark stack...");
-
-        try
-        {
-            var response = await _httpClient.GetAsync($"{ArkDaemonUrl}/v1/info");
-            if (response.IsSuccessStatusCode)
-            {
-                TestContext.Progress.WriteLine("Ark daemon is running.");
-                return;
-            }
-        }
-        catch (HttpRequestException)
-        {
-            // Ark not running, try to start it
-        }
-
-        TestContext.Progress.WriteLine("Ark stack not running. Starting via docker-compose...");
-
-        var result = await Cli.Wrap("docker-compose")
-            .WithArguments(["-f", "docker-compose.ark.yml", "up", "-d"])
-            .WithWorkingDirectory(SolutionDir)
-            .ExecuteBufferedAsync();
-
-        if (result.ExitCode != 0)
-        {
-            throw new Exception($"Failed to start Ark stack: {result.StandardError}");
-        }
-
-        // Wait for Ark daemon to be ready
-        await WaitForService(ArkDaemonUrl, "/v1/info", TimeSpan.FromSeconds(60));
-        TestContext.Progress.WriteLine("Ark stack started.");
-    }
-
-    private static async Task StartBTCPayServer()
-    {
-        TestContext.Progress.WriteLine("Starting BTCPayServer with Arkade plugin...");
-
-        // Check if already running
-        try
-        {
-            var response = await _httpClient.GetAsync(ServerUrl);
-            if (response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.Found)
-            {
-                TestContext.Progress.WriteLine("BTCPayServer already running.");
-                return;
-            }
-        }
-        catch (HttpRequestException)
-        {
-            // Not running, start it
-        }
-
-        var btcpayProjectPath = Path.Combine(SolutionDir, "submodules", "btcpayserver", "BTCPayServer");
-
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "dotnet",
-            Arguments = "run --no-build",
-            WorkingDirectory = btcpayProjectPath,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
-        };
-
-        // Set environment variables for regtest
-        startInfo.Environment["BTCPAY_NETWORK"] = "regtest";
-        startInfo.Environment["BTCPAY_BIND"] = "0.0.0.0:14142";
-        startInfo.Environment["BTCPAY_ROOTPATH"] = "/";
-        startInfo.Environment["BTCPAY_DEBUGLOG"] = "debug.log";
-        startInfo.Environment["BTCPAY_POSTGRES"] =
-            "Host=localhost;Port=5432;Database=btcpay_e2e_test;Username=postgres;Password=postgres";
-        startInfo.Environment["BTCPAY_BTCEXPLORERURL"] = "http://localhost:24444/";
-        startInfo.Environment["BTCPAY_BTCLIGHTNING"] = "type=lnd-rest;server=https://localhost:8080/;macaroonfilepath=<path>;allowinsecure=true";
-
-        _btcpayProcess = Process.Start(startInfo);
-
-        if (_btcpayProcess == null)
-        {
-            throw new Exception("Failed to start BTCPayServer process");
-        }
-
-        // Log output for debugging
-        _btcpayProcess.OutputDataReceived += (_, e) =>
-        {
-            if (e.Data != null) TestContext.Progress.WriteLine($"[BTCPay] {e.Data}");
-        };
-        _btcpayProcess.ErrorDataReceived += (_, e) =>
-        {
-            if (e.Data != null) TestContext.Error.WriteLine($"[BTCPay ERROR] {e.Data}");
-        };
-
-        _btcpayProcess.BeginOutputReadLine();
-        _btcpayProcess.BeginErrorReadLine();
-    }
-
-    private static async Task WaitForBTCPayReady()
-    {
-        TestContext.Progress.WriteLine("Waiting for BTCPayServer to be ready...");
-        await WaitForService(ServerUrl, "/", TimeSpan.FromSeconds(120));
-        TestContext.Progress.WriteLine("BTCPayServer is ready.");
-    }
-
-    private static async Task WaitForService(string baseUrl, string healthPath, TimeSpan timeout)
+    private static async Task WaitForService(string baseUrl, string healthPath, TimeSpan timeout, string description)
     {
         var deadline = DateTime.UtcNow + timeout;
+        Exception? lastError = null;
 
         while (DateTime.UtcNow < deadline)
         {
@@ -174,15 +67,17 @@ public class TestServerFixture
                 {
                     return;
                 }
+                lastError = new HttpRequestException($"HTTP {(int)response.StatusCode}");
             }
-            catch (HttpRequestException)
+            catch (HttpRequestException ex)
             {
-                // Service not ready yet
+                lastError = ex;
             }
 
             await Task.Delay(TimeSpan.FromSeconds(2));
         }
 
-        throw new TimeoutException($"Service at {baseUrl} did not become ready within {timeout}");
+        throw new TimeoutException(
+            $"{description} at {baseUrl} did not become ready within {timeout}. Last error: {lastError?.Message ?? "n/a"}");
     }
 }

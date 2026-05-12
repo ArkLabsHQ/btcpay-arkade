@@ -1,0 +1,142 @@
+name: E2E
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: btcpay_e2e_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup Go (for nigiri build)
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Cache nigiri binary
+        uses: actions/cache@v4
+        with:
+          path: submodules/NNark/regtest/_build
+          key: nigiri-${{ runner.os }}-${{ hashFiles('submodules/NNark/regtest/.env.defaults', 'submodules/NNark/.env.regtest') }}
+
+      - name: Start nigiri / Ark stack
+        run: |
+          chmod +x submodules/NNark/regtest/*.sh submodules/NNark/regtest/helpers/*.sh
+          ./submodules/NNark/regtest/start-env.sh
+        timeout-minutes: 12
+
+      - name: Restore + Build solution
+        run: |
+          dotnet restore NArk.sln
+          dotnet build NArk.sln --no-restore -m:1
+        timeout-minutes: 10
+
+      - name: Install Playwright browsers
+        run: |
+          pwsh NArk.E2E.Tests/bin/Debug/net10.0/playwright.ps1 install --with-deps chromium
+        timeout-minutes: 5
+
+      - name: Start BTCPayServer
+        # The Arkade plugin tests reach Lightning Network via docker exec
+        # into nigiri's `lnd` and `boltz-lnd` containers (see LightningHelper),
+        # NOT via BTCPay's own LN integration — so BTCPAY_BTCLIGHTNING is
+        # intentionally unset. BTCPay starts with Bitcoin + NBXplorer only.
+        env:
+          BTCPAY_NETWORK: regtest
+          BTCPAY_BIND: 0.0.0.0:14142
+          BTCPAY_ROOTPATH: /
+          BTCPAY_DEBUGLOG: ${{ github.workspace }}/btcpay-debug.log
+          BTCPAY_POSTGRES: "Host=localhost;Port=5432;Database=btcpay_e2e_test;Username=postgres;Password=postgres"
+          BTCPAY_BTCEXPLORERURL: "http://localhost:32838/"
+        run: |
+          cd submodules/btcpayserver/BTCPayServer
+          nohup dotnet run --no-build --no-launch-profile > ${{ github.workspace }}/btcpay-stdout.log 2>&1 &
+          echo $! > ${{ github.workspace }}/btcpay.pid
+
+          # Wait up to 3 min for BTCPay to respond.
+          for i in {1..90}; do
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:14142/ || echo "000")
+            case "$STATUS" in
+              200|302)
+                echo "✅ BTCPay ready (HTTP $STATUS)"
+                exit 0
+                ;;
+            esac
+            sleep 2
+          done
+          echo "❌ BTCPay didn't come up in 3 min"
+          tail -200 ${{ github.workspace }}/btcpay-stdout.log
+          exit 1
+        timeout-minutes: 5
+
+      - name: Run E2E tests
+        run: dotnet test NArk.E2E.Tests/NArk.E2E.Tests.csproj --no-build --verbosity normal --logger "console;verbosity=detailed"
+        timeout-minutes: 20
+
+      - name: Stop BTCPayServer
+        if: always()
+        run: |
+          if [ -f ${{ github.workspace }}/btcpay.pid ]; then
+            kill $(cat ${{ github.workspace }}/btcpay.pid) 2>/dev/null || true
+          fi
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          mkdir -p /tmp/e2e-logs
+          cp ${{ github.workspace }}/btcpay-stdout.log /tmp/e2e-logs/ 2>/dev/null || true
+          cp ${{ github.workspace }}/btcpay-debug.log /tmp/e2e-logs/ 2>/dev/null || true
+          for c in bitcoin nbxplorer ark ark-wallet lnd boltz boltz-lnd boltz-fulmine; do
+            docker logs "$c" > /tmp/e2e-logs/${c}.log 2>&1 || true
+          done
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs
+          path: /tmp/e2e-logs/
+
+      - name: Upload Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: NArk.E2E.Tests/bin/Debug/net10.0/playwright-traces/
+          if-no-files-found: ignore
+
+      - name: Stop nigiri
+        if: always()
+        run: |
+          chmod +x submodules/NNark/regtest/*.sh submodules/NNark/regtest/helpers/*.sh 2>/dev/null
+          ./submodules/NNark/regtest/clean-env.sh || true
