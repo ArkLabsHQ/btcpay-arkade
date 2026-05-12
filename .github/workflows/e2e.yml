@@ -94,6 +94,10 @@ jobs:
           BTCPAY_DEBUGLOG: ${{ github.workspace }}/btcpay-debug.log
           BTCPAY_POSTGRES: "Host=localhost;Port=5432;Database=btcpay_e2e_test;Username=postgres;Password=postgres"
           BTCPAY_BTCEXPLORERURL: "http://localhost:32838/"
+          # Surface what happens between "Running plugin" and "Now listening".
+          # The ASP.NET Core config provider strips the ASPNETCORE_ prefix
+          # and maps `__` to `:`, so this lands as `Logging:LogLevel:Default=Debug`.
+          ASPNETCORE_Logging__LogLevel__Default: Debug
         run: |
           # Copy the plugin's build output into BTCPay's default plugins
           # directory so `PluginManager.AddPlugins` discovers it on
