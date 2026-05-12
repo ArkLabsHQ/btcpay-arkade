@@ -122,7 +122,7 @@ jobs:
           # to true on first admin, which breaks subsequent test users.
           nohup dotnet run --no-build --no-launch-profile -- \
             --disable-registration=false \
-            --verbose=true \
+            --verbose \
             > ${{ github.workspace }}/btcpay-stdout.log 2>&1 &
           echo $! > ${{ github.workspace }}/btcpay.pid
 
