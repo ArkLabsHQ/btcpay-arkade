@@ -94,13 +94,14 @@ jobs:
           BTCPAY_DEBUGLOG: ${{ github.workspace }}/btcpay-debug.log
           BTCPAY_POSTGRES: "Host=localhost;Port=5432;Database=btcpay_e2e_test;Username=postgres;Password=postgres"
           BTCPAY_BTCEXPLORERURL: "http://localhost:32838/"
-          # Keep /register open for the whole suite. Default is `true`,
-          # which auto-locks registrations after the first admin is
-          # created and prevents subsequent tests from creating users.
-          BTCPAY_DISABLE_REGISTRATION: "false"
         run: |
           cd submodules/btcpayserver/BTCPayServer
-          nohup dotnet run --no-build --no-launch-profile > ${{ github.workspace }}/btcpay-stdout.log 2>&1 &
+          # `--disable-registration=false` keeps /register open after the
+          # first admin is created. BTCPay's default flips LockSubscription
+          # to true on first admin, which breaks subsequent test users.
+          # The flag maps directly to the `disable-registration` config
+          # key consumed in BTCPayServerOptions.LoadArgs.
+          nohup dotnet run --no-build --no-launch-profile -- --disable-registration=false > ${{ github.workspace }}/btcpay-stdout.log 2>&1 &
           echo $! > ${{ github.workspace }}/btcpay.pid
 
           # Wait up to 3 min for BTCPay to respond.
