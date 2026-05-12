@@ -62,14 +62,19 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Playwright browsers
-        # Use the Microsoft.Playwright.CLI global tool — survives whether
-        # or not the test project's build emits playwright.ps1 (the
-        # behaviour of the auto-generated script depends on the Playwright
-        # package's targets matching the SDK/TFM, which has been
-        # inconsistent on net10.0 SDKs).
+        # Microsoft.Playwright's targets file copies playwright.ps1 to the
+        # build output as Content with CopyToOutputDirectory=PreserveNewest.
+        # Locate the actual emitted copy rather than hardcoding a path —
+        # build output layout can shift between SDK versions.
         run: |
-          dotnet tool install --global Microsoft.Playwright.CLI
-          $HOME/.dotnet/tools/playwright install --with-deps chromium
+          SCRIPT=$(find NArk.E2E.Tests/bin -name "playwright.ps1" -print -quit)
+          if [ -z "$SCRIPT" ]; then
+            echo "❌ playwright.ps1 not found in NArk.E2E.Tests/bin. Listing:"
+            find NArk.E2E.Tests/bin -maxdepth 4 -type f | head -50
+            exit 1
+          fi
+          echo "Found Playwright script: $SCRIPT"
+          pwsh "$SCRIPT" install --with-deps chromium
         timeout-minutes: 5
 
       - name: Start BTCPayServer
