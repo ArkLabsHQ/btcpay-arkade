@@ -83,7 +83,11 @@ public abstract class TestBase : PlaywrightFixture
         await Page.GotoAsync("/stores/create");
 
         await Page.FillAsync("input[name='Name']", storeName);
-        await Page.ClickAsync("button[type='submit']");
+        // BTCPay's CreateStore form uses `<input type="submit" id="Create" />`,
+        // not a `<button type="submit">`. Target by id — it's stable across
+        // the IsFirstStore wizard layout and the regular store creation
+        // layout (both render the same _CreateStoreForm partial).
+        await Page.ClickAsync("#Create");
 
         // Wait for redirect to store dashboard
         await Page.WaitForURLAsync(url => url.Contains("/stores/") && !url.Contains("/create"));
