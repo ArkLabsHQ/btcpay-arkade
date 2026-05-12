@@ -7,7 +7,7 @@
 @using NBitcoin
 @using NArk.Abstractions.VTXOs
 @inject ArkNetworkConfig ArkNetworkConfig
-@inject IChainTimeProvider ChainTimeProvider
+@inject IBitcoinBlockchain ChainTimeProvider
 @inject IClientTransport ClientTransport
 @model IEnumerable<ArkVtxo>
 

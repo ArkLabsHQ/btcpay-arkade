@@ -18,8 +18,7 @@ using Microsoft.Extensions.Logging;
 using NArk.Abstractions.Blockchain;
 using NArk.Abstractions.Intents;
 using NArk.Abstractions.Safety;
-using NArk.Abstractions.Services;
-using NArk.Blockchain.NBXplorer;
+using NArk.Blockchain;
 using NArk.Hosting;
 using NArk.Core.Models.Options;
 using NArk.Core.Services;
@@ -129,17 +128,18 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         // Safety service
         services.AddSingleton<ISafetyService, NArk.Safety.AsyncKeyedLock.AsyncSafetyService>();
 
-        // Chain time provider (needs NBXplorer)
-        services.AddSingleton<ChainTimeProvider>(provider =>
+        // Unified blockchain backend (chain time + boarding-UTXO lookup +
+        // broadcast + tx status + fee estimation). Pass the inner provider's
+        // logger so the cache-fallback warning (emitted when Bitcoin Core
+        // RPC blips and we serve a stale chain time) is visible in plugin
+        // logs rather than swallowed.
+        services.AddSingleton<NBXplorerBlockchain>(provider =>
         {
             var explorerClientProvider = provider.GetRequiredService<ExplorerClientProvider>();
-            // Pass the inner provider's logger so the cache-fallback warning
-            // (emitted when Bitcoin Core RPC blips and we serve a stale
-            // chain time) is visible in plugin logs rather than swallowed.
-            var logger = provider.GetService<Microsoft.Extensions.Logging.ILogger<NArk.Blockchain.NBXplorer.RPCChainTimeProvider>>();
-            return new ChainTimeProvider(explorerClientProvider.GetExplorerClient("BTC"), logger);
+            var logger = provider.GetService<ILogger<NBXplorerBlockchain>>();
+            return new NBXplorerBlockchain(explorerClientProvider.GetExplorerClient("BTC"), logger);
         });
-        services.AddSingleton<IChainTimeProvider>(sp => sp.GetRequiredService<ChainTimeProvider>());
+        services.AddSingleton<IBitcoinBlockchain>(sp => sp.GetRequiredService<NBXplorerBlockchain>());
 
         // Intent scheduler
         services.Configure<SimpleIntentSchedulerOptions>(options =>
@@ -149,12 +149,8 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         // Wallet provider
         services.AddSingleton<NArk.Abstractions.Wallets.IWalletProvider, NArk.Core.Wallet.DefaultWalletProvider>();
 
-        // Boarding UTXO detection via NBXplorer
-        services.AddSingleton<IBoardingUtxoProvider>(provider =>
-        {
-            var explorerClient = provider.GetRequiredService<ExplorerClientProvider>().GetExplorerClient("BTC");
-            return new NBXplorerBoardingUtxoProvider(explorerClient);
-        });
+        // BoardingUtxoSyncService consumes IBitcoinBlockchain.GetUtxosAsync — the
+        // NBXplorer-backed registration above implements it for boarding lookup.
         services.AddSingleton<BoardingUtxoSyncService>();
 
         // Core services and network config (includes caching transport by default)

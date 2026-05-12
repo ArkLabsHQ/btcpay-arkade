@@ -25,7 +25,7 @@ public class ArkLightningClient(
     ISwapStorage swapStorage,
     IContractStorage contractStorage,
     ISpendingService spendingService,
-    IChainTimeProvider chainTimeProvider,
+    IBitcoinBlockchain chainTimeProvider,
     ILogger<ArkLightningInvoiceListener> logger) : IExtendedLightningClient
 {
     /// <summary>

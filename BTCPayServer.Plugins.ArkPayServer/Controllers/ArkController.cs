@@ -74,7 +74,7 @@ public class ArkController(
     ISpendingService arkadeSpender,
     IFeeEstimator feeEstimator,
     IContractService contractService,
-    IChainTimeProvider bitcoinTimeChainProvider,
+    IBitcoinBlockchain bitcoinTimeChainProvider,
     VtxoSynchronizationService vtxoSyncService,
     IContractStorage contractStorage,
     ISwapStorage swapStorage,
