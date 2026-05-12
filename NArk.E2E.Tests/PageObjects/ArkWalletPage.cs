@@ -16,11 +16,16 @@ public class ArkWalletPage
     }
 
     /// <summary>
-    /// Navigate to the Arkade wallet page for this store.
+    /// Navigate to the Arkade wallet page for this store. The plugin's
+    /// controller is mounted at <c>~/plugins/ark/...</c> (see
+    /// <c>[Route("plugins/ark")]</c> on <c>ArkController</c>); hitting the
+    /// overview action lets the controller redirect to initial-setup when
+    /// no wallet is configured yet, so this single URL works for both
+    /// fresh and set-up stores.
     /// </summary>
     public async Task NavigateAsync()
     {
-        await _page.GotoAsync($"/stores/{_storeId}/ark");
+        await _page.GotoAsync($"/plugins/ark/stores/{_storeId}/overview");
         await _page.WaitForLoadStateAsync(LoadState.NetworkIdle);
     }
 
