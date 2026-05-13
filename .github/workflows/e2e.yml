@@ -137,10 +137,17 @@ jobs:
           echo "Plugin installed → $PLUGIN_DEST ($(ls "$PLUGIN_DEST" | wc -l) files after stripping BTCPay shared DLLs)"
 
           cd submodules/btcpayserver/BTCPayServer
+          # Launch BTCPay directly via `dotnet BTCPayServer.dll` instead of
+          # `dotnet run`. The run wrapper spawns BTCPay through an apphost
+          # executable; that intermediate process makes diagnostic ports
+          # unreachable to dotnet-stack and dotnet-dump from outside the
+          # process tree. Direct invocation gives us a plain `dotnet`
+          # process we can attach to if it hangs.
+          #
           # `--disable-registration=false` keeps /register open after the
           # first admin is created. BTCPay's default flips LockSubscription
           # to true on first admin, which breaks subsequent test users.
-          nohup dotnet run --no-build --no-launch-profile -- \
+          nohup dotnet bin/Debug/net10.0/BTCPayServer.dll \
             --disable-registration=false \
             > ${{ github.workspace }}/btcpay-stdout.log 2>&1 &
           BTCPAY_PID=$!
@@ -174,10 +181,11 @@ jobs:
           # also dump the original $BTCPAY_PID as a fallback.
           echo "--- process tree (dotnet) ---"
           ps auxf | grep -E "dotnet|BTCPay" | grep -v grep || true
-          # The BTCPay child runs as `BTCPayServer` (the executable name),
-          # not `BTCPayServer.dll`. Match the executable instead.
-          BTCPAY_PIDS=$(pgrep -af "BTCPayServer/bin/.*BTCPayServer($|[^.])" | awk '{print $1}' || true)
-          echo "BTCPay child PIDs: ${BTCPAY_PIDS:-(none)}"
+          # We now launch via `dotnet BTCPayServer.dll` directly, so the
+          # actual server PID is $BTCPAY_PID itself (no apphost child to
+          # find). Use it directly.
+          BTCPAY_PIDS="$BTCPAY_PID"
+          echo "BTCPay PID: ${BTCPAY_PIDS:-(none)}"
           for pid in $BTCPAY_PIDS $BTCPAY_PID; do
             [ -z "$pid" ] && continue
             echo "--- dotnet-stack report for pid=$pid ---" \
