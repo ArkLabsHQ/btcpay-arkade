@@ -98,6 +98,13 @@ jobs:
           # The ASP.NET Core config provider strips the ASPNETCORE_ prefix
           # and maps `__` to `:`, so this lands as `Logging:LogLevel:Default=Debug`.
           ASPNETCORE_Logging__LogLevel__Default: Debug
+          # The .NET runtime opens a diagnostic IPC socket at startup so
+          # tools like dotnet-stack can attach. In containerized CI sandboxes
+          # this can block on socket creation — and once we're in plugin
+          # land (separate AssemblyLoadContext), it's been a long-standing
+          # source of startup hangs. Disable it; we won't lose anything we
+          # haven't already failed to use.
+          DOTNET_EnableDiagnostics: "0"
         run: |
           # Copy the plugin's build output into BTCPay's default plugins
           # directory so `PluginManager.AddPlugins` discovers it on
