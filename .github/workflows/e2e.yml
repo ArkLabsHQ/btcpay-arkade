@@ -118,7 +118,23 @@ jobs:
           PLUGIN_DEST="$HOME/.btcpayserver/Plugins/BTCPayServer.Plugins.ArkPayServer"
           mkdir -p "$PLUGIN_DEST"
           cp -r "$PLUGIN_SRC"/. "$PLUGIN_DEST/"
-          echo "Plugin installed → $PLUGIN_DEST ($(ls "$PLUGIN_DEST" | wc -l) files)"
+          # The plugin's csproj has `<Private>true</Private>` (Debug only) on
+          # the BTCPayServer ProjectReference, so the plugin's bin output
+          # contains a full copy of BTCPayServer.dll + its sibling DLLs.
+          # That works fine for the local DEBUG_PLUGINS workflow (which
+          # points at the bin folder directly — same dir as the running
+          # BTCPay process). But when those copies land in BTCPay's Plugins
+          # folder, the plugin's isolated AssemblyLoadContext sees them as
+          # separate assemblies and BTCPay startup hangs (this is what
+          # caused 5 cycles of "Running plugin..." with no further output).
+          # Strip BTCPay's own DLLs so the plugin's load context falls back
+          # to the main process's already-loaded shared types via
+          # PreferSharedTypes=true.
+          for dll in BTCPayServer BTCPayServer.Abstractions BTCPayServer.Client \
+                     BTCPayServer.Common BTCPayServer.Data BTCPayServer.Rating; do
+            rm -f "$PLUGIN_DEST/${dll}.dll" "$PLUGIN_DEST/${dll}.pdb"
+          done
+          echo "Plugin installed → $PLUGIN_DEST ($(ls "$PLUGIN_DEST" | wc -l) files after stripping BTCPay shared DLLs)"
 
           cd submodules/btcpayserver/BTCPayServer
           # `--disable-registration=false` keeps /register open after the
