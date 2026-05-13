@@ -30,12 +30,24 @@ public class SharedPluginTestFixture : IDisposable
         ServerTester = testInstance.CreateServerTester(testDir, newDb: true);
         // Load plugins in an isolated AssemblyLoadContext — matches the
         // production load model AND matches rockstardev's reference
-        // fixture. The opposite setting (shared context) caused this
-        // suite's first cycle to hang for 20 min on the plugin's
-        // startup tasks; the isolated context lets BTCPay's load
-        // machinery sequence plugin init the way it does in production.
+        // fixture.
         ServerTester.PayTester.LoadPluginsInDefaultAssemblyContext = false;
-        ServerTester.StartAsync().GetAwaiter().GetResult();
+
+        // Hard 3-min ceiling on BTCPay startup. Past iterations of this
+        // suite saw a 20-min CI timeout because BTCPay's host gets stuck
+        // somewhere downstream of the plugin's Execute (likely a hosted
+        // service / IStartupTask in NArk.Core). Failing fast surfaces
+        // the real signal instead of timing the GitHub Actions job out.
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        try
+        {
+            ServerTester.StartAsync().WaitAsync(cts.Token).GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            throw new TimeoutException(
+                "BTCPay startup didn't complete within 3 minutes. The plugin's hosted services or IStartupTask are likely blocking. Run the test locally with debugger attached to inspect.");
+        }
     }
 
     public void Dispose()
