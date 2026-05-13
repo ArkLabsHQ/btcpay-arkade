@@ -166,10 +166,20 @@ jobs:
             esac
             sleep 2
           done
-          echo "❌ BTCPay didn't come up in 6 min"
+          echo "❌ BTCPay didn't come up in 6 min — capturing thread dump"
+          # Install + run dotnet-stack to report what BTCPay is blocked on.
+          # This is the most direct way to find the deadlock when Execute
+          # completes but startup never progresses.
+          dotnet tool install -g dotnet-stack 2>/dev/null || true
+          "$HOME/.dotnet/tools/dotnet-stack" report -p "$BTCPAY_PID" \
+            > ${{ github.workspace }}/btcpay-threads.txt 2>&1 || \
+            echo "(dotnet-stack failed; pid $BTCPAY_PID)"
+          echo "--- thread dump (head) ---"
+          head -200 ${{ github.workspace }}/btcpay-threads.txt 2>/dev/null || true
+          echo "--- btcpay stdout tail ---"
           tail -200 ${{ github.workspace }}/btcpay-stdout.log
           exit 1
-        timeout-minutes: 8
+        timeout-minutes: 10
 
       - name: Run E2E tests
         run: dotnet test NArk.E2E.Tests/NArk.E2E.Tests.csproj --no-build --verbosity normal --logger "console;verbosity=detailed"
@@ -188,6 +198,7 @@ jobs:
           mkdir -p /tmp/e2e-logs
           cp ${{ github.workspace }}/btcpay-stdout.log /tmp/e2e-logs/ 2>/dev/null || true
           cp ${{ github.workspace }}/btcpay-debug.log /tmp/e2e-logs/ 2>/dev/null || true
+          cp ${{ github.workspace }}/btcpay-threads.txt /tmp/e2e-logs/ 2>/dev/null || true
           for c in bitcoin nbxplorer ark ark-wallet lnd boltz boltz-lnd boltz-fulmine; do
             docker logs "$c" > /tmp/e2e-logs/${c}.log 2>&1 || true
           done
