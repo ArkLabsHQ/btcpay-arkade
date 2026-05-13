@@ -173,32 +173,18 @@ jobs:
             esac
             sleep 2
           done
-          echo "❌ BTCPay didn't come up in 6 min — capturing thread dump"
-          dotnet tool install -g dotnet-stack 2>/dev/null || true
-          # `dotnet run` is a wrapper that spawns BTCPay as a child or
-          # runs it in-process depending on SDK heuristics. Enumerate every
-          # PID running BTCPayServer.dll (the actual server) and dump each;
-          # also dump the original $BTCPAY_PID as a fallback.
-          echo "--- process tree (dotnet) ---"
+          echo "❌ BTCPay didn't come up in 6 min — sending SIGQUIT for thread dump"
+          # .NET writes a full thread stack dump to stderr when it
+          # receives SIGQUIT (kill -3). We capture stdout+stderr into
+          # btcpay-stdout.log, so the dump lands there. Give the runtime
+          # a couple seconds to flush the dump before we kill the process.
+          echo "--- process tree ---"
           ps auxf | grep -E "dotnet|BTCPay" | grep -v grep || true
-          # We now launch via `dotnet BTCPayServer.dll` directly, so the
-          # actual server PID is $BTCPAY_PID itself (no apphost child to
-          # find). Use it directly.
-          BTCPAY_PIDS="$BTCPAY_PID"
-          echo "BTCPay PID: ${BTCPAY_PIDS:-(none)}"
-          for pid in $BTCPAY_PIDS $BTCPAY_PID; do
-            [ -z "$pid" ] && continue
-            echo "--- dotnet-stack report for pid=$pid ---" \
-              | tee -a ${{ github.workspace }}/btcpay-threads.txt
-            "$HOME/.dotnet/tools/dotnet-stack" report -p "$pid" \
-              >> ${{ github.workspace }}/btcpay-threads.txt 2>&1 || \
-              echo "(dotnet-stack failed for pid=$pid)" \
-                >> ${{ github.workspace }}/btcpay-threads.txt
-          done
-          echo "--- thread dump tail ---"
-          tail -300 ${{ github.workspace }}/btcpay-threads.txt 2>/dev/null || true
-          echo "--- btcpay stdout tail ---"
-          tail -200 ${{ github.workspace }}/btcpay-stdout.log
+          echo "Sending SIGQUIT to pid=$BTCPAY_PID"
+          kill -SIGQUIT "$BTCPAY_PID" 2>/dev/null || echo "(kill failed)"
+          sleep 3
+          echo "--- btcpay stdout tail (post-SIGQUIT) ---"
+          tail -400 ${{ github.workspace }}/btcpay-stdout.log
           exit 1
         timeout-minutes: 10
 
