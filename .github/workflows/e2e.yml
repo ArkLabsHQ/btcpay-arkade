@@ -174,8 +174,10 @@ jobs:
           # also dump the original $BTCPAY_PID as a fallback.
           echo "--- process tree (dotnet) ---"
           ps auxf | grep -E "dotnet|BTCPay" | grep -v grep || true
-          BTCPAY_PIDS=$(pgrep -af "BTCPayServer\.dll" | awk '{print $1}' || true)
-          echo "BTCPayServer.dll PIDs: ${BTCPAY_PIDS:-(none)}"
+          # The BTCPay child runs as `BTCPayServer` (the executable name),
+          # not `BTCPayServer.dll`. Match the executable instead.
+          BTCPAY_PIDS=$(pgrep -af "BTCPayServer/bin/.*BTCPayServer($|[^.])" | awk '{print $1}' || true)
+          echo "BTCPay child PIDs: ${BTCPAY_PIDS:-(none)}"
           for pid in $BTCPAY_PIDS $BTCPAY_PID; do
             [ -z "$pid" ] && continue
             echo "--- dotnet-stack report for pid=$pid ---" \
