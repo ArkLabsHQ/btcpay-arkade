@@ -50,15 +50,17 @@ jobs:
           key: nigiri-${{ runner.os }}-${{ hashFiles('submodules/NNark/regtest/.env.defaults', 'submodules/NNark/.env.regtest') }}
 
       - name: Start nigiri / Ark stack
+        # Provides bitcoin (18443), nbxplorer (32838), arkd (7070), boltz,
+        # lnd, fulmine. BTCPay's test ServerTester is pointed at the
+        # bitcoin/nbxplorer endpoints via TESTS_BTCRPCCONNECTION and
+        # TESTS_BTCNBXPLORERURL below; the GHA postgres service container
+        # supplies BTCPay's DB.
         run: |
           chmod +x submodules/NNark/regtest/*.sh submodules/NNark/regtest/helpers/*.sh
           ./submodules/NNark/regtest/start-env.sh
         timeout-minutes: 12
 
       - name: Restore + Build solution and E2E test project
-        # NArk.E2E.Tests is NOT in NArk.sln — it sits at the repo root as a
-        # standalone csproj that references the NNark submodule via
-        # ProjectReference. Build both explicitly.
         run: |
           dotnet restore NArk.sln
           dotnet build NArk.sln --no-restore -m:1
@@ -66,153 +68,41 @@ jobs:
           dotnet build NArk.E2E.Tests/NArk.E2E.Tests.csproj --no-restore
         timeout-minutes: 12
 
+      - name: Run ConfigBuilder (writes appsettings.dev.json with plugin DLL path)
+        # BTCPay's Program.cs unconditionally loads
+        # submodules/btcpayserver/BTCPayServer/appsettings.dev.json under
+        # #if DEBUG. ConfigBuilder writes a DEBUG_PLUGINS entry there
+        # pointing at the Arkade plugin's bin output so ServerTester's
+        # in-process BTCPay picks it up at startup.
+        run: dotnet run --project ConfigBuilder/ConfigBuilder.csproj
+
       - name: Install Playwright browsers
-        # Microsoft.Playwright's targets file copies playwright.ps1 to the
-        # build output as Content with CopyToOutputDirectory=PreserveNewest.
-        # Locate the actual emitted copy rather than hardcoding a path —
-        # build output layout can shift between SDK versions.
         run: |
           SCRIPT=$(find NArk.E2E.Tests/bin -name "playwright.ps1" -print -quit)
           if [ -z "$SCRIPT" ]; then
-            echo "❌ playwright.ps1 not found in NArk.E2E.Tests/bin. Listing:"
+            echo "❌ playwright.ps1 not found in NArk.E2E.Tests/bin"
             find NArk.E2E.Tests/bin -maxdepth 4 -type f | head -50
             exit 1
           fi
-          echo "Found Playwright script: $SCRIPT"
           pwsh "$SCRIPT" install --with-deps chromium
         timeout-minutes: 5
 
-      - name: Start BTCPayServer
-        # The Arkade plugin tests reach Lightning Network via docker exec
-        # into nigiri's `lnd` and `boltz-lnd` containers (see LightningHelper),
-        # NOT via BTCPay's own LN integration — so BTCPAY_BTCLIGHTNING is
-        # intentionally unset. BTCPay starts with Bitcoin + NBXplorer only.
-        env:
-          BTCPAY_NETWORK: regtest
-          BTCPAY_BIND: 0.0.0.0:14142
-          BTCPAY_ROOTPATH: /
-          BTCPAY_DEBUGLOG: ${{ github.workspace }}/btcpay-debug.log
-          BTCPAY_POSTGRES: "Host=localhost;Port=5432;Database=btcpay_e2e_test;Username=postgres;Password=postgres"
-          BTCPAY_BTCEXPLORERURL: "http://localhost:32838/"
-          # Surface what happens between "Running plugin" and "Now listening".
-          # The ASP.NET Core config provider strips the ASPNETCORE_ prefix
-          # and maps `__` to `:`, so this lands as `Logging:LogLevel:Default=Debug`.
-          ASPNETCORE_Logging__LogLevel__Default: Debug
-          # The .NET runtime opens a diagnostic IPC socket at startup so
-          # tools like dotnet-stack can attach. In containerized CI sandboxes
-          # this can block on socket creation — and once we're in plugin
-          # land (separate AssemblyLoadContext), it's been a long-standing
-          # source of startup hangs. Disable it; we won't lose anything we
-          # haven't already failed to use.
-          DOTNET_EnableDiagnostics: "0"
-        run: |
-          # Copy the plugin's build output into BTCPay's default plugins
-          # directory so `PluginManager.AddPlugins` discovers it on
-          # startup. BTCPay expects: <PluginsDir>/<Identifier>/<Identifier>.dll
-          # alongside its referenced DLLs. The bin output already contains
-          # the plugin DLL plus its dependencies (NArk.*.dll, etc.), so
-          # we just mirror that directory.
-          #
-          # This path (`~/.btcpayserver/Plugins`) is BTCPay's default for
-          # Linux + regtest, which matches what the BTCPay startup log
-          # reports: "Loading plugins from /home/runner/.btcpayserver/Plugins".
-          PLUGIN_SRC="${{ github.workspace }}/BTCPayServer.Plugins.ArkPayServer/bin/Debug/net10.0"
-          if [ ! -f "$PLUGIN_SRC/BTCPayServer.Plugins.ArkPayServer.dll" ]; then
-            echo "❌ Plugin DLL not found at $PLUGIN_SRC/BTCPayServer.Plugins.ArkPayServer.dll"
-            ls -1 ${{ github.workspace }}/BTCPayServer.Plugins.ArkPayServer/bin/Debug/ 2>/dev/null || echo "(bin/Debug missing)"
-            exit 1
-          fi
-          PLUGIN_DEST="$HOME/.btcpayserver/Plugins/BTCPayServer.Plugins.ArkPayServer"
-          mkdir -p "$PLUGIN_DEST"
-          cp -r "$PLUGIN_SRC"/. "$PLUGIN_DEST/"
-          # The plugin's csproj has `<Private>true</Private>` (Debug only) on
-          # the BTCPayServer ProjectReference, so the plugin's bin output
-          # contains a full copy of BTCPayServer.dll + its sibling DLLs.
-          # That works fine for the local DEBUG_PLUGINS workflow (which
-          # points at the bin folder directly — same dir as the running
-          # BTCPay process). But when those copies land in BTCPay's Plugins
-          # folder, the plugin's isolated AssemblyLoadContext sees them as
-          # separate assemblies and BTCPay startup hangs (this is what
-          # caused 5 cycles of "Running plugin..." with no further output).
-          # Strip BTCPay's own DLLs so the plugin's load context falls back
-          # to the main process's already-loaded shared types via
-          # PreferSharedTypes=true.
-          for dll in BTCPayServer BTCPayServer.Abstractions BTCPayServer.Client \
-                     BTCPayServer.Common BTCPayServer.Data BTCPayServer.Rating; do
-            rm -f "$PLUGIN_DEST/${dll}.dll" "$PLUGIN_DEST/${dll}.pdb"
-          done
-          echo "Plugin installed → $PLUGIN_DEST ($(ls "$PLUGIN_DEST" | wc -l) files after stripping BTCPay shared DLLs)"
-
-          cd submodules/btcpayserver/BTCPayServer
-          # Launch BTCPay directly via `dotnet BTCPayServer.dll` instead of
-          # `dotnet run`. The run wrapper spawns BTCPay through an apphost
-          # executable; that intermediate process makes diagnostic ports
-          # unreachable to dotnet-stack and dotnet-dump from outside the
-          # process tree. Direct invocation gives us a plain `dotnet`
-          # process we can attach to if it hangs.
-          #
-          # `--disable-registration=false` keeps /register open after the
-          # first admin is created. BTCPay's default flips LockSubscription
-          # to true on first admin, which breaks subsequent test users.
-          nohup dotnet bin/Debug/net10.0/BTCPayServer.dll \
-            --disable-registration=false \
-            > ${{ github.workspace }}/btcpay-stdout.log 2>&1 &
-          BTCPAY_PID=$!
-          echo $BTCPAY_PID > ${{ github.workspace }}/btcpay.pid
-
-          # Wait up to 6 min for BTCPay to respond. With the Arkade plugin
-          # loaded, BTCPay runs both its own EF Core migrations and the
-          # plugin's, which can extend cold-start substantially on a fresh
-          # Postgres instance.
-          for i in {1..180}; do
-            # Bail early if BTCPay crashed — no point waiting the full 6min.
-            if ! kill -0 "$BTCPAY_PID" 2>/dev/null; then
-              echo "❌ BTCPay process exited"
-              tail -200 ${{ github.workspace }}/btcpay-stdout.log
-              exit 1
-            fi
-            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:14142/ || echo "000")
-            case "$STATUS" in
-              200|302)
-                echo "✅ BTCPay ready (HTTP $STATUS) after ${i}x2s"
-                exit 0
-                ;;
-            esac
-            sleep 2
-          done
-          echo "❌ BTCPay didn't come up in 6 min — sending SIGQUIT for thread dump"
-          # .NET writes a full thread stack dump to stderr when it
-          # receives SIGQUIT (kill -3). We capture stdout+stderr into
-          # btcpay-stdout.log, so the dump lands there. Give the runtime
-          # a couple seconds to flush the dump before we kill the process.
-          echo "--- process tree ---"
-          ps auxf | grep -E "dotnet|BTCPay" | grep -v grep || true
-          echo "Sending SIGQUIT to pid=$BTCPAY_PID"
-          kill -SIGQUIT "$BTCPAY_PID" 2>/dev/null || echo "(kill failed)"
-          sleep 3
-          echo "--- btcpay stdout tail (post-SIGQUIT) ---"
-          tail -400 ${{ github.workspace }}/btcpay-stdout.log
-          exit 1
-        timeout-minutes: 10
-
       - name: Run E2E tests
+        env:
+          # Point BTCPay's ServerTester at nigiri-provided backing services.
+          # nigiri's bitcoind uses admin1/123 (see submodules/NNark/regtest
+          # base compose). Postgres is the GHA service container above.
+          TESTS_BTCRPCCONNECTION: "server=http://127.0.0.1:18443;admin1:123"
+          TESTS_BTCNBXPLORERURL: "http://127.0.0.1:32838/"
+          TESTS_POSTGRES: "Host=localhost;Port=5432;Database=btcpay_e2e_test;Username=postgres;Password=postgres"
+          TESTS_HOSTNAME: "127.0.0.1"
         run: dotnet test NArk.E2E.Tests/NArk.E2E.Tests.csproj --no-build --verbosity normal --logger "console;verbosity=detailed"
         timeout-minutes: 20
 
-      - name: Stop BTCPayServer
-        if: always()
-        run: |
-          if [ -f ${{ github.workspace }}/btcpay.pid ]; then
-            kill $(cat ${{ github.workspace }}/btcpay.pid) 2>/dev/null || true
-          fi
-
-      - name: Collect logs on failure
+      - name: Collect docker logs on failure
         if: failure()
         run: |
           mkdir -p /tmp/e2e-logs
-          cp ${{ github.workspace }}/btcpay-stdout.log /tmp/e2e-logs/ 2>/dev/null || true
-          cp ${{ github.workspace }}/btcpay-debug.log /tmp/e2e-logs/ 2>/dev/null || true
-          cp ${{ github.workspace }}/btcpay-threads.txt /tmp/e2e-logs/ 2>/dev/null || true
           for c in bitcoin nbxplorer ark ark-wallet lnd boltz boltz-lnd boltz-fulmine; do
             docker logs "$c" > /tmp/e2e-logs/${c}.log 2>&1 || true
           done
@@ -223,14 +113,6 @@ jobs:
         with:
           name: e2e-logs
           path: /tmp/e2e-logs/
-
-      - name: Upload Playwright traces
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-traces
-          path: NArk.E2E.Tests/bin/Debug/net10.0/playwright-traces/
-          if-no-files-found: ignore
 
       - name: Stop nigiri
         if: always()

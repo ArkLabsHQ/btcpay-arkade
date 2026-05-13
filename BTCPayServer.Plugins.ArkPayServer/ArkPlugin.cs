@@ -49,41 +49,31 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
     public override void Execute(IServiceCollection services)
     {
-        // Temporary startup tracing: every cycle since adding the plugin to
-        // the CI Plugins folder, BTCPay hangs after the "Running plugin"
-        // log line with no further output. Console.WriteLine writes
-        // straight to stdout so it bypasses any logger init that might
-        // be deadlocked. Remove once root cause is identified.
-        Console.WriteLine("[ArkPlugin.Execute] start");
         var pluginServices = (PluginServiceCollection)services;
-        Console.WriteLine("[ArkPlugin.Execute] before GetNetworkConfig");
         var networkConfig = GetNetworkConfig(pluginServices);
-        Console.WriteLine($"[ArkPlugin.Execute] networkConfig={(networkConfig is null ? "null" : "set")}");
 
         if (networkConfig is null) return;
 
-        Console.WriteLine("[ArkPlugin.Execute] RegisterBtcPayServices");
+        // BTCPay plugin services
         RegisterBtcPayServices(services);
 
-        Console.WriteLine("[ArkPlugin.Execute] RegisterDatabase");
+        // Database
         RegisterDatabase(services);
 
-        Console.WriteLine("[ArkPlugin.Execute] RegisterNArkStorage");
+        // NArk storage implementations (SDK)
         RegisterNArkStorage(services);
 
-        Console.WriteLine("[ArkPlugin.Execute] RegisterNArkCore");
+        // NArk core services
         RegisterNArkCore(services, networkConfig);
 
-        Console.WriteLine("[ArkPlugin.Execute] RegisterPluginServices");
+        // Plugin-specific services
         RegisterPluginServices(services);
 
-        Console.WriteLine("[ArkPlugin.Execute] RegisterUIExtensions");
+        // UI extensions
         RegisterUIExtensions(services);
 
-        Console.WriteLine("[ArkPlugin.Execute] RegisterBoltzServices");
+        // Boltz swap services (optional)
         RegisterBoltzServices(services, networkConfig);
-
-        Console.WriteLine("[ArkPlugin.Execute] done");
     }
 
     #region Service Registration
