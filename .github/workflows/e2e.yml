@@ -167,15 +167,26 @@ jobs:
             sleep 2
           done
           echo "❌ BTCPay didn't come up in 6 min — capturing thread dump"
-          # Install + run dotnet-stack to report what BTCPay is blocked on.
-          # This is the most direct way to find the deadlock when Execute
-          # completes but startup never progresses.
           dotnet tool install -g dotnet-stack 2>/dev/null || true
-          "$HOME/.dotnet/tools/dotnet-stack" report -p "$BTCPAY_PID" \
-            > ${{ github.workspace }}/btcpay-threads.txt 2>&1 || \
-            echo "(dotnet-stack failed; pid $BTCPAY_PID)"
-          echo "--- thread dump (head) ---"
-          head -200 ${{ github.workspace }}/btcpay-threads.txt 2>/dev/null || true
+          # `dotnet run` is a wrapper that spawns BTCPay as a child or
+          # runs it in-process depending on SDK heuristics. Enumerate every
+          # PID running BTCPayServer.dll (the actual server) and dump each;
+          # also dump the original $BTCPAY_PID as a fallback.
+          echo "--- process tree (dotnet) ---"
+          ps auxf | grep -E "dotnet|BTCPay" | grep -v grep || true
+          BTCPAY_PIDS=$(pgrep -af "BTCPayServer\.dll" | awk '{print $1}' || true)
+          echo "BTCPayServer.dll PIDs: ${BTCPAY_PIDS:-(none)}"
+          for pid in $BTCPAY_PIDS $BTCPAY_PID; do
+            [ -z "$pid" ] && continue
+            echo "--- dotnet-stack report for pid=$pid ---" \
+              | tee -a ${{ github.workspace }}/btcpay-threads.txt
+            "$HOME/.dotnet/tools/dotnet-stack" report -p "$pid" \
+              >> ${{ github.workspace }}/btcpay-threads.txt 2>&1 || \
+              echo "(dotnet-stack failed for pid=$pid)" \
+                >> ${{ github.workspace }}/btcpay-threads.txt
+          done
+          echo "--- thread dump tail ---"
+          tail -300 ${{ github.workspace }}/btcpay-threads.txt 2>/dev/null || true
           echo "--- btcpay stdout tail ---"
           tail -200 ${{ github.workspace }}/btcpay-stdout.log
           exit 1
