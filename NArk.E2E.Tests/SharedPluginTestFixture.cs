@@ -28,10 +28,13 @@ public class SharedPluginTestFixture : IDisposable
 
         var testDir = Path.Combine(Directory.GetCurrentDirectory(), "ArkadePluginTests");
         ServerTester = testInstance.CreateServerTester(testDir, newDb: true);
-        // Load plugins into the default AssemblyLoadContext so plugin types
-        // share identity with BTCPay's. BTCPay's own Tests project uses the
-        // same flag for the same reason.
-        ServerTester.PayTester.LoadPluginsInDefaultAssemblyContext = true;
+        // Load plugins in an isolated AssemblyLoadContext — matches the
+        // production load model AND matches rockstardev's reference
+        // fixture. The opposite setting (shared context) caused this
+        // suite's first cycle to hang for 20 min on the plugin's
+        // startup tasks; the isolated context lets BTCPay's load
+        // machinery sequence plugin init the way it does in production.
+        ServerTester.PayTester.LoadPluginsInDefaultAssemblyContext = false;
         ServerTester.StartAsync().GetAwaiter().GetResult();
     }
 
