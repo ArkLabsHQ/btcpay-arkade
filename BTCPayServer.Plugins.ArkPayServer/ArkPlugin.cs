@@ -165,12 +165,17 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         // structured-log args) into a rolling file per wallet so the
         // merchant can download a wallet-scoped log when asking for
         // support. See Services/WalletLogger/.
+        // This factory must NOT resolve an ILogger<>. The companion
+        // ILoggerProvider registration below means IWalletLogStore is built
+        // while the host LoggerFactory is itself being constructed — pulling
+        // an ILogger<T> through DI here re-enters that half-built factory
+        // and hangs plugin startup.
         services.AddSingleton<IWalletLogStore>(sp =>
         {
             var configuration = sp.GetRequiredService<IConfiguration>();
             var dataDir = new DataDirectories().Configure(configuration).DataDir;
             var logDir = Path.Combine(dataDir, "Plugins", "ArkPayServer", "wallet-logs");
-            return new RollingFileWalletLogStore(logDir, sp.GetService<ILogger<RollingFileWalletLogStore>>());
+            return new RollingFileWalletLogStore(logDir);
         });
         services.AddSingleton<ILoggerProvider>(sp =>
             new WalletScopedLoggerProvider(sp.GetRequiredService<IWalletLogStore>()));

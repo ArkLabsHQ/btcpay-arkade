@@ -4,7 +4,6 @@ using System.IO;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
-using Microsoft.Extensions.Logging;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services.WalletLogger;
 
@@ -23,16 +22,14 @@ public sealed class RollingFileWalletLogStore : IWalletLogStore, IAsyncDisposabl
     private const int ChannelCapacity = 4096;
 
     private readonly string _logDir;
-    private readonly ILogger<RollingFileWalletLogStore>? _logger;
     private readonly Channel<(string walletId, string line)> _channel;
     private readonly Task _writerTask;
     private readonly ConcurrentDictionary<string, StreamWriter> _writers = new(StringComparer.Ordinal);
     private bool _disposed;
 
-    public RollingFileWalletLogStore(string logDir, ILogger<RollingFileWalletLogStore>? logger = null)
+    public RollingFileWalletLogStore(string logDir)
     {
         _logDir = logDir;
-        _logger = logger;
         Directory.CreateDirectory(_logDir);
         _channel = Channel.CreateBounded<(string, string)>(new BoundedChannelOptions(ChannelCapacity)
         {
@@ -87,9 +84,11 @@ public sealed class RollingFileWalletLogStore : IWalletLogStore, IAsyncDisposabl
                     await writer.WriteLineAsync(line);
                     await writer.FlushAsync();
                 }
-                catch (Exception ex)
+                catch
                 {
-                    _logger?.LogDebug(ex, "Failed to append wallet log line for {WalletId}", walletId);
+                    // Diagnostic sink: swallow write failures rather than re-logging,
+                    // since this store backs an ILoggerProvider — logging through the
+                    // host LoggerFactory would recurse back into the same sink.
                 }
             }
         }
