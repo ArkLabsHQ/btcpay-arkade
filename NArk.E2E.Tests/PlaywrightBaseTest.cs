@@ -105,6 +105,69 @@ public abstract class PlaywrightBaseTest : UnitTestBase, IDisposable
         return await Page.InputValueAsync("#Id");
     }
 
+    /// <summary>
+    /// Creates a store and sets up its Arkade wallet through the plugin's
+    /// initial-setup wizard. Pass <c>null</c> to take the "Create a new wallet"
+    /// (HD) path; pass any non-null string (nsec, BIP-39 seed phrase, npub,
+    /// or existing wallet-id) to take the import path. Returns the storeId
+    /// once the wizard has redirected away from /initial-setup.
+    /// </summary>
+    protected async Task<string> CreateStoreWithArkWalletAsync(string? walletInput = null)
+    {
+        ArgumentNullException.ThrowIfNull(Page);
+        var storeId = await CreateStore();
+        await GoToUrl($"/plugins/ark/stores/{storeId}/initial-setup");
+
+        if (walletInput is null)
+        {
+            // Submit the "new HD wallet" form programmatically. The button
+            // sits inside a Bootstrap collapse and Playwright's actionability
+            // checks race the animation — programmatic .click() on the
+            // submit button bypasses that without losing form behavior.
+            await Page.EvaluateAsync(
+                "document.querySelector('[data-testid=\"create-wallet-btn\"]').click()");
+        }
+        else
+        {
+            // The "import existing wallet" form has a required text input;
+            // setting .value directly bypasses HTML5 validation in the same
+            // way the user submitting the visible form does.
+            await Page.EvaluateAsync(
+                "(v) => { var el = document.querySelector('[data-testid=\"nsec-input\"]'); el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }",
+                walletInput);
+            await Page.EvaluateAsync(
+                "document.querySelector('[data-testid=\"import-wallet-btn\"]').click()");
+        }
+
+        // The InitialSetup POST redirects somewhere away from /initial-setup
+        // on success. New HD wallets go through BTCPay's seed-backup screen
+        // first (RecoverySeedBackup) before landing on /overview; everything
+        // else (nsec / seed-phrase / npub / wallet-id) redirects straight
+        // to /overview.
+        //
+        // Generous timeout because the first wallet creation in a session
+        // involves arkd signer registration + a contract derive on a cold
+        // gRPC connection (~20-30s on a fresh BTCPay process).
+        await Page.WaitForURLAsync(
+            url => !url.Contains("/initial-setup"),
+            new PageWaitForURLOptions { Timeout = 60_000 });
+
+        if (Page.Url.Contains("/recovery-seed-backup", StringComparison.Ordinal))
+        {
+            // BTCPay shows the new mnemonic for safekeeping and asks the
+            // user to tick a "I've written it down" box before continuing.
+            // Form action posts back to the ReturnUrl we set to
+            // /plugins/ark/stores/{storeId}/overview.
+            await Page.CheckAsync("#confirm");
+            await Page.ClickAsync("form#RecoveryConfirmation button#submit");
+            await Page.WaitForURLAsync(
+                url => !url.Contains("/recovery-seed-backup"),
+                new PageWaitForURLOptions { Timeout = 30_000 });
+        }
+
+        return storeId;
+    }
+
     public void Dispose()
     {
         Try(() => { Page?.CloseAsync().GetAwaiter().GetResult(); Page = null; });

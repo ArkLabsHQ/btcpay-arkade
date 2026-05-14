@@ -15,6 +15,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="CliWrap" Version="3.10.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.4.0" />
     <PackageReference Include="Microsoft.Playwright" Version="1.57.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
@@ -22,6 +23,15 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
     </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Linked compile of NNark's tested docker-exec helper layer. A submodule
+         bump propagates fixes for free; if NNark renames a method our build
+         breaks until we update callers. Acceptable cost since these helpers
+         are stable and the alternative is duplicating ~200 lines. -->
+    <Compile Include="..\submodules\NNark\NArk.Tests.End2End\Common\DockerHelper.cs"
+             Link="Common\DockerHelper.cs" />
   </ItemGroup>
 
   <ItemDefinitionGroup>
