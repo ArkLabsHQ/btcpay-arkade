@@ -67,7 +67,20 @@ public abstract class PlaywrightBaseTest : UnitTestBase, IDisposable
         ArgumentNullException.ThrowIfNull(ServerUri);
         var trimmedBase = ServerUri.AbsoluteUri.TrimEnd('/');
         var trimmedRel = relativeUrl.StartsWith('/') ? relativeUrl : '/' + relativeUrl;
-        await Page.GotoAsync(trimmedBase + trimmedRel);
+
+        // BTCPay's Arkade overview page holds long-polling XHRs (VTXO
+        // subscription, stream events) that saturate Chromium's 6-connection
+        // per-origin pool. Subsequent same-origin navigations then hang
+        // waiting for a connection slot. Routing through about:blank first
+        // tears those down. Cheap (~50ms).
+        if (Page.Url.StartsWith(trimmedBase, StringComparison.Ordinal))
+        {
+            await Page.GotoAsync("about:blank",
+                new PageGotoOptions { WaitUntil = WaitUntilState.Commit, Timeout = 5_000 });
+        }
+
+        await Page.GotoAsync(trimmedBase + trimmedRel,
+            new PageGotoOptions { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = 30_000 });
     }
 
     /// <summary>Registers a new user via BTCPay's /register page. Mirrors BTCPay.Tests.PlaywrightTester.RegisterNewUser.</summary>
@@ -164,6 +177,13 @@ public abstract class PlaywrightBaseTest : UnitTestBase, IDisposable
                 url => !url.Contains("/recovery-seed-backup"),
                 new PageWaitForURLOptions { Timeout = 30_000 });
         }
+
+        // Wait for the landing page (typically /overview) to be DOM-ready so
+        // the next navigation isn't queued behind an in-flight load. The
+        // Arkade overview kicks off VTXO sync XHRs which can keep the page's
+        // network busy indefinitely — explicitly wait for DOMContentLoaded
+        // rather than the full `load` event.
+        await Page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
 
         return storeId;
     }
