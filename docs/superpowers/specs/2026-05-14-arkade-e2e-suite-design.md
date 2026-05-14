@@ -81,36 +81,68 @@ Inherited from the existing smoke test; no changes:
 | 3 | `PullPayment_ToArkAddress_EndToEnd` | Pull-payment created, claimed, approved, completed |
 | 4 | `PayoutToLightning_TriggersBoltzSubmarine` | Payout with LN destination triggers submarine swap, reaches Completed |
 
-## Helper additions
+## Reuse from `submodules/NNark/NArk.Tests.End2End/Common/`
 
-Added to `PlaywrightBaseTest`:
+NNark's e2e suite already ships a tested docker/cli helper layer. We pull those files in via **linked compilation** so a submodule bump propagates fixes for free — no copy-paste, no cross-repo PR:
 
-```csharp
-// Wallet setup
-Task<string> CreateStoreWithArkWalletAsync(string? walletInput = null);
-//   walletInput == null → use "Create a new wallet" path
-//   walletInput != null → POST to /initial-setup with the provided string (nsec, seed, npub, wallet-id)
-//   returns the storeId
-
-// Funding
-Task FundArkWalletAsync(string storeId, long sats = 100_000);
-//   1. GET /plugins/ark/stores/{id}/overview to find the receive address
-//   2. shell out `docker exec ark-wallet ark send <addr> <sats>`
-//   3. poll the overview balance until >= sats or 30s elapses
-
-// API access
-Task<HttpClient> AuthenticatedApiClientAsync(string storeId);
-//   Creates a server-wide API key with the registered admin's session cookie, returns an HttpClient
-//   with the X-Api-Key header set. Used by payout/invoice tests to hit Greenfield endpoints.
+```xml
+<!-- NArk.E2E.Tests.csproj -->
+<ItemGroup>
+  <Compile Include="..\submodules\NNark\NArk.Tests.End2End\Common\DockerHelper.cs"
+           Link="Common\DockerHelper.cs" />
+  <Compile Include="..\submodules\NNark\NArk.Tests.End2End\Common\FulmineLiquidityHelper.cs"
+           Link="Common\FulmineLiquidityHelper.cs" />
+</ItemGroup>
+<ItemGroup>
+  <PackageReference Include="CliWrap" Version="3.10.0" />
+</ItemGroup>
 ```
 
-Inline `Process.Start("docker", "exec ...")` lives in a single `DockerHelpers.Exec(string args)` static method (~10 lines) — surfaces stderr on non-zero exit so test failures point at the docker call rather than at a vague Playwright timeout.
+This gives us, for free:
+- `DockerHelper.Exec(container, args[])` — generic docker exec
+- `DockerHelper.MineBlocks(count)` — bitcoin block generation
+- `DockerHelper.SendArkdNoteTo(arkAddress, amountSats)` — funds any Arkade address from the arkd notes pool
+- `DockerHelper.CreateArkNote(amountSats)` — note minting
+- `DockerHelper.CreateLndInvoice(amtSats, expirySecs)` — LND BOLT11 generation
+- `DockerHelper.StopContainer(name)` / `StartContainer(name)` — for `SendCrashesGracefully_IfBitcoinCoreUnreachable`
+- `DockerHelper.SetBoltzSwapStatus(swapId, status)` — drive swaps to terminal states without timing dependencies
+- `FulmineLiquidityHelper.EnsureArkLiquidity()` — prereq for reverse-swap tests
+
+`FulmineLiquidityHelper` references `SharedSwapInfrastructure.FulmineEndpoint` from NNark. We mirror just that one constant locally (~3 lines) rather than dragging in the NUnit `[SetUpFixture]`. Documented in `Common/SharedSwapEndpoints.cs` shim file.
+
+We do **not** reuse `FundedWalletHelper` — it manages NArk SDK wallet state in-process, which is the opposite of our model (BTCPay owns wallet state). Our funding helper drives `DockerHelper.SendArkdNoteTo` against an address scraped from BTCPay's `/overview` page.
+
+## Helpers added in this project
+
+Just two thin BTCPay-specific helpers on top of NNark's primitives:
+
+```csharp
+// In PlaywrightBaseTest:
+
+Task<string> CreateStoreWithArkWalletAsync(string? walletInput = null);
+//   walletInput == null → use "Create a new wallet" path
+//   walletInput != null → POST to /initial-setup with the provided string
+//                         (nsec, BIP-39 seed phrase, npub, or wallet-id)
+//   returns the storeId
+
+Task FundStoreArkadeWalletAsync(string storeId, long sats = 100_000);
+//   1. scrape Arkade receive address from /plugins/ark/stores/{id}/overview
+//   2. await DockerHelper.SendArkdNoteTo(arkAddress, sats)
+//   3. poll /overview balance until >= sats or 30s elapses
+
+Task<HttpClient> AuthenticatedApiClientAsync(string storeId);
+//   Issues a BTCPay server-scoped API key via Greenfield, returns an HttpClient
+//   with X-Api-Key set. Used by payout/invoice tests to hit Greenfield endpoints
+//   directly instead of clicking through the UI.
+```
 
 ## Funding strategy
 
-Use `docker exec ark-wallet ark send <addr> <sats>` for VTXO funding (matches project-memory pattern for swap tests). Skips boarding + round wait. Pre-existing memory notes ark-wallet holds ≥10M sats, enough for ~20 funded-wallet tests at 500K sats each.
+For VTXO-funded wallets (most spending/swap tests), call `FundStoreArkadeWalletAsync(storeId, 500_000)` — that's a thin BTCPay-aware wrapper over `DockerHelper.SendArkdNoteTo`. Memory notes ark-wallet holds ≥10M sats; with 500K-per-test budget, ~20 funded tests can run before the notes pool needs replenishment.
 
-For tests that specifically need boarding UTXOs (`SendToBitcoinAddress_TriggersChainSwap`, BTC→ARK chain swap), use `docker exec bitcoin bitcoin-cli sendtoaddress <addr> <btc>` + `docker exec bitcoin bitcoin-cli -generate <n>`.
+For boarding-UTXO tests (`BTC→ARK chain swap`), use `DockerHelper.Exec("bitcoin", ["bitcoin-cli", "sendtoaddress", addr, btc])` + `DockerHelper.MineBlocks(6)`.
+
+For LN-side payment tests, use `DockerHelper.CreateLndInvoice(sats)` to mint an LND BOLT11 for the plugin to pay (submarine swap direction).
 
 ## CI implications
 
