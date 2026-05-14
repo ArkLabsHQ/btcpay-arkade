@@ -151,6 +151,67 @@ public class WalletSetupTests : PlaywrightBaseTest
     }
 
     /// <summary>
+    /// Pass another store's wallet receive address as the import value.
+    /// The controller treats this as the destination for a transitory
+    /// auto-sweep wallet (npub path) and creates a fresh local wallet
+    /// that sweeps to the donor address.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ImportNpub_CreatesTransitoryWallet()
+    {
+        _fixture.Initialize(this);
+        await InitializePlaywright(_fixture.ServerTester!);
+
+        await GoToUrl("/register");
+        await RegisterNewUser(isAdmin: true);
+
+        // Donor store: nsec (SingleKey) wallet so the overview exposes a
+        // deterministic Arkade address. HD wallets don't render a default
+        // address on /overview — they derive per-receive instead.
+        var donorStoreId = await CreateStoreWithArkWalletAsync(GenerateRandomNsec());
+        await GoToUrl($"/plugins/ark/stores/{donorStoreId}/overview");
+        var donorAddress = await Page!.InputValueAsync("[data-testid='receive-address']");
+        Assert.False(string.IsNullOrWhiteSpace(donorAddress), "donor store has no receive address");
+
+        // New store: import the donor address as the transitory destination.
+        var transitoryStoreId = await CreateStoreWithArkWalletAsync(donorAddress);
+
+        Assert.NotEqual(donorStoreId, transitoryStoreId);
+        Assert.DoesNotContain("/initial-setup", Page.Url);
+    }
+
+    /// <summary>
+    /// Import an existing wallet by id. A wallet is created on store A;
+    /// its WalletId is scraped from the overview page and pasted into
+    /// store B's wizard. Both stores should reference the same wallet.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ImportWalletId_ReusesExistingWallet()
+    {
+        _fixture.Initialize(this);
+        await InitializePlaywright(_fixture.ServerTester!);
+
+        await GoToUrl("/register");
+        await RegisterNewUser(isAdmin: true);
+
+        var storeAId = await CreateStoreWithArkWalletAsync();
+        await GoToUrl($"/plugins/ark/stores/{storeAId}/overview");
+        var walletId = await Page!.GetAttributeAsync(".truncate-center-id", "data-text");
+        Assert.False(string.IsNullOrWhiteSpace(walletId), "store A has no wallet id");
+
+        var storeBId = await CreateStoreWithArkWalletAsync(walletId);
+        Assert.NotEqual(storeAId, storeBId);
+        Assert.DoesNotContain("/initial-setup", Page.Url);
+
+        // Verify store B's overview shows the same wallet id.
+        await GoToUrl($"/plugins/ark/stores/{storeBId}/overview");
+        var storeBWalletId = await Page.GetAttributeAsync(".truncate-center-id", "data-text");
+        Assert.Equal(walletId, storeBWalletId);
+    }
+
+    /// <summary>
     /// Download the per-wallet diagnostic log file. The endpoint returns
     /// 200 + a file body even when no log lines have been written yet.
     /// (Regression target for PR #46 — added the wallet-log feature.)
