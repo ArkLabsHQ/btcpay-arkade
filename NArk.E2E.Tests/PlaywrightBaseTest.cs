@@ -96,9 +96,12 @@ public abstract class PlaywrightBaseTest : UnitTestBase, IDisposable
         name ??= "ArkadeStore" + RandomUtils.GetUInt64();
         await Page.FillAsync("#Name", name);
         await Page.ClickAsync("#Create");
-        // BTCPay redirects to /stores/{id}/dashboard or similar; the
-        // store id is rendered in #Id on the General settings page.
-        await Page.ClickAsync("#StoreNav-General");
+        // BTCPay redirects to /stores/{id}/ (onboarding page for fresh
+        // stores). The General settings page exposes the store id in #Id;
+        // BTCPay's sidebar nav items use the convention
+        // #menu-item-{StoreNavPages enum value} — see
+        // BTCPayServer.Tests.PlaywrightTester.GoToStore for the reference.
+        await Page.ClickAsync("#menu-item-General");
         return await Page.InputValueAsync("#Id");
     }
 
