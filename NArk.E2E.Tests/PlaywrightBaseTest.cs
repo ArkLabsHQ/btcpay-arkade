@@ -188,6 +188,22 @@ public abstract class PlaywrightBaseTest : UnitTestBase, IDisposable
         return storeId;
     }
 
+    /// <summary>
+    /// Reads the ASP.NET antiforgery token rendered into the current page
+    /// as <c>&lt;input name="__RequestVerificationToken" value="..." /&gt;</c>.
+    /// BTCPay's antiforgery filter accepts it via the
+    /// <c>RequestVerificationToken</c> header for AJAX requests.
+    /// Returns null when no token is present (e.g., on /register before
+    /// login).
+    /// </summary>
+    protected async Task<string?> GetAntiforgeryTokenAsync()
+    {
+        ArgumentNullException.ThrowIfNull(Page);
+        var locator = Page.Locator("input[name='__RequestVerificationToken']").First;
+        if (await locator.CountAsync() == 0) return null;
+        return await locator.GetAttributeAsync("value");
+    }
+
     public void Dispose()
     {
         Try(() => { Page?.CloseAsync().GetAwaiter().GetResult(); Page = null; });
