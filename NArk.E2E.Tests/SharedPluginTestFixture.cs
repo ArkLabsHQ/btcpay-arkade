@@ -26,6 +26,15 @@ public class SharedPluginTestFixture : IDisposable
     {
         if (ServerTester is not null) return;
 
+        // Shorten the Arkade plugin's intent-generation poll cadence for
+        // the suite. Production leaves this unset (NArk's 5-min default);
+        // tests that fund a wallet by importing a note need the redemption
+        // intent generated within seconds, not minutes. BTCPay's config
+        // reads BTCPAY_-prefixed env vars, so this lands as
+        // ARKINTENTPOLLSECONDS=5 in IConfiguration. Must be set before
+        // ServerTester.StartAsync builds the host config.
+        Environment.SetEnvironmentVariable("BTCPAY_ARKINTENTPOLLSECONDS", "5");
+
         var testDir = Path.Combine(Directory.GetCurrentDirectory(), "ArkadePluginTests");
         ServerTester = testInstance.CreateServerTester(testDir, newDb: true);
         // Load plugins in an isolated AssemblyLoadContext — matches the

@@ -189,6 +189,28 @@ public abstract class PlaywrightBaseTest : UnitTestBase, IDisposable
     }
 
     /// <summary>
+    /// Mint a credit note via the arkd admin CLI. Mirrors NNark's
+    /// <c>DockerHelper.CreateArkNote</c> but targets the right container
+    /// in our nigiri stack ("arkd"; NNark's helper hardcodes "ark").
+    /// </summary>
+    protected static async Task<string> CreateArkNoteAsync(long amountSats)
+    {
+        var result = await CliWrap.Buffered.BufferedCommandExtensions.ExecuteBufferedAsync(
+            CliWrap.Cli.Wrap("docker")
+                .WithArguments(new[]
+                {
+                    "exec", "arkd", "arkd", "note", "--amount", amountSats.ToString()
+                })
+                .WithValidation(CliWrap.CommandResultValidation.None));
+
+        if (!result.IsSuccess)
+            throw new InvalidOperationException(
+                $"arkd note --amount {amountSats} failed (exit={result.ExitCode}): " +
+                $"stdout={result.StandardOutput.Trim()}, stderr={result.StandardError.Trim()}");
+        return result.StandardOutput.Trim();
+    }
+
+    /// <summary>
     /// Reads the ASP.NET antiforgery token rendered into the current page
     /// as <c>&lt;input name="__RequestVerificationToken" value="..." /&gt;</c>.
     /// BTCPay's antiforgery filter accepts it via the

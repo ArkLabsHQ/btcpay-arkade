@@ -146,6 +146,20 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
             options.Threshold = TimeSpan.FromDays(1));
         services.AddSingleton<IIntentScheduler, SimpleIntentScheduler>();
 
+        // Intent-generation cadence override. NArk's IntentGenerationService
+        // falls back to a 5-minute poll when PollInterval is unset; that
+        // default governs how quickly imported notes and near-expiry VTXOs
+        // turn into batch intents. Left unset here so production behaviour
+        // is unchanged — operators (and the e2e suite) can shorten it via
+        // BTCPAY_ARKINTENTPOLLSECONDS without a code change.
+        services.AddOptions<IntentGenerationServiceOptions>()
+            .Configure<IConfiguration>((options, configuration) =>
+            {
+                var seconds = configuration.GetValue<int?>("ARKINTENTPOLLSECONDS");
+                if (seconds is > 0)
+                    options.PollInterval = TimeSpan.FromSeconds(seconds.Value);
+            });
+
         // Wallet provider
         services.AddSingleton<NArk.Abstractions.Wallets.IWalletProvider, NArk.Core.Wallet.DefaultWalletProvider>();
 
