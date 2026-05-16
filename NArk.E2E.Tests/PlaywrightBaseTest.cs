@@ -322,6 +322,42 @@ public abstract class PlaywrightBaseTest : UnitTestBase, IDisposable
             $"Wallet {storeId} balance never reached {minSats} sats (last: {last}).");
     }
 
+    /// <summary>
+    /// Calls POST /suggest-coins for the given destination type and amount
+    /// and returns the server-picked outpoints (txid:vout strings). Throws
+    /// if the endpoint reports an error (e.g. no spendable coins).
+    /// </summary>
+    protected async Task<List<string>> SuggestOutpointsAsync(
+        string storeId, string destinationType, long amountSats)
+    {
+        ArgumentNullException.ThrowIfNull(Page);
+        await GoToUrl($"/plugins/ark/stores/{storeId}/overview");
+        var token = (await GetAntiforgeryTokenAsync()) ?? "";
+        var resp = await Page.Context.APIRequest.PostAsync(
+            new Uri(ServerUri!, $"/plugins/ark/stores/{storeId}/suggest-coins").AbsoluteUri,
+            new APIRequestContextOptions
+            {
+                Headers = new Dictionary<string, string>
+                {
+                    ["Content-Type"] = "application/json",
+                    ["RequestVerificationToken"] = token
+                },
+                DataObject = new { destinationType, amountSats }
+            });
+
+        var raw = await resp.TextAsync();
+        if (!resp.Ok)
+            throw new InvalidOperationException($"suggest-coins returned {resp.Status}: {raw}");
+        using var doc = System.Text.Json.JsonDocument.Parse(raw);
+        var root = doc.RootElement;
+        if (root.TryGetProperty("error", out var err) && err.GetString() is { Length: > 0 } msg)
+            throw new InvalidOperationException($"suggest-coins error: {msg}");
+        if (!root.TryGetProperty("suggestedOutpoints", out var op) ||
+            op.ValueKind != System.Text.Json.JsonValueKind.Array)
+            return [];
+        return op.EnumerateArray().Select(x => x.GetString()!).Where(s => s is not null).ToList();
+    }
+
     public void Dispose()
     {
         Try(() => { Page?.CloseAsync().GetAwaiter().GetResult(); Page = null; });
