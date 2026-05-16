@@ -1,8 +1,5 @@
 using Microsoft.Playwright;
-using NArk.Tests.End2End.Common;
 using NBitcoin;
-using NBitcoin.DataEncoders;
-using NBitcoin.Secp256k1;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -233,26 +230,4 @@ public class WalletSetupTests : PlaywrightBaseTest
         Assert.True(resp.Ok, $"wallet-log endpoint returned {resp.Status}");
     }
 
-    /// <summary>
-    /// Generate a valid bech32-encoded nsec (Nostr private key) using a
-    /// fresh random ECPrivKey. Mirrors WalletFactory.DecodeNsecPrivKey's
-    /// inverse: SquashBytes + StrictLength=false.
-    /// </summary>
-    private static string GenerateRandomNsec()
-    {
-        Span<byte> keyBytes = stackalloc byte[32];
-        Random.Shared.NextBytes(keyBytes);
-        // Ensure the bytes form a valid secp256k1 scalar
-        if (!ECPrivKey.TryCreate(keyBytes, out _))
-        {
-            // Vanishingly unlikely; just use a known-valid scalar
-            keyBytes.Clear();
-            keyBytes[31] = 0x01;
-        }
-
-        var encoder = Encoders.Bech32("nsec");
-        encoder.StrictLength = false;
-        encoder.SquashBytes = true;
-        return encoder.EncodeData(keyBytes.ToArray(), Bech32EncodingType.BECH32);
-    }
 }

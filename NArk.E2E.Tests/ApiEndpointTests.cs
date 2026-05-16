@@ -1,8 +1,6 @@
 using System.Text.Json;
 using Microsoft.Playwright;
 using NBitcoin;
-using NBitcoin.DataEncoders;
-using NBitcoin.Secp256k1;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -212,18 +210,4 @@ public class ApiEndpointTests : PlaywrightBaseTest
         Assert.Equal(nsec, mnemonic);
     }
 
-    private static string GenerateRandomNsec()
-    {
-        Span<byte> keyBytes = stackalloc byte[32];
-        Random.Shared.NextBytes(keyBytes);
-        if (!ECPrivKey.TryCreate(keyBytes, out _))
-        {
-            keyBytes.Clear();
-            keyBytes[31] = 0x01;
-        }
-        var encoder = Encoders.Bech32("nsec");
-        encoder.StrictLength = false;
-        encoder.SquashBytes = true;
-        return encoder.EncodeData(keyBytes.ToArray(), Bech32EncodingType.BECH32);
-    }
 }

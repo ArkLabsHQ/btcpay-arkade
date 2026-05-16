@@ -1,11 +1,5 @@
 using System.Text.Json;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Playwright;
-using NArk.Core.Contracts;
-using NArk.Core.Services;
-using NBitcoin;
-using NBitcoin.DataEncoders;
-using NBitcoin.Secp256k1;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -205,66 +199,7 @@ public class SpendingTests : PlaywrightBaseTest
         return op.EnumerateArray().Select(x => x.GetString()!).Where(s => s is not null).ToList();
     }
 
-    private async Task FundWalletViaNoteAsync(string walletId, long amountSats)
-    {
-        var note = await CreateArkNoteAsync(amountSats);
-        Assert.False(string.IsNullOrEmpty(note), "arkd note CLI returned empty");
-        var sp = _fixture.ServerTester!.PayTester.ServiceProvider;
-        var contractService = sp.GetRequiredService<IContractService>();
-        await contractService.ImportContract(walletId, ArkNoteContract.Parse(note));
-    }
-
-    private async Task<string?> GetStoreWalletIdAsync(string storeId)
-    {
-        ArgumentNullException.ThrowIfNull(Page);
-        await GoToUrl($"/plugins/ark/stores/{storeId}/overview");
-        return await Page.GetAttributeAsync(".truncate-center-id", "data-text");
-    }
-
-    private async Task<long> PollForBalanceAsync(string storeId, long minSats, TimeSpan? timeout = null)
-    {
-        ArgumentNullException.ThrowIfNull(Page);
-        var deadline = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromMinutes(3));
-        long last = 0;
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            await GoToUrl($"/plugins/ark/stores/{storeId}/overview");
-            last = await ReadAvailableBalanceSatsAsync();
-            if (last >= minSats) return last;
-            await Task.Delay(3_000);
-        }
-        throw new TimeoutException(
-            $"Wallet {storeId} balance never reached {minSats} sats (last: {last}).");
-    }
-
-    private async Task<long> ReadAvailableBalanceSatsAsync()
-    {
-        ArgumentNullException.ThrowIfNull(Page);
-        var locator = Page.Locator("[data-testid='wallet-balance']").First;
-        if (await locator.CountAsync() == 0) return 0;
-        var text = await locator.InnerTextAsync();
-        var match = System.Text.RegularExpressions.Regex.Match(text, @"\d+(?:[.,]\d+)?");
-        if (!match.Success) return 0;
-        if (!decimal.TryParse(
-                match.Value.Replace(",", "."),
-                System.Globalization.NumberStyles.Any,
-                System.Globalization.CultureInfo.InvariantCulture,
-                out var btc)) return 0;
-        return (long)(btc * 100_000_000m);
-    }
-
-    private static string GenerateRandomNsec()
-    {
-        Span<byte> keyBytes = stackalloc byte[32];
-        Random.Shared.NextBytes(keyBytes);
-        if (!ECPrivKey.TryCreate(keyBytes, out _))
-        {
-            keyBytes.Clear();
-            keyBytes[31] = 0x01;
-        }
-        var encoder = Encoders.Bech32("nsec");
-        encoder.StrictLength = false;
-        encoder.SquashBytes = true;
-        return encoder.EncodeData(keyBytes.ToArray(), Bech32EncodingType.BECH32);
-    }
+    private Task FundWalletViaNoteAsync(string walletId, long amountSats) =>
+        FundWalletViaNoteAsync(
+            _fixture.ServerTester!.PayTester.ServiceProvider, walletId, amountSats);
 }

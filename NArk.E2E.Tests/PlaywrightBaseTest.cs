@@ -1,6 +1,11 @@
 using BTCPayServer.Tests;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Playwright;
+using NArk.Core.Contracts;
+using NArk.Core.Services;
 using NBitcoin;
+using NBitcoin.DataEncoders;
+using NBitcoin.Secp256k1;
 using Xunit.Abstractions;
 
 namespace NArk.E2E.Tests;
@@ -224,6 +229,97 @@ public abstract class PlaywrightBaseTest : UnitTestBase, IDisposable
         var locator = Page.Locator("input[name='__RequestVerificationToken']").First;
         if (await locator.CountAsync() == 0) return null;
         return await locator.GetAttributeAsync("value");
+    }
+
+    /// <summary>
+    /// Generates a valid bech32-encoded nsec (Nostr private key) from a
+    /// fresh random secp256k1 scalar. Importing this through the wizard
+    /// yields a SingleKey wallet with a deterministic Arkade address that
+    /// the overview page renders.
+    /// </summary>
+    protected static string GenerateRandomNsec()
+    {
+        Span<byte> keyBytes = stackalloc byte[32];
+        Random.Shared.NextBytes(keyBytes);
+        if (!ECPrivKey.TryCreate(keyBytes, out _))
+        {
+            keyBytes.Clear();
+            keyBytes[31] = 0x01;
+        }
+        var encoder = Encoders.Bech32("nsec");
+        encoder.StrictLength = false;
+        encoder.SquashBytes = true;
+        return encoder.EncodeData(keyBytes.ToArray(), Bech32EncodingType.BECH32);
+    }
+
+    /// <summary>
+    /// Resolves the BTCPay store's configured Arkade walletId by scraping
+    /// the truncate-center element on the overview page.
+    /// </summary>
+    protected async Task<string?> GetStoreWalletIdAsync(string storeId)
+    {
+        ArgumentNullException.ThrowIfNull(Page);
+        await GoToUrl($"/plugins/ark/stores/{storeId}/overview");
+        return await Page.GetAttributeAsync(".truncate-center-id", "data-text");
+    }
+
+    /// <summary>
+    /// Funds a wallet by minting an arkd credit note and importing it as
+    /// an <see cref="ArkNoteContract"/> through the plugin's in-process
+    /// <see cref="IContractService"/> (resolved from the running BTCPay's
+    /// service provider). arkd's indexer then reports the note as a VTXO;
+    /// the redemption intent is generated on the suite's shortened poll.
+    /// </summary>
+    protected async Task FundWalletViaNoteAsync(
+        IServiceProvider serviceProvider, string walletId, long amountSats)
+    {
+        var note = await CreateArkNoteAsync(amountSats);
+        if (string.IsNullOrEmpty(note))
+            throw new InvalidOperationException("arkd note CLI returned empty");
+        var contractService = serviceProvider.GetRequiredService<IContractService>();
+        await contractService.ImportContract(walletId, ArkNoteContract.Parse(note));
+    }
+
+    /// <summary>
+    /// Reads [data-testid='wallet-balance'] from the current overview
+    /// page. The plugin renders available balance as a BTC-denominated
+    /// string (DisplayFormatter.Currency); the first decimal in the text
+    /// is parsed and ×1e8 to sats.
+    /// </summary>
+    protected async Task<long> ReadAvailableBalanceSatsAsync()
+    {
+        ArgumentNullException.ThrowIfNull(Page);
+        var locator = Page.Locator("[data-testid='wallet-balance']").First;
+        if (await locator.CountAsync() == 0) return 0;
+        var text = await locator.InnerTextAsync();
+        var match = System.Text.RegularExpressions.Regex.Match(text, @"\d+(?:[.,]\d+)?");
+        if (!match.Success) return 0;
+        if (!decimal.TryParse(
+                match.Value.Replace(",", "."),
+                System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var btc)) return 0;
+        return (long)(btc * 100_000_000m);
+    }
+
+    /// <summary>
+    /// Polls the overview balance until it reaches <paramref name="minSats"/>
+    /// or the timeout elapses. Returns the last observed balance on success.
+    /// </summary>
+    protected async Task<long> PollForBalanceAsync(
+        string storeId, long minSats, TimeSpan? timeout = null)
+    {
+        var deadline = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromMinutes(3));
+        long last = 0;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            await GoToUrl($"/plugins/ark/stores/{storeId}/overview");
+            last = await ReadAvailableBalanceSatsAsync();
+            if (last >= minSats) return last;
+            await Task.Delay(3_000);
+        }
+        throw new TimeoutException(
+            $"Wallet {storeId} balance never reached {minSats} sats (last: {last}).");
     }
 
     public void Dispose()
