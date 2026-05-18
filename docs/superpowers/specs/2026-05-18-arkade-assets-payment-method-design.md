@@ -3,7 +3,31 @@
 **Date:** 2026-05-18
 **Mode:** autonomous overnight session (no user blocking)
 **Builds on:** PR #25 `quick-beacon` (`docs/plans/2026-02-15-arkade-assets-receive-send.md`)
-**Status:** living doc — research in progress, decisions recorded as made
+**Status:** implemented — see "Implemented" section at end
+
+## Implemented (plugin PR #55, NNark PR #94)
+
+Branch `feat/arkade-assets-payment` off current `master`; supersedes #25
+(closed). NNark submodule pinned at `5509d8a` (`assets-parity` / PR #94).
+
+| Slice | Commit(s) | What |
+|---|---|---|
+| NNark GAP B+C | NNark `8c0fe77`, `5509d8a` | deterministic group ordering + ts-sdk fixtures; 393/393; README determinism note |
+| Balances | `54e3858` | per-asset spendable balances on dashboard (`AssetMetadataService`) |
+| Config | `37cd63a` | `ArkadeAssetAcceptance` (additive, serialization-safe) + `IsValid` |
+| Rate resolver | `66bcd2b`, `71a2f5a` | `AssetRateResolver` (SatsPerUnit self-contained; FixedReferenceCurrency via store `RateFetcher`); round-up never-underpay; 11 unit tests; fixed a "100"→"1" format bug |
+| Settings UI | `ca31f1e` | overview row + modal; save/disable commands; indexer existence check |
+| Checkout | `b1370fc` | prompt resolves asset due; "Pay {amount} {ticker}" notice |
+| Settlement | `1894e4f` | listener settles asset invoice on asset arrival (BTC credited ∝ asset received, capped 100%); stray BTC VTXO ignored |
+| E2E | `82a4f42` | config modal + server-validation round-trip tests |
+
+**Not built (decided):** GAP A (mint-new-control-asset-same-tx) — ts-sdk
+canonical is id-only; rust-only convenience, arkd-unverifiable. Full
+pay-with-asset settlement e2e (needs issued-asset funding infra) —
+money math is unit-tested instead.
+
+---
+_original research notes below_
 
 ## Goal (from user)
 
