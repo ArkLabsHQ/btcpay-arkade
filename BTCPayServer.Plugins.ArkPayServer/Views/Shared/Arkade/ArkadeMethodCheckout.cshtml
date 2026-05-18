@@ -15,6 +15,15 @@
 
 <template id="@ArkadePlugin.CheckoutBodyComponentName">
     <div class="payment-box">
+        <div v-if="assetAcceptance" class="alert alert-info text-center" data-testid="asset-acceptance-notice">
+            <div class="fw-semibold">Pay with {{ assetAcceptance.name || assetAcceptance.ticker || 'Arkade asset' }}</div>
+            <div class="fs-5" data-testid="asset-amount-due">
+                {{ assetAcceptance.amountDue }}<span v-if="assetAcceptance.ticker"> {{ assetAcceptance.ticker }}</span>
+            </div>
+            <div class="small text-muted">
+                Send this amount of the asset to the Ark address below. The bitcoin amount shown is the reference value only.
+            </div>
+        </div>
         <div v-if="model.invoiceBitcoinUrlQR" class="qr-container clipboard-button" :data-qr-value="model.invoiceBitcoinUrlQR" :data-clipboard="model.invoiceBitcoinUrl" data-clipboard-confirm-element="#Address_@Model.PaymentMethodId [data-clipboard]" data-testid="arkade-qr">
             <div>
                 <qrcode :value="model.invoiceBitcoinUrlQR" tag="div" :options="qrOptions" />
@@ -66,7 +75,8 @@
                 nfcAmount: 0,
                 nfcSubmitting: false,
                 shouldShowLightning: @Safe.Json(shouldShowLightning),
-                hasBoardingAddress: @Safe.Json(Model.AdditionalData.ContainsKey("hasBoardingAddress") && (bool)Model.AdditionalData["hasBoardingAddress"])
+                hasBoardingAddress: @Safe.Json(Model.AdditionalData.ContainsKey("hasBoardingAddress") && (bool)Model.AdditionalData["hasBoardingAddress"]),
+                assetAcceptance: @Safe.Json(Model.AdditionalData.TryGetValue("assetAcceptance", out var aa) ? aa : null)
             };
         },
         computed: {
