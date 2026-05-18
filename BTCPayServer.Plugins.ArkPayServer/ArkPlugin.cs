@@ -260,6 +260,10 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
         services.AddSingleton<ArkadeSpendingService>();
 
+        // Caches Arkade asset metadata (name/ticker/decimals) from the
+        // indexer for balance display and checkout.
+        services.AddSingleton<AssetMetadataService>();
+
         services.AddSingleton<ISweepPolicy, DestinationSweepPolicy>();
 
         services.AddSingleton<ArkadeCheckoutModelExtension>();

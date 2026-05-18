@@ -72,6 +72,7 @@ public class ArkController(
     IIntentStorage intentStorage,
     IWalletProvider walletProvider,
     ISpendingService arkadeSpender,
+    AssetMetadataService assetMetadataService,
     IFeeEstimator feeEstimator,
     IContractService contractService,
     IBitcoinBlockchain bitcoinTimeChainProvider,
@@ -2909,6 +2910,31 @@ public class ArkController(
             .Where(coin => !coin.Unrolled && lockedSet.Contains(coin.Outpoint))
             .Sum(coin => coin.Amount.Satoshi);
 
+        // Aggregate Arkade asset holdings across spendable (non-recoverable,
+        // non-boarding) coins. Asset data rides on VTXOs via the SDK
+        // (ArkCoin.Assets); enrich each with cached indexer metadata.
+        var assetTotals = new Dictionary<string, ulong>();
+        foreach (var coin in coinsByRecoverableStatus[false].Where(c => !c.Unrolled))
+        {
+            if (coin.Assets is not { Count: > 0 } assets) continue;
+            foreach (var a in assets)
+                assetTotals[a.AssetId] = assetTotals.GetValueOrDefault(a.AssetId) + a.Amount;
+        }
+
+        var assetBalances = await Task.WhenAll(assetTotals.Select(async kv =>
+        {
+            var details = await assetMetadataService.GetAssetDetailsAsync(kv.Key, cancellationToken);
+            return new AssetBalanceViewModel
+            {
+                AssetId = kv.Key,
+                Name = assetMetadataService.GetName(details),
+                Ticker = assetMetadataService.GetTicker(details),
+                Decimals = assetMetadataService.GetDecimals(details),
+                Amount = kv.Value,
+                FormattedAmount = assetMetadataService.FormatAmount(kv.Value, details),
+            };
+        }));
+
         return new ArkBalancesViewModel
         {
             AvailableBalance = availableBalance - lockedBalance,
@@ -2916,6 +2942,9 @@ public class ArkController(
             RecoverableBalance = recoverableBalance,
             UnspendableBalance = unspendableBalance,
             BoardingBalance = boardingBalance,
+            AssetBalances = assetBalances
+                .OrderBy(a => a.Ticker ?? a.AssetId, StringComparer.OrdinalIgnoreCase)
+                .ToList(),
         };
     }
 
