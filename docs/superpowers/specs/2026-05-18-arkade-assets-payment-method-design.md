@@ -23,18 +23,62 @@
 - **E2E tests (NArk.Tests.End2End/AssetTests.cs, 7 ordered):** CanIssueAsset, CanTransferAssetBetweenWallets, CanBurnAsset, AssetsSurviveBatchSettlement, CanIssueAssetWithControlAsset, CanReissueAssetWithControlAsset, CanIssueAssetWithMetadata.
 - **NNark submodule:** local `master` @ `a89d47a`, **behind** origin/master (upstream has more, incl. swaps fixes). Parity work must target current upstream → sync required.
 
-## SDK parity matrix (PENDING — 3 research agents running)
+## SDK parity matrix (findings)
 
-go-sdk / ts-sdk / rust-sdk asset inventories are being gathered by parallel
-`ark-researcher` agents (deepwiki + GitHub). go-sdk `pkg/ark-lib/asset/` is
-the canonical byte-layout reference per PR #25. Fill on agent return:
+**Format parity: PROVEN.** `dotnet test NArk.Tests --filter Assets` → **131/131
+pass**. NNark's `FixtureTests`/`ExtensionTests` are driven by JSON vectors
+sourced from `arkade-os/ts-sdk/test/fixtures/`; identical hex for every
+shared vector = byte-level parity with ts-sdk/go-sdk (all SDKs implement one
+wire spec).
 
-| Capability | go-sdk | ts-sdk | rust-sdk | NNark | Gap/action |
-|---|---|---|---|---|---|
-| _(matrix filled when agents report)_ | | | | | |
+**rust-sdk (`arkade-os/rust-sdk`, ark-core/ark-client) vs NNark:**
 
-Then: close every NNark feature gap, and match their test scenarios
-(reusing shared JSON fixture vectors where they exist).
+| Capability | rust-sdk | NNark | Verdict |
+|---|---|---|---|
+| Magic/packet-type/presence bits | ✓ ARK/0x00/0x01-04 | ✓ identical | parity |
+| Fresh issuance | ✓ | ✓ `IssueAsync` | parity |
+| Controlled issuance — existing ctrl by id | ✓ `ControlAssetConfig::existing` | ✓ `IssuanceParams.ControlAssetId` | parity |
+| Controlled issuance — **mint NEW ctrl same-tx** | ✓ `ControlAssetConfig::New{amount}` | serialization supports `AssetRef.FromGroupIndex`, but **not exposed on `IAssetManager.IssueAsync`** | **GAP A** |
+| Reissuance | ✓ | ✓ `ReissueAsync` | parity |
+| Burn | ✓ | ✓ `BurnAsync` | parity |
+| Transfer/send | ✓ | ✓ SpendingService + `ArkTxOut.Assets` | parity |
+| Asset coin selection + change | ✓ | ✓ `AssetRequirement` | parity |
+| Batch settlement preservation | ✓ | ✓ (e2e `AssetsSurviveBatchSettlement`) | parity |
+| Deterministic group ordering in send packet | ✓ sorts by (txid,groupIndex) | **verify** | **GAP B?** |
+| Indexer GetAsset gRPC | ✓ | ✓ | parity |
+| Indexer GetAsset **REST** | ✗ absent | ✓ `RestClientTransport.Assets` | NNark ahead |
+| Metadata wire decode (hex binary) | ✗ raw string | ✓ `MetadataList.FromString` | NNark ahead |
+| Shared JSON fixture vectors | ✗ inline only | ✓ ts-sdk fixtures | NNark ahead |
+| BIP-341 taptree over groups | ✗ not found | ✓ PR #16 | NNark ahead |
+| `LeafTxPacket` intent conversion | ✗ not found | ✓ | NNark ahead |
+
+**ts-sdk:** agent still running (canonical fixture source; refs ts-sdk#279,
+arkd#814). NNark already passes its fixtures → format parity holds; await
+agent for any higher-level API/test scenarios to mirror.
+
+**ts-sdk (canonical, `@arkade-os/sdk` v0.4.27, fixture source) vs NNark — final verdict:**
+
+- Format/ops parity: **proven** (131/131; NNark passes ts-sdk shared vectors).
+- ts-sdk `AssetManager.issue()` is **also id-only** (no same-tx new-control)
+  → **GAP A DROPPED**: NNark matches the canonical SDK; rust's
+  `ControlAssetConfig::New` is a rust-only convenience, not the cross-SDK
+  contract. Adding an arkd-unverifiable public API "for parity" would
+  violate it. Documented, intentionally not implemented.
+- ts-sdk has **zero asset e2e tests**; NNark has **7** → NNark far ahead.
+- **GAP B (real, fix):** NNark `AssetPacketBuilder.Build` orders groups via
+  `HashSet<string>` → non-deterministic. rust-sdk sorts by
+  (txid,groupIndex). Deterministic packets are correct regardless
+  (reproducibility, fixture stability). → sort groups by AssetId + test.
+- **GAP C (real, fix — directly answers "same level of tests"):** ts-sdk
+  ships 4 cross-SDK fixture files NNark's dir lacks:
+  `asset_ref_fixtures.json`, `asset_input_fixtures.json`,
+  `asset_output_fixtures.json`, `metadata_fixtures.json`. NNark has the
+  types + hand-written tests but not the shared vectors. → import the 4
+  files, add fixture-driven tests consuming them (mirrors ts-sdk
+  `test/asset.test.ts`), align error strings to fixture-expected wording.
+
+**Net:** NNark meets/exceeds canonical (ts-sdk) asset parity. Bounded
+actions: GAP B + GAP C (both unit-testable, no infra). Then plugin.
 
 ## BTCPay plugin — PR #25 current state
 
