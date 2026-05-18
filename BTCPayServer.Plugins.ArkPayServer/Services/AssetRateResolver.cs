@@ -130,12 +130,14 @@ public class AssetRateResolver(RateFetcher rateFetcher, DefaultRulesCollection d
         var baseUnits = (ulong)baseUnitsExact;
 
         var actualDisplay = baseUnitsExact / scale;
-        var formatted = actualDisplay.ToString(
-            "0." + new string('0', Math.Clamp(assetDecimals, 0, 18)),
-            System.Globalization.CultureInfo.InvariantCulture)
-            .TrimEnd('0').TrimEnd('.');
-        if (formatted.Length == 0)
-            formatted = "0";
+        // Up to `decimals` fractional digits, no trailing zeros, no trailing
+        // dot, and always at least the integer part (so 100 → "100", not
+        // "1"; 0.000001 → "0.000001").
+        var formatted = assetDecimals == 0
+            ? baseUnits.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : actualDisplay.ToString(
+                "0." + new string('#', Math.Clamp(assetDecimals, 1, 18)),
+                System.Globalization.CultureInfo.InvariantCulture);
 
         return new AssetAmountDue(baseUnits, actualDisplay, formatted, rateDescription);
     }
