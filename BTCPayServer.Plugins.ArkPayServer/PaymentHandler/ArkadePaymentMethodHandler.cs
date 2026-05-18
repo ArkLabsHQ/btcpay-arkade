@@ -1,5 +1,6 @@
 using BTCPayServer.Data;
 using BTCPayServer.Payments;
+using BTCPayServer.Plugins.ArkPayServer.Services;
 using BTCPayServer.Services;
 using NArk.Core;
 using NArk.Abstractions.Wallets;
@@ -17,7 +18,9 @@ public class ArkadePaymentMethodHandler(
     IContractService contractService,
     IClientTransport clientTransport,
     BoardingUtxoSyncService boardingUtxoSyncService,
-    IWalletStorage walletStorage
+    IWalletStorage walletStorage,
+    AssetMetadataService assetMetadataService,
+    AssetRateResolver assetRateResolver
 ) : IPaymentMethodHandler
 {
     public PaymentMethodId PaymentMethodId => ArkadePlugin.ArkadePaymentMethodId;
@@ -103,6 +106,47 @@ public class ArkadePaymentMethodHandler(
 
                 // Trigger sync so NBXplorer starts tracking this boarding address immediately
                 _ = Task.Run(() => boardingUtxoSyncService.SyncAsync(CancellationToken.None));
+        }
+
+        // Arkade asset acceptance: when the store prices this invoice in a
+        // merchant-accepted asset, compute the asset amount due and surface
+        // it on the prompt. The BTC destination/expiry plumbing above is
+        // untouched — the asset amount is an additional, displayed
+        // settlement requirement against the same Ark address.
+        if (arkadePaymentMethodConfig.AssetAcceptance is { } acceptance)
+        {
+            if (!acceptance.IsValid(out var cfgErr))
+                throw new PaymentMethodUnavailableException($"Asset acceptance misconfigured: {cfgErr}");
+
+            var assetDetails = await assetMetadataService.GetAssetDetailsAsync(
+                acceptance.AssetId, CancellationToken.None);
+            var assetDecimals = assetMetadataService.GetDecimals(assetDetails);
+            var dueSats = Money.Coins(context.Prompt.Calculate().Due).Satoshi;
+
+            AssetAmountDue assetDue;
+            try
+            {
+                assetDue = await assetRateResolver.ResolveAsync(
+                    context.Store, acceptance, dueSats, assetDecimals, CancellationToken.None);
+            }
+            catch (InvalidOperationException ex)
+            {
+                throw new PaymentMethodUnavailableException($"Asset pricing unavailable: {ex.Message}");
+            }
+
+            context.Logs.Write(
+                $"Asset {acceptance.AssetId}: {assetDue.RateDescription}",
+                InvoiceEventData.EventSeverity.Info);
+
+            details = details with
+            {
+                AssetId = acceptance.AssetId,
+                AssetName = assetMetadataService.GetName(assetDetails),
+                AssetTicker = assetMetadataService.GetTicker(assetDetails),
+                AssetDecimals = assetDecimals,
+                AssetBaseUnitsDue = assetDue.BaseUnits,
+                AssetFormattedAmountDue = assetDue.FormattedAmount
+            };
         }
 
         context.Prompt.Details = JObject.FromObject(details, Serializer);

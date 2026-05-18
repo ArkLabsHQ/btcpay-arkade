@@ -264,6 +264,11 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         // indexer for balance display and checkout.
         services.AddSingleton<AssetMetadataService>();
 
+        // Prices a merchant-accepted Arkade asset against an invoice's BTC
+        // amount due, routing the reference-currency leg through BTCPay's
+        // own rate pipeline.
+        services.AddSingleton<AssetRateResolver>();
+
         services.AddSingleton<ISweepPolicy, DestinationSweepPolicy>();
 
         services.AddSingleton<ArkadeCheckoutModelExtension>();
