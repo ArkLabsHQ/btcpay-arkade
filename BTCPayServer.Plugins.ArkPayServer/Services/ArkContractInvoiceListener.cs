@@ -123,6 +123,36 @@ public class ArkContractInvoiceListener(
             if (inv is null)
                 return;
 
+            // Asset acceptance: when this invoice is priced in an Arkade
+            // asset it settles on the *asset* arriving at the address, not
+            // on the carrier VTXO's (dust) sat value. Credit BTC in
+            // proportion to the asset received so BTCPay's accounting
+            // (partial / settled / overpaid) stays correct.
+            decimal? assetCreditBtc = null;
+            var arkPrompt = inv.GetPaymentPrompt(ArkadePlugin.ArkadePaymentMethodId);
+            if (arkPrompt?.Details is not null)
+            {
+                var promptDetails = arkadePaymentMethodHandler.ParsePaymentPromptDetails(arkPrompt.Details);
+                if (!string.IsNullOrEmpty(promptDetails.AssetId) && promptDetails.AssetBaseUnitsDue > 0)
+                {
+                    var received = vtxo.Assets?
+                        .Where(a => string.Equals(a.AssetId, promptDetails.AssetId, StringComparison.OrdinalIgnoreCase))
+                        .Aggregate(0UL, (sum, a) => sum + a.Amount) ?? 0UL;
+                    if (received == 0UL)
+                    {
+                        // Asset invoice, but this VTXO carries none of the
+                        // expected asset (e.g. a stray BTC VTXO). Don't
+                        // credit its sats — that would wrongly settle.
+                        return;
+                    }
+                    var ratio = Math.Min(1m, (decimal)received / promptDetails.AssetBaseUnitsDue);
+                    assetCreditBtc = arkPrompt.Calculate().TotalDue * ratio;
+                    logger.LogInformation(
+                        "Invoice {invoiceId}: asset {assetId} received {received} (due {due}) → crediting {btc} BTC",
+                        inv.Id, promptDetails.AssetId, received, promptDetails.AssetBaseUnitsDue, assetCreditBtc);
+                }
+            }
+
             // Boarding payments: Processing until confirmed, then Settled
             var isConfirmed = !isBoarding || vtxo.Metadata?.GetValueOrDefault("Confirmed") == "True";
 
@@ -135,7 +165,7 @@ public class ArkContractInvoiceListener(
                 Script = vtxo.Script,
                 SeenAt = vtxo.CreatedAt
             };
-            await HandlePaymentData(vtxoEntity, inv, arkadePaymentMethodHandler, paymentDestination, isConfirmed, isBoarding);
+            await HandlePaymentData(vtxoEntity, inv, arkadePaymentMethodHandler, paymentDestination, isConfirmed, isBoarding, assetCreditBtc);
         }
         catch (Exception ex)
         {
@@ -153,7 +183,7 @@ public class ArkContractInvoiceListener(
         return Task.CompletedTask;
     }
     
-    private async Task HandlePaymentData(VtxoEntity vtxo, InvoiceEntity invoice, ArkadePaymentMethodHandler handler, string? destination = null, bool isConfirmed = true, bool isBoarding = false)
+    private async Task HandlePaymentData(VtxoEntity vtxo, InvoiceEntity invoice, ArkadePaymentMethodHandler handler, string? destination = null, bool isConfirmed = true, bool isBoarding = false, decimal? amountOverrideBtc = null)
     {
         var pmi = ArkadePlugin.ArkadePaymentMethodId;
         var details = new ArkadePaymentData($"{vtxo.TransactionId}:{vtxo.TransactionOutputIndex}", destination, isBoarding);
@@ -171,7 +201,7 @@ public class ArkContractInvoiceListener(
             var paymentData = new PaymentData
             {
                 Status = status,
-                Amount = Money.Satoshis(vtxo.Amount).ToDecimal(MoneyUnit.BTC),
+                Amount = amountOverrideBtc ?? Money.Satoshis(vtxo.Amount).ToDecimal(MoneyUnit.BTC),
                 Created = vtxo.SeenAt,
                 Id = details.Outpoint,
                 Currency = "BTC",
