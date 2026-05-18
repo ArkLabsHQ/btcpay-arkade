@@ -193,25 +193,51 @@ public abstract class PlaywrightBaseTest : UnitTestBase, IDisposable
         return storeId;
     }
 
+    private static string? _resolvedArkdContainer;
+
     /// <summary>
-    /// Mint a credit note via the arkd admin CLI. Mirrors NNark's
-    /// <c>DockerHelper.CreateArkNote</c> but targets the right container
-    /// in our nigiri stack ("arkd"; NNark's helper hardcodes "ark").
+    /// Resolves the arkd container name. nigiri's own lib/env.sh names it
+    /// "arkd" when a custom ARKD_IMAGE is supplied (typical local dev) and
+    /// "ark" for the built-in image (CI). Probe both with `docker inspect`
+    /// and cache the first that exists rather than hardcoding either.
+    /// </summary>
+    protected static async Task<string> ResolveArkdContainerAsync()
+    {
+        if (_resolvedArkdContainer is not null) return _resolvedArkdContainer;
+        foreach (var candidate in new[] { "arkd", "ark" })
+        {
+            var probe = await CliWrap.Buffered.BufferedCommandExtensions.ExecuteBufferedAsync(
+                CliWrap.Cli.Wrap("docker")
+                    .WithArguments(new[] { "inspect", "-f", "{{.Name}}", candidate })
+                    .WithValidation(CliWrap.CommandResultValidation.None));
+            if (probe.IsSuccess)
+                return _resolvedArkdContainer = candidate;
+        }
+        throw new InvalidOperationException(
+            "Could not find an arkd container (tried 'arkd' and 'ark'). Is the nigiri stack up?");
+    }
+
+    /// <summary>
+    /// Mint a credit note via the arkd admin CLI. The container name is
+    /// resolved dynamically (see <see cref="ResolveArkdContainerAsync"/>);
+    /// the in-container binary is always <c>arkd</c> regardless of name.
     /// </summary>
     protected static async Task<string> CreateArkNoteAsync(long amountSats)
     {
+        var container = await ResolveArkdContainerAsync();
         var result = await CliWrap.Buffered.BufferedCommandExtensions.ExecuteBufferedAsync(
             CliWrap.Cli.Wrap("docker")
                 .WithArguments(new[]
                 {
-                    "exec", "arkd", "arkd", "note", "--amount", amountSats.ToString()
+                    "exec", container, "arkd", "note", "--amount", amountSats.ToString()
                 })
                 .WithValidation(CliWrap.CommandResultValidation.None));
 
         if (!result.IsSuccess)
             throw new InvalidOperationException(
-                $"arkd note --amount {amountSats} failed (exit={result.ExitCode}): " +
-                $"stdout={result.StandardOutput.Trim()}, stderr={result.StandardError.Trim()}");
+                $"arkd note --amount {amountSats} (container '{container}') failed " +
+                $"(exit={result.ExitCode}): stdout={result.StandardOutput.Trim()}, " +
+                $"stderr={result.StandardError.Trim()}");
         return result.StandardOutput.Trim();
     }
 
