@@ -1,4 +1,5 @@
 using BTCPayServer.Plugins.ArkPayServer.Data;
+using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using NArk.Abstractions.Contracts;
 using NArk.Abstractions.VTXOs;
 using NArk.Abstractions.Wallets;
@@ -20,6 +21,17 @@ public class StoreOverviewViewModel
     public bool AllowSubDustAmounts { get; set; }
     public bool BoardingEnabled { get; set; }
     public long MinBoardingAmountSats { get; set; }
+
+    // --- Arkade asset acceptance (settle invoices in a merchant-declared
+    // Arkade asset at a merchant-declared rate). Disabled = BTC-VTXO only.
+    public bool AssetAcceptanceEnabled { get; set; }
+    public string? AssetAcceptanceAssetId { get; set; }
+    public AssetRateMode AssetAcceptanceRateMode { get; set; } = AssetRateMode.FixedReferenceCurrency;
+    public decimal AssetAcceptancePricePerUnit { get; set; }
+    public string? AssetAcceptanceReferenceCurrency { get; set; }
+
+    /// <summary>Resolved display name/ticker for the accepted asset, if known.</summary>
+    public string? AssetAcceptanceAssetLabel { get; set; }
 
     /// <summary>
     /// The type of wallet (SingleKey/legacy or HD/mnemonic).

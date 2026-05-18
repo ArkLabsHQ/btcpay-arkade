@@ -350,6 +350,16 @@ public class ArkController(
             // Silently ignore - swaps section will show empty
         }
 
+        // Resolve a friendly label for the accepted asset (id → name/ticker)
+        string? assetAcceptanceLabel = null;
+        if (config.AssetAcceptance is { } acceptanceCfg)
+        {
+            var ad = await assetMetadataService.GetAssetDetailsAsync(acceptanceCfg.AssetId, cancellationToken);
+            assetAcceptanceLabel = assetMetadataService.GetName(ad)
+                ?? assetMetadataService.GetTicker(ad)
+                ?? acceptanceCfg.AssetId;
+        }
+
         return View(new StoreOverviewViewModel
         {
             StoreId = store!.Id,
@@ -363,6 +373,12 @@ public class ArkController(
             AllowSubDustAmounts = config.AllowSubDustAmounts,
             BoardingEnabled = config.BoardingEnabled,
             MinBoardingAmountSats = config.MinBoardingAmountSats,
+            AssetAcceptanceEnabled = config.AssetAcceptance is not null,
+            AssetAcceptanceAssetId = config.AssetAcceptance?.AssetId,
+            AssetAcceptanceRateMode = config.AssetAcceptance?.RateMode ?? AssetRateMode.FixedReferenceCurrency,
+            AssetAcceptancePricePerUnit = config.AssetAcceptance?.PricePerUnit ?? 0m,
+            AssetAcceptanceReferenceCurrency = config.AssetAcceptance?.ReferenceCurrency,
+            AssetAcceptanceAssetLabel = assetAcceptanceLabel,
             Wallet = wallet?.Secret,
             WalletType = wallet?.WalletType ?? WalletType.SingleKey,
             CanManagePrivateKeys = canManagePrivateKeys,
@@ -2030,6 +2046,49 @@ public class ArkController(
             store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], newConfig);
             await storeRepository.UpdateStore(store);
             return RedirectWithSuccess(nameof(StoreOverview), "Boarding disabled.", new { storeId });
+        }
+
+        if (command == "save-asset-acceptance")
+        {
+            var assetId = model.AssetAcceptanceAssetId?.Trim();
+            var referenceCurrency = string.IsNullOrWhiteSpace(model.AssetAcceptanceReferenceCurrency)
+                ? null
+                : model.AssetAcceptanceReferenceCurrency.Trim().ToUpperInvariant();
+
+            var acceptance = new ArkadeAssetAcceptance(
+                assetId ?? string.Empty,
+                model.AssetAcceptanceRateMode,
+                model.AssetAcceptancePricePerUnit,
+                referenceCurrency);
+
+            if (!acceptance.IsValid(out var validationError))
+                return RedirectWithError(nameof(StoreOverview), validationError!, new { storeId });
+
+            // Confirm the asset exists on the indexer before accepting it —
+            // otherwise checkout would price against an unknown asset.
+            var assetDetails = await assetMetadataService.GetAssetDetailsAsync(acceptance.AssetId, cancellationToken);
+            if (assetDetails is null)
+                return RedirectWithError(nameof(StoreOverview),
+                    $"Asset '{acceptance.AssetId}' was not found on the Ark indexer. Check the asset id.",
+                    new { storeId });
+
+            var newConfig = config! with { AssetAcceptance = acceptance };
+            store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], newConfig);
+            await storeRepository.UpdateStore(store);
+
+            var label = assetMetadataService.GetName(assetDetails)
+                ?? assetMetadataService.GetTicker(assetDetails)
+                ?? acceptance.AssetId;
+            return RedirectWithSuccess(nameof(StoreOverview),
+                $"Now accepting {label} as payment.", new { storeId });
+        }
+
+        if (command == "disable-asset-acceptance")
+        {
+            var newConfig = config! with { AssetAcceptance = null };
+            store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], newConfig);
+            await storeRepository.UpdateStore(store);
+            return RedirectWithSuccess(nameof(StoreOverview), "Asset acceptance disabled.", new { storeId });
         }
 
         return RedirectToAction(nameof(StoreOverview), new { storeId });
