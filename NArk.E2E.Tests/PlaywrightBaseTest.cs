@@ -349,6 +349,44 @@ public abstract class PlaywrightBaseTest : UnitTestBase, IDisposable
     }
 
     /// <summary>
+    /// Polls /suggest-coins until it returns spendable outpoints (the real
+    /// precondition for spend/payout/estimate), not just a rendered balance.
+    /// The Arkade overview shows an inbound note VTXO the instant arkd's
+    /// indexer reports it, but it isn't spendable until the redemption batch
+    /// settles — waiting on the displayed balance races that gap and yields
+    /// "No spendable coins" the moment you try to use it. Returns the
+    /// outpoints once available.
+    /// </summary>
+    protected async Task<List<string>> PollForSpendableCoinsAsync(
+        string storeId, string destinationType, long amountSats, TimeSpan? timeout = null)
+    {
+        var deadline = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromMinutes(5));
+        string? lastError = null;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            try
+            {
+                var outpoints = await SuggestOutpointsAsync(storeId, destinationType, amountSats);
+                if (outpoints.Count > 0) return outpoints;
+            }
+            // Transient "coins not ready yet" responses: a just-redeemed
+            // note VTXO is briefly absent ("No spendable coins") and, for
+            // the Lightning path specifically, briefly classified
+            // recoverable/swept ("No non-recoverable coins available")
+            // until it settles. Both clear on the next batch — keep polling.
+            catch (InvalidOperationException ex) when (
+                ex.Message.Contains("No spendable coins") ||
+                ex.Message.Contains("non-recoverable coins"))
+            {
+                lastError = ex.Message;
+            }
+            await Task.Delay(3_000);
+        }
+        throw new TimeoutException(
+            $"Store {storeId} had no spendable coins within the wait window (last: {lastError ?? "empty selection"}).");
+    }
+
+    /// <summary>
     /// Calls POST /suggest-coins for the given destination type and amount
     /// and returns the server-picked outpoints (txid:vout strings). Throws
     /// if the endpoint reports an error (e.g. no spendable coins).

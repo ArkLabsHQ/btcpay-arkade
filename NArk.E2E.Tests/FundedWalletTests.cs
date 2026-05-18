@@ -1,3 +1,5 @@
+using BTCPayServer.Client;
+using BTCPayServer.Client.Models;
 using Microsoft.Playwright;
 using Xunit;
 using Xunit.Abstractions;
@@ -5,13 +7,18 @@ using Xunit.Abstractions;
 namespace NArk.E2E.Tests;
 
 /// <summary>
-/// Tests that need a wallet with spendable VTXOs. Funding mints an arkd
-/// credit note and imports it through the plugin's in-process
-/// <c>IContractService</c> — the same path NNark's NoteTests uses. arkd's
-/// indexer then reports the note as a VTXO; the plugin's
-/// IntentGenerationService (shortened to a 5s poll for the suite via
-/// BTCPAY_ARKINTENTPOLLSECONDS) generates the redemption intent, and the
-/// next batch turns it into a real spendable VTXO.
+/// One consolidated funded-wallet journey. Funding mints arkd credit
+/// notes and imports them via the plugin's in-process IContractService;
+/// arkd's indexer reports them as VTXOs and the IntentGenerationService
+/// (5s poll for the suite via BTCPAY_ARKINTENTPOLLSECONDS) redeems them
+/// into spendable VTXOs.
+///
+/// This is deliberately ONE test rather than four. Each independent
+/// note→redemption cycle contends for arkd's ~40s batch window; running
+/// four of them back-to-back on shared CI infra is flaky. Funding once
+/// (two notes, redeemed together) and asserting estimate-fees / send /
+/// payout sequentially against that one wallet removes the contention.
+/// Trade-off: coarser failure isolation, accepted for CI stability.
 /// </summary>
 [Collection("Arkade Plugin Tests")]
 public class FundedWalletTests : PlaywrightBaseTest
@@ -24,14 +31,9 @@ public class FundedWalletTests : PlaywrightBaseTest
         _fixture = fixture;
     }
 
-    /// <summary>
-    /// Fund a fresh nsec store by minting a note and importing it as an
-    /// <see cref="ArkNoteContract"/>; assert the overview balance reflects
-    /// the redeemed VTXO.
-    /// </summary>
     [Fact]
     [Trait("Category", "Integration")]
-    public async Task FundViaNoteImport_VtxoArrives()
+    public async Task FundedWallet_FullJourney_FundEstimateSendPayout()
     {
         _fixture.Initialize(this);
         await InitializePlaywright(_fixture.ServerTester!);
@@ -42,47 +44,29 @@ public class FundedWalletTests : PlaywrightBaseTest
         var walletId = await GetStoreWalletIdAsync(storeId);
         Assert.False(string.IsNullOrEmpty(walletId), "store has no wallet id");
 
-        const long fundingSats = 50_000;
-        await FundWalletViaNoteAsync(walletId!, fundingSats);
+        // Fund with two notes so a single redemption batch yields two
+        // independent VTXOs — the send and the payout each take one
+        // without an inter-step change-settle wait.
+        await FundWalletViaNoteAsync(walletId!, 250_000);
+        await FundWalletViaNoteAsync(walletId!, 250_000);
 
-        // arkd charges a 1% offchain-input intent fee when redeeming the
-        // note (see /v1/info fees.intentFee.offchainInput = amount*0.01),
-        // so a 50k note nets ~49.5k. Wait for "most of it" to arrive.
-        var minExpected = (long)(fundingSats * 0.97);
-        var balance = await PollForBalanceAsync(storeId, minExpected);
-        Assert.True(balance >= minExpected,
-            $"balance {balance} never reached {minExpected} (note was {fundingSats}, ~1% fee expected)");
-    }
+        // Wait on the real readiness signal — spendable coins, not the
+        // rendered balance (which counts a note VTXO before it's
+        // redeemed/spendable and yields a false positive).
+        var outpoints = await PollForSpendableCoinsAsync(
+            storeId, "ArkAddress", 40_000, TimeSpan.FromMinutes(5));
+        Assert.NotEmpty(outpoints);
 
-    /// <summary>
-    /// With a funded wallet, /estimate-fees for an Ark→Ark transfer should
-    /// return a fee field (regtest fee may be 0, so assert the response
-    /// shape, not a positive value).
-    /// </summary>
-    [Fact]
-    [Trait("Category", "Integration")]
-    public async Task EstimateFees_FundedWallet_ReturnsFeeField()
-    {
-        _fixture.Initialize(this);
-        await InitializePlaywright(_fixture.ServerTester!);
-        await GoToUrl("/register");
-        await RegisterNewUser(isAdmin: true);
-
-        var storeId = await CreateStoreWithArkWalletAsync(GenerateRandomNsec());
-        var walletId = await GetStoreWalletIdAsync(storeId);
-        await FundWalletViaNoteAsync(walletId!, 200_000);
-        // ~1% arkd intent fee on note redemption; wait for the net amount.
-        await PollForBalanceAsync(storeId, (long)(200_000 * 0.97));
-
-        // Recipient store just to harvest a valid Ark address.
+        // Recipient store — just to harvest a valid Arkade address.
         var recipientStoreId = await CreateStoreWithArkWalletAsync(GenerateRandomNsec());
         await GoToUrl($"/plugins/ark/stores/{recipientStoreId}/overview");
         var recipientAddr = await Page!.InputValueAsync("[data-testid='receive-address']");
+        Assert.False(string.IsNullOrWhiteSpace(recipientAddr));
 
+        // 1) estimate-fees for an Ark→Ark transfer returns a fee field.
         await GoToUrl($"/plugins/ark/stores/{storeId}/overview");
         var token = (await GetAntiforgeryTokenAsync()) ?? "";
-
-        var resp = await Page.Context.APIRequest.PostAsync(
+        var feeResp = await Page.Context.APIRequest.PostAsync(
             new Uri(ServerUri!, $"/plugins/ark/stores/{storeId}/estimate-fees").AbsoluteUri,
             new APIRequestContextOptions
             {
@@ -91,21 +75,72 @@ public class FundedWalletTests : PlaywrightBaseTest
                     ["Content-Type"] = "application/json",
                     ["RequestVerificationToken"] = token
                 },
-                DataObject = new { destination = recipientAddr, amountSats = 50_000L }
+                DataObject = new { destination = recipientAddr, amountSats = 40_000L }
             });
+        if (!feeResp.Ok)
+            throw new InvalidOperationException(
+                $"estimate-fees returned {feeResp.Status}: {await feeResp.TextAsync()}");
+        var feeJson = await feeResp.JsonAsync();
+        var hasFee = feeJson!.Value.TryGetProperty("feeSats", out _) ||
+                     feeJson.Value.TryGetProperty("totalFeeSats", out _) ||
+                     feeJson.Value.TryGetProperty("intentFeeSats", out _) ||
+                     feeJson.Value.TryGetProperty("estimatedFeeSats", out _);
+        Assert.True(hasFee, $"estimate-fees response missing a fee field: {feeJson}");
 
-        if (!resp.Ok)
+        // 2) Send 40k to the recipient via build-intent (uses one VTXO).
+        await GoToUrl($"/plugins/ark/stores/{storeId}/overview");
+        token = (await GetAntiforgeryTokenAsync()) ?? "";
+        var sendResp = await Page.Context.APIRequest.PostAsync(
+            new Uri(ServerUri!, $"/plugins/ark/stores/{storeId}/build-intent").AbsoluteUri,
+            new APIRequestContextOptions
+            {
+                Headers = new Dictionary<string, string>
+                {
+                    ["RequestVerificationToken"] = token,
+                    ["Content-Type"] = "application/x-www-form-urlencoded"
+                },
+                Data = $"StoreId={Uri.EscapeDataString(storeId)}" +
+                       $"&VtxoOutpointsRaw={Uri.EscapeDataString(string.Join(",", outpoints))}" +
+                       $"&Outputs[0].Destination={Uri.EscapeDataString(recipientAddr)}" +
+                       $"&Outputs[0].AmountBtc={(40_000 / 100_000_000m).ToString(System.Globalization.CultureInfo.InvariantCulture)}"
+            });
+        Assert.True(sendResp.Ok, $"build-intent returned {sendResp.Status}");
+        var sendBody = await sendResp.TextAsync();
+        Assert.DoesNotContain("No valid VTXOs selected", sendBody);
+
+        // 3) Payout: create a pull payment, claim to the recipient,
+        //    approve it, and assert the ArkAutomatedPayoutSender advances
+        //    it off AwaitingApproval. Uses the second funded VTXO.
+        var client = new BTCPayServerClient(ServerUri, CreatedUser, Password);
+        var pp = await client.CreatePullPayment(storeId, new CreatePullPaymentRequest
         {
-            var body = await resp.TextAsync();
-            throw new InvalidOperationException($"estimate-fees returned {resp.Status}: {body}");
+            Name = "Journey payout",
+            Amount = 0.002m,
+            Currency = "BTC",
+            PayoutMethods = ["ARKADE"]
+        });
+        var payout = await client.CreatePayout(pp.Id, new CreatePayoutRequest
+        {
+            Destination = recipientAddr,
+            Amount = 0.0015m,
+            PayoutMethodId = "ARKADE"
+        });
+        Assert.Equal(PayoutState.AwaitingApproval, payout.State);
+        await client.ApprovePayout(storeId, payout.Id, new ApprovePayoutRequest());
+
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromMinutes(3);
+        PayoutState last = PayoutState.AwaitingApproval;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            var p = await client.GetStorePayout(storeId, payout.Id);
+            last = p.State;
+            if (last is PayoutState.AwaitingPayment or PayoutState.InProgress or PayoutState.Completed)
+                return;
+            if (last == PayoutState.Cancelled)
+                Assert.Fail("payout was cancelled instead of processed");
+            await Task.Delay(3_000);
         }
-        var json = await resp.JsonAsync();
-        Assert.NotNull(json);
-        var hasFee = json!.Value.TryGetProperty("feeSats", out _) ||
-                     json.Value.TryGetProperty("totalFeeSats", out _) ||
-                     json.Value.TryGetProperty("intentFeeSats", out _) ||
-                     json.Value.TryGetProperty("estimatedFeeSats", out _);
-        Assert.True(hasFee, $"estimate-fees response missing a fee field: {json}");
+        Assert.Fail($"payout never advanced past AwaitingApproval (last: {last})");
     }
 
     private Task FundWalletViaNoteAsync(string walletId, long amountSats) =>

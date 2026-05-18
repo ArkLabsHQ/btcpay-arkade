@@ -44,16 +44,16 @@ public class SwapsTests : PlaywrightBaseTest
         var storeId = await CreateStoreWithArkWalletAsync(GenerateRandomNsec());
         var walletId = await GetStoreWalletIdAsync(storeId);
         await FundWalletViaNoteAsync(walletId!, 200_000);
-        await PollForBalanceAsync(storeId, (long)(200_000 * 0.97));
 
         // BOLT11 on the nigiri "lnd" node Boltz can route to.
         var bolt11 = await DockerHelper.CreateLndInvoice(amtSats: 20_000, expirySecs: 600);
         Assert.False(string.IsNullOrWhiteSpace(bolt11));
 
-        // LN spends still need explicit coin selection; suggest-coins with
-        // the LightningInvoice destination type returns swap-eligible
-        // (non-recoverable) VTXOs.
-        var outpoints = await SuggestOutpointsAsync(storeId, "LightningInvoice", 20_000);
+        // Wait on swap-eligible (LightningInvoice = non-recoverable) coins
+        // being actually spendable, not the rendered balance — same
+        // readiness-signal fix as the funded journey.
+        var outpoints = await PollForSpendableCoinsAsync(
+            storeId, "LightningInvoice", 20_000, TimeSpan.FromMinutes(5));
         Assert.NotEmpty(outpoints);
 
         await GoToUrl($"/plugins/ark/stores/{storeId}/overview");

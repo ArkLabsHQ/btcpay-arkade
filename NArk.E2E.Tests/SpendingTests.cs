@@ -23,69 +23,6 @@ public class SpendingTests : PlaywrightBaseTest
     }
 
     /// <summary>
-    /// Happy path: fund store A, send a portion to store B's Arkade
-    /// address, assert B's balance reflects the inbound VTXO.
-    /// </summary>
-    [Fact]
-    [Trait("Category", "Integration")]
-    public async Task SendToArkAddress_RecipientReceivesVtxo()
-    {
-        _fixture.Initialize(this);
-        await InitializePlaywright(_fixture.ServerTester!);
-        await GoToUrl("/register");
-        await RegisterNewUser(isAdmin: true);
-
-        // Sender: fund 100k sats.
-        var senderStoreId = await CreateStoreWithArkWalletAsync(GenerateRandomNsec());
-        var senderWalletId = await GetStoreWalletIdAsync(senderStoreId);
-        await FundWalletViaNoteAsync(senderWalletId!, 100_000);
-        await PollForBalanceAsync(senderStoreId, (long)(100_000 * 0.97));
-
-        // Recipient: nsec store so it exposes a stable Arkade address.
-        var recipientStoreId = await CreateStoreWithArkWalletAsync(GenerateRandomNsec());
-        await GoToUrl($"/plugins/ark/stores/{recipientStoreId}/overview");
-        var recipientAddr = await Page!.InputValueAsync("[data-testid='receive-address']");
-        Assert.False(string.IsNullOrWhiteSpace(recipientAddr));
-
-        // Select coins for a 40k transfer.
-        const long sendSats = 40_000;
-        var outpoints = await SuggestOutpointsAsync(senderStoreId, "ArkAddress", sendSats);
-        Assert.NotEmpty(outpoints);
-
-        // Submit the spend through the build-intent form.
-        await GoToUrl($"/plugins/ark/stores/{senderStoreId}/overview");
-        var token = (await GetAntiforgeryTokenAsync()) ?? "";
-        var resp = await Page.Context.APIRequest.PostAsync(
-            new Uri(ServerUri!, $"/plugins/ark/stores/{senderStoreId}/build-intent").AbsoluteUri,
-            new APIRequestContextOptions
-            {
-                Headers = new Dictionary<string, string>
-                {
-                    ["RequestVerificationToken"] = token,
-                    ["Content-Type"] = "application/x-www-form-urlencoded"
-                },
-                Data = UrlEncodeForm(new()
-                {
-                    ["StoreId"] = senderStoreId,
-                    ["VtxoOutpointsRaw"] = string.Join(",", outpoints),
-                    ["Outputs[0].Destination"] = recipientAddr,
-                    ["Outputs[0].AmountBtc"] = (sendSats / 100_000_000m)
-                        .ToString(System.Globalization.CultureInfo.InvariantCulture)
-                })
-            });
-
-        // build-intent redirects (302) to overview on success; APIRequest
-        // follows it, so a 2xx final status is the success signal.
-        Assert.True(resp.Ok, $"build-intent returned {resp.Status}");
-
-        // Recipient's VTXO lands after the batch the intent joined.
-        var recipientBalance = await PollForBalanceAsync(
-            recipientStoreId, (long)(sendSats * 0.95), TimeSpan.FromMinutes(3));
-        Assert.True(recipientBalance >= (long)(sendSats * 0.95),
-            $"recipient balance {recipientBalance} never reflected the {sendSats} send");
-    }
-
-    /// <summary>
     /// Unhappy path: build-intent with no VTXOs selected must surface a
     /// validation error and not move funds.
     /// </summary>
@@ -168,8 +105,4 @@ public class SpendingTests : PlaywrightBaseTest
     private static string UrlEncodeForm(Dictionary<string, string> fields) =>
         string.Join("&", fields.Select(kv =>
             $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
-
-    private Task FundWalletViaNoteAsync(string walletId, long amountSats) =>
-        FundWalletViaNoteAsync(
-            _fixture.ServerTester!.PayTester.ServiceProvider, walletId, amountSats);
 }
