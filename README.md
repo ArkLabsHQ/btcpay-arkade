@@ -2,7 +2,7 @@
 
 > Accept Bitcoin payments through [Arkade](https://arkadeos.com) — a self-custodial, off-chain Bitcoin Layer 2 — directly inside BTCPay Server.
 
-[![Version](https://img.shields.io/badge/version-2.0.4-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.1.14-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![BTCPay Plugin](https://img.shields.io/badge/BTCPay%20Server-Plugin-orange)](https://btcpayserver.org)
 
@@ -13,8 +13,6 @@
 **btcpay-arkade** is a BTCPay Server plugin that integrates [Arkade](https://arkadeos.com) as a payment method. It lets merchants accept instant, low-fee Bitcoin payments off-chain while retaining full self-custody — no Lightning node required, no custodian involved.
 
 Payments are settled through **Virtual UTXOs (VTXOs)**, Arkade's off-chain Bitcoin outputs that are cryptographically anchored to real Bitcoin and can be unilaterally exited to the base chain at any time.
-
----
 
 ---
 
@@ -44,7 +42,7 @@ BTCPay Server
     ├── ArkadeSpendingService      # Sends payments (payouts, refunds)
     └── NNark (submodule)          # .NET Arkade SDK
         ├── NArk.Core              # Wallet, VTXO logic, HD/SingleKey signers
-        ├── NArk.Storage.EfCore    # PostgreSQL persistence (EF Core 8)
+        ├── NArk.Storage.EfCore    # PostgreSQL persistence (EF Core)
         └── NArk.Swaps             # Boltz submarine/reverse swap client
 ```
 
@@ -57,7 +55,7 @@ The plugin persists all state (VTXOs, contracts, swaps, intents, wallets) in BTC
 - **BTCPay Server** (self-hosted, any recent version)
 - **PostgreSQL** (bundled with standard BTCPay deployments)
 - **Arkade server (arkd)** v0.9.0 or later — accessible over gRPC from your BTCPay host
-- **.NET 8** SDK (if building from source)
+- **.NET 10** SDK (if building from source)
 
 > ⚠️ **Alpha software.** This plugin is actively developed and not yet recommended for high-value production deployments. Always maintain a backup of your seed phrase.
 
@@ -180,25 +178,25 @@ The setup script will:
 ## Development
 
 ### Prerequisites
-- .NET 8 SDK
+- .NET 10 SDK
 - Docker (for test environment)
 - PostgreSQL
 
 ### Running Tests
 
-After running `setup.sh`, start the local regtest environment (nigiri + arkd):
+After running `setup.sh`, start the local regtest environment (Bitcoin + arkd + Boltz/Fulmine):
 ```bash
-./start-env.sh
+./submodules/NNark/regtest/start-env.sh
 ```
 
-On Windows (via WSL):
+On Windows (wraps the same script via WSL):
 ```cmd
 start-test-env.cmd
 ```
 
 This spins up a regtest Bitcoin node, an Arkade server, and supporting services locally. Then run the E2E test suite:
 ```bash
-dotnet test NArk.E2E.Tests/
+dotnet test NArk.E2E.Tests/NArk.E2E.Tests.csproj
 ```
 
 ### Adding EF Core Migrations
@@ -222,6 +220,7 @@ btcpay-arkade/
 │   └── PaymentHandler/                 # BTCPay payment method integration
 ├── NArk.E2E.Tests/                     # End-to-end test suite
 ├── submodules/
+│   ├── NNark/                          # .NET Arkade SDK (NArk.Core / .Swaps / .Storage.EfCore)
 │   └── btcpayserver/                   # BTCPay Server source (build dependency)
 ├── docs/                               # Internal design documents
 ├── setup.sh / setup.ps1               # First-time setup scripts
@@ -232,8 +231,8 @@ btcpay-arkade/
 
 CI automatically creates a GitHub Release with the changelog body when a version tag is pushed:
 ```bash
-git tag v2.0.4
-git push origin v2.0.4
+git tag v2.1.14
+git push origin v2.1.14
 ```
 
 ---
