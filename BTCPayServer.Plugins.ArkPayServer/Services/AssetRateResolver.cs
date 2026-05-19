@@ -122,33 +122,18 @@ public class AssetRateResolver(RateFetcher rateFetcher, DefaultRulesCollection d
 
         // Convert whole units → raw base units. Round UP and clamp to at
         // least one base unit: the merchant must never be underpaid, and a
-        // zero-amount asset output is meaningless.
-        var scale = Pow10(assetDecimals);
+        // zero-amount asset output is meaningless. Pow10/Format come from
+        // the shared AssetAmount helper so the resolver and the display
+        // formatter can never disagree on the divisor or rendering.
+        var scale = AssetAmount.Pow10(assetDecimals);
         var baseUnitsExact = Math.Ceiling(displayUnits * scale);
         if (baseUnitsExact < 1m)
             baseUnitsExact = 1m;
         var baseUnits = (ulong)baseUnitsExact;
 
         var actualDisplay = baseUnitsExact / scale;
-        // Up to `decimals` fractional digits, no trailing zeros, no trailing
-        // dot, and always at least the integer part (so 100 → "100", not
-        // "1"; 0.000001 → "0.000001").
-        var formatted = assetDecimals == 0
-            ? baseUnits.ToString(System.Globalization.CultureInfo.InvariantCulture)
-            : actualDisplay.ToString(
-                "0." + new string('#', Math.Clamp(assetDecimals, 1, 18)),
-                System.Globalization.CultureInfo.InvariantCulture);
+        var formatted = AssetAmount.Format(baseUnits, assetDecimals);
 
         return new AssetAmountDue(baseUnits, actualDisplay, formatted, rateDescription);
-    }
-
-    /// <summary>10^exp as a decimal (exp clamped to a sane asset range).</summary>
-    private static decimal Pow10(int exp)
-    {
-        exp = Math.Clamp(exp, 0, 18);
-        decimal result = 1m;
-        for (var i = 0; i < exp; i++)
-            result *= 10m;
-        return result;
     }
 }

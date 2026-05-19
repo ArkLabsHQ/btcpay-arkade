@@ -118,8 +118,14 @@ public class ArkadePaymentMethodHandler(
             if (!acceptance.IsValid(out var cfgErr))
                 throw new PaymentMethodUnavailableException($"Asset acceptance misconfigured: {cfgErr}");
 
+            // Bound the indexer + rate round-trips so a hung indexer/rate
+            // provider can't block invoice creation indefinitely (mirrors
+            // the 5s GetServerInfoAsync timeout above; a little more headroom
+            // since this also does a rate fetch).
+            using var assetCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
             var assetDetails = await assetMetadataService.GetAssetDetailsAsync(
-                acceptance.AssetId, CancellationToken.None);
+                acceptance.AssetId, assetCts.Token);
             var assetDecimals = assetMetadataService.GetDecimals(assetDetails);
             var dueSats = Money.Coins(context.Prompt.Calculate().Due).Satoshi;
 
@@ -127,9 +133,9 @@ public class ArkadePaymentMethodHandler(
             try
             {
                 assetDue = await assetRateResolver.ResolveAsync(
-                    context.Store, acceptance, dueSats, assetDecimals, CancellationToken.None);
+                    context.Store, acceptance, dueSats, assetDecimals, assetCts.Token);
             }
-            catch (InvalidOperationException ex)
+            catch (Exception ex) when (ex is InvalidOperationException or OperationCanceledException)
             {
                 throw new PaymentMethodUnavailableException($"Asset pricing unavailable: {ex.Message}");
             }

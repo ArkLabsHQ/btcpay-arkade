@@ -135,6 +135,9 @@ public class ArkContractInvoiceListener(
                 var promptDetails = arkadePaymentMethodHandler.ParsePaymentPromptDetails(arkPrompt.Details);
                 if (!string.IsNullOrEmpty(promptDetails.AssetId) && promptDetails.AssetBaseUnitsDue > 0)
                 {
+                    // arkd returns asset ids as lowercase hex (txid‖groupIndex);
+                    // the prompt stores the merchant-entered id. Compare
+                    // case-insensitively so a mixed-case config still matches.
                     var received = vtxo.Assets?
                         .Where(a => string.Equals(a.AssetId, promptDetails.AssetId, StringComparison.OrdinalIgnoreCase))
                         .Aggregate(0UL, (sum, a) => sum + a.Amount) ?? 0UL;
@@ -145,7 +148,16 @@ public class ArkContractInvoiceListener(
                         // credit its sats — that would wrongly settle.
                         return;
                     }
-                    var ratio = Math.Min(1m, (decimal)received / promptDetails.AssetBaseUnitsDue);
+                    // Credit BTC strictly proportional to the asset received —
+                    // NOT capped at 100%. An over-payment in the asset must
+                    // surface as an over-payment in BTCPay's books (refund /
+                    // reconciliation workflows depend on it); silently
+                    // clamping would hide excess the customer actually sent.
+                    // TotalDue is fixed at invoice creation (independent of
+                    // later payments), so reading it from the pre-lock `inv`
+                    // snapshot is safe — unlike the payment list, which
+                    // HandlePaymentData re-fetches inside _paymentLock.
+                    var ratio = (decimal)received / promptDetails.AssetBaseUnitsDue;
                     assetCreditBtc = arkPrompt.Calculate().TotalDue * ratio;
                     logger.LogInformation(
                         "Invoice {invoiceId}: asset {assetId} received {received} (due {due}) → crediting {btc} BTC",
