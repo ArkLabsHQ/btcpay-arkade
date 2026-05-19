@@ -8,11 +8,14 @@
 ## Implemented (plugin PR #55, NNark PR #94)
 
 Branch `feat/arkade-assets-payment` off current `master`; supersedes #25
-(closed). NNark submodule pinned at `5509d8a` (`assets-parity` / PR #94).
+(closed). NNark submodule pinned at `bbcd960` — the squash-merge of
+PR #94 on NNark `master` (the `assets-parity` branch / its pre-squash
+commits `8c0fe77`+`5509d8a` were orphaned by the squash and deleted;
+pinning the durable master commit keeps fresh CI clones fetchable).
 
 | Slice | Commit(s) | What |
 |---|---|---|
-| NNark GAP B+C | NNark `8c0fe77`, `5509d8a` | deterministic group ordering + ts-sdk fixtures; 393/393; README determinism note |
+| NNark GAP B+C | NNark `bbcd960` (squash of PR #94, merged to master) | deterministic group ordering + ts-sdk fixtures; 393/393; README determinism note |
 | Balances | `54e3858` | per-asset spendable balances on dashboard (`AssetMetadataService`) |
 | Config | `37cd63a` | `ArkadeAssetAcceptance` (additive, serialization-safe) + `IsValid` |
 | Rate resolver | `66bcd2b`, `71a2f5a` | `AssetRateResolver` (SatsPerUnit self-contained; FixedReferenceCurrency via store `RateFetcher`); round-up never-underpay; 11 unit tests; fixed a "100"→"1" format bug |
