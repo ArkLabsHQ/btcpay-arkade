@@ -5,7 +5,7 @@
 
 @{
     Layout = "_LayoutWizard";
-    ViewData.SetActivePage(category: "Ark", activePage: "initialSetup", title: "Ark - Getting Started");
+    ViewData.SetActivePage(category: "Ark", activePage: "initialSetup", title: "Arkade - Getting Started");
     var storeId = ScopeProvider.GetCurrentStoreId();
     var hasValidationError = !ViewData.ModelState.IsValid;
     var hasWalletValue = !string.IsNullOrEmpty(Model.Wallet);
@@ -20,8 +20,8 @@
 }
 
 <header class="text-center">
-    <h1>Setup Your Ark Wallet</h1>
-    <p class="lead text-secondary mt-3">Choose how you want to configure your Ark wallet</p>
+    <h1>Setup Your Arkade Wallet</h1>
+    <p class="lead text-secondary mt-3">Choose how you want to configure your Arkade wallet</p>
 </header>
 
 <div class="mt-5">
@@ -33,7 +33,7 @@
             </div>
             <div class="content">
                 <h4>Use an existing wallet</h4>
-                <p class="mb-0 text-secondary">Import from private key, Ark address, or existing wallet ID</p>
+                <p class="mb-0 text-secondary">Import from private key, Arkade address, or existing wallet ID</p>
             </div>
             <vc:icon symbol="caret-right" />
         </a>
@@ -52,7 +52,7 @@
                             <ul class="mb-0">
                                 <li><strong>BIP-39 seed phrase:</strong> Import an HD wallet from 12 or 24-word mnemonic (recommended)</li>
                                 <li><strong>nsec private key:</strong> Use a legacy Nostr-style private key as a hot wallet</li>
-                                <li><strong>Ark address (npub):</strong> Create a transitory wallet that auto-sweeps to this address</li>
+                                <li><strong>Arkade address (npub):</strong> Create a transitory wallet that auto-sweeps to this address</li>
                                 <li><strong>Wallet ID:</strong> Use an existing wallet from this BTCPay instance</li>
                             </ul>
                         </div>
@@ -87,7 +87,7 @@
                     <div class="alert alert-info">
                         <strong>Info:</strong> A new hot wallet will be generated automatically for you.
                     </div>
-                    <p>This will create a new Ark wallet that is stored on your BTCPay Server. Make sure to back up your wallet after creation.</p>
+                    <p>This will create a new Arkade wallet that is stored on your BTCPay Server. Make sure to back up your wallet after creation.</p>
                     <button name="command" type="submit" value="save" class="btn btn-primary" data-testid="create-wallet-btn">Create Wallet</button>
                 </form>
             </div>

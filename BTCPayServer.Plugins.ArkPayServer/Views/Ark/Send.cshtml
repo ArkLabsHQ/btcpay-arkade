@@ -9,7 +9,7 @@
 @inject BTCPayServer.Security.ContentSecurityPolicies Csp
 
 @{
-    ViewData.SetActivePage(category: "Ark", activePage: "Send", title: "Ark - Send");
+    ViewData.SetActivePage(category: "Ark", activePage: "Send", title: "Arkade - Send");
     Csp.UnsafeEval();
     var storeId = ScopeProvider.GetCurrentStoreId();
 }
@@ -94,8 +94,8 @@
 <div id="descriptor" class="collapse">
     <div class="d-flex px-4 py-4 mb-4 bg-tile rounded">
         <div class="flex-fill">
-            <p text-translate="true" class="mb-2">Send funds using the Ark protocol.</p>
-            <p text-translate="true" class="mb-3">Supports Ark addresses (instant offchain), Bitcoin addresses (batch settlement), and Lightning invoices (via swap).</p>
+            <p text-translate="true" class="mb-2">Send funds using the Arkade protocol.</p>
+            <p text-translate="true" class="mb-3">Supports Arkade addresses (instant offchain), Bitcoin addresses (batch settlement), and Lightning invoices (via swap).</p>
         </div>
         <button type="button" class="btn-close ms-auto" data-bs-toggle="collapse" data-bs-target="#descriptor" aria-expanded="false" aria-label="Close">
             <vc:icon symbol="close" />

@@ -17,7 +17,7 @@
 @inject TransactionLinkProviders TransactionLinkProviders
 
 @{
-    ViewData.SetActivePage(category: "Ark", activePage: "VTXOs", title: "Ark - VTXOs");
+    ViewData.SetActivePage(category: "Ark", activePage: "VTXOs", title: "Arkade - VTXOs");
     var storeId = ScopeProvider.GetCurrentStoreId();
     var statusFilterCount = GetFilterCount(Model.Search, "status");
     var chainTime = await ChainTimeProvider.GetChainTime(Context.RequestAborted);

@@ -231,7 +231,7 @@ public class ArkController(
                 });
             }
 
-            TempData[WellKnownTempData.SuccessMessage] = "Ark Payment method updated.";
+            TempData[WellKnownTempData.SuccessMessage] = "Arkade payment method updated.";
 
             return RedirectToAction(nameof(StoreOverview), new { storeId });
         }
@@ -1095,7 +1095,7 @@ public class ArkController(
             {
                 var estimatedFee = await feeEstimator.EstimateFeeAsync(coins.ToArray(), outputs.ToArray(), token);
                 response.EstimatedFeeSats = estimatedFee;
-                response.FeeDescription = hasOnchain ? "Batch transaction fee" : "Ark service fee";
+                response.FeeDescription = hasOnchain ? "Batch transaction fee" : "Arkade service fee";
             }
 
             return Json(response);
@@ -2487,7 +2487,7 @@ public class ArkController(
             await walletStorage.DeleteWallet(walletId, HttpContext.RequestAborted);
         }
 
-        return RedirectWithSuccess(nameof(InitialSetup), "Ark wallet configuration cleared.", new { storeId });
+        return RedirectWithSuccess(nameof(InitialSetup), "Arkade wallet configuration cleared.", new { storeId });
     }
 
     [HttpPost("stores/{storeId}/force-refresh")]
@@ -2772,7 +2772,7 @@ public class ArkController(
             return !serverKey.ToBytes().SequenceEqual(addr!.ServerKey.ToBytes()) ? throw new Exception("Invalid destination address") : new TemporaryWalletSettings(GenerateWallet(), null, wallet, true, true);
         }
         var existingWallet = await walletStorage.GetWalletById(wallet, HttpContext.RequestAborted);
-        return existingWallet == null ? throw new Exception("Unsupported value. Enter a BIP-39 seed phrase (12 or 24 words), nsec private key, Ark address, or wallet ID.") : new TemporaryWalletSettings(null, wallet, null, false, false);
+        return existingWallet == null ? throw new Exception("Unsupported value. Enter a BIP-39 seed phrase (12 or 24 words), nsec private key, Arkade address, or wallet ID.") : new TemporaryWalletSettings(null, wallet, null, false, false);
     }
     private static string GenerateWallet()
     {
@@ -3157,7 +3157,7 @@ public class ArkController(
         try
         {
             var limits = await boltzLimitsValidator.GetAllLimitsAsync(cancellationToken);
-            return (limits != null, limits == null ? "Boltz instance does not support Ark" : null, limits);
+            return (limits != null, limits == null ? "Boltz instance does not support Arkade" : null, limits);
         }
         catch (Exception ex)
         {
@@ -3828,7 +3828,7 @@ public class ArkController(
             result.AmountSats = amountSats;
             result.IsValid = true;
             if (amountSats <= 0)
-                result.Error = "Amount is required for Ark address";
+                result.Error = "Amount is required for Arkade address";
             return result;
         }
 
@@ -3920,7 +3920,7 @@ public class ArkController(
             }
 
             // Bitcoin address without ark/lightning is not supported in Send2 (offchain only)
-            result.Error = "BIP21 URI does not contain an Ark address or Lightning invoice. Send2 only supports offchain transfers.";
+            result.Error = "BIP21 URI does not contain an Arkade address or Lightning invoice. Send2 only supports offchain transfers.";
             return result;
         }
 
@@ -3933,7 +3933,7 @@ public class ArkController(
             return result;
         }
 
-        result.Error = "Unrecognized destination format. Use an Ark address, Lightning invoice, or BIP21 URI with ark/lightning parameter.";
+        result.Error = "Unrecognized destination format. Use an Arkade address, Lightning invoice, or BIP21 URI with ark/lightning parameter.";
         return result;
     }
 
@@ -3961,7 +3961,7 @@ public class ArkController(
                     {
                         var fee = await feeEstimator.EstimateFeeAsync(spendableCoins, outputs, token);
                         dest.FeeSats = fee;
-                        dest.FeeDescription = "Ark service fee";
+                        dest.FeeDescription = "Arkade service fee";
                     }
                 }
                 else if (dest.Type is Send2DestinationType.LightningInvoice or Send2DestinationType.Bip21Lightning or Send2DestinationType.Lnurl)

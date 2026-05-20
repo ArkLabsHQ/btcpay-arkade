@@ -20,7 +20,7 @@
 @inject TransactionLinkProviders TransactionLinkProviders
 @{
     Layout = "_Layout";
-    ViewData.SetActivePage(category: "Ark", activePage: "Contracts", title: "Ark - Contracts");
+    ViewData.SetActivePage(category: "Ark", activePage: "Contracts", title: "Arkade - Contracts");
     var storeId = ScopeProvider.GetCurrentStoreId();
     var mainnet = true;
     var chainTime = await ChainTimeProvider.GetChainTime(Context.RequestAborted);
@@ -64,7 +64,7 @@
 <div id="descriptor" class="collapse">
     <div class="d-flex px-4 py-4 mb-4 bg-tile rounded">
         <div class="flex-fill">
-            <p text-translate="true" class="mb-2">Contracts are Ark payment addresses that can receive VTXOs.</p>
+            <p text-translate="true" class="mb-2">Contracts are Arkade payment addresses that can receive VTXOs.</p>
             <p text-translate="true" class="mb-3">Each contract represents a unique payment destination secured by your wallet.</p>
         </div>
         <button type="button" class="btn-close ms-auto" data-bs-toggle="collapse" data-bs-target="#descriptor" aria-expanded="false" aria-label="Close">
@@ -324,7 +324,7 @@
                             <td class="align-middle text-end">
                                 <div class="d-inline-flex align-items-center gap-2">
                                     <button type="button" class="btn btn-link p-0 text-secondary sync-contract-btn"
-                                            title="Refresh contract data from the Ark operator"
+                                            title="Refresh contract data from the Arkade operator"
                                             data-bs-toggle="tooltip"
                                             data-script="@contract.Script">
                                         <vc:icon symbol="actions-refresh" />
@@ -449,7 +449,7 @@ else
                 <form asp-action="ImportContract" method="post" asp-route-storeId="@Model.StoreId">
                     <div class="modal-body">
                         <div class="alert alert-info">
-                            <strong>Info:</strong> Import an existing Ark contract to track its VTXOs and swaps.
+                            <strong>Info:</strong> Import an existing Arkade contract to track its VTXOs and swaps.
                         </div>
                         <div class="form-group mb-3">
                             <label class="form-label">Contract String</label>
@@ -464,7 +464,7 @@ else
                             <strong>Note:</strong> Make sure you have the private key for this contract to spend its VTXOs.
                         </div>
                         <p class="text-muted mb-0">
-                            The contract will be added to your wallet and synced with the Ark operator to detect any existing VTXOs.
+                            The contract will be added to your wallet and synced with the Arkade operator to detect any existing VTXOs.
                         </p>
                     </div>
                     <div class="modal-footer">
