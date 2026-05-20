@@ -129,17 +129,60 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         services.AddSingleton<ISafetyService, NArk.Safety.AsyncKeyedLock.AsyncSafetyService>();
 
         // Unified blockchain backend (chain time + boarding-UTXO lookup +
-        // broadcast + tx status + fee estimation). Pass the inner provider's
-        // logger so the cache-fallback warning (emitted when Bitcoin Core
-        // RPC blips and we serve a stale chain time) is visible in plugin
-        // logs rather than swallowed.
-        services.AddSingleton<NBXplorerBlockchain>(provider =>
+        // broadcast + tx status + fee estimation).
+        //
+        // Default backend is NBXplorerBlockchain, which reaches into
+        // ExplorerClient.RPCClient.SendCommandAsync for chain time, fee
+        // estimation, etc.
+        //
+        // When the BTCPay Electrum plugin
+        // (Kukks/BTCPayServerPlugins/Plugins/BTCPayServer.Plugins.Electrum)
+        // is co-installed, it rip-and-replaces NBXplorer's DI registrations
+        // and substitutes its own ExplorerClient shim whose RPCClient is
+        // null — NBXplorerBlockchain would NRE on every chain-time / fee
+        // call. Detect that case by the registered ExplorerClientProvider's
+        // concrete type name and swap in EsploraBlockchain (REST against
+        // the network's default Esplora endpoint) instead.
+        //
+        // The inner provider's logger is passed so the cache-fallback
+        // warning (emitted when the chain-time call fails transiently
+        // and we serve the cached value) is visible in plugin logs
+        // rather than swallowed.
+        services.AddSingleton<IBitcoinBlockchain>(provider =>
         {
             var explorerClientProvider = provider.GetRequiredService<ExplorerClientProvider>();
-            var logger = provider.GetService<ILogger<NBXplorerBlockchain>>();
-            return new NBXplorerBlockchain(explorerClientProvider.GetExplorerClient("BTC"), logger);
+            var providerTypeName = explorerClientProvider.GetType().FullName ?? "";
+            var isElectrum = providerTypeName.Contains("Electrum", StringComparison.OrdinalIgnoreCase);
+
+            var pluginLogger = provider.GetService<ILogger<ArkadePlugin>>();
+
+            if (isElectrum)
+            {
+                var network = provider.GetRequiredService<ArkNetworkConfig>();
+                var esploraUri = network.EsploraUri;
+                if (string.IsNullOrWhiteSpace(esploraUri))
+                {
+                    throw new InvalidOperationException(
+                        $"Electrum plugin is the registered ExplorerClientProvider ({providerTypeName}) " +
+                        "but ArkNetworkConfig.EsploraUri is null for this network. " +
+                        "The Arkade plugin needs an Esplora endpoint for IBitcoinBlockchain because " +
+                        "the Electrum shim does not expose a working RPCClient — set 'esplora' in " +
+                        "ark.json or pick a network preset (Mainnet/Mutinynet/Regtest) that includes it.");
+                }
+
+                var esploraLogger = provider.GetService<ILogger<EsploraBlockchain>>();
+                pluginLogger?.LogInformation(
+                    "Electrum plugin detected ({Provider}); using EsploraBlockchain at {Uri} for chain time / UTXO lookup / broadcast / fee estimation",
+                    providerTypeName, esploraUri);
+                return new EsploraBlockchain(new Uri(esploraUri), esploraLogger);
+            }
+
+            var nbxLogger = provider.GetService<ILogger<NBXplorerBlockchain>>();
+            pluginLogger?.LogInformation(
+                "Using NBXplorerBlockchain for chain time / UTXO lookup / broadcast / fee estimation (ExplorerClientProvider: {Provider})",
+                providerTypeName);
+            return new NBXplorerBlockchain(explorerClientProvider.GetExplorerClient("BTC"), nbxLogger);
         });
-        services.AddSingleton<IBitcoinBlockchain>(sp => sp.GetRequiredService<NBXplorerBlockchain>());
 
         // Intent scheduler
         services.Configure<SimpleIntentSchedulerOptions>(options =>
