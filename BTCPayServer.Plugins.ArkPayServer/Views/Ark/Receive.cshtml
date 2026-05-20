@@ -1,6 +1,7 @@
 @using BTCPayServer.Abstractions.Contracts
 @using BTCPayServer.Abstractions.Extensions
 @using BTCPayServer.Components.QRCode
+@using BTCPayServer.Plugins.ArkPayServer.PaymentHandler
 @inject IScopeProvider ScopeProvider
 @model BTCPayServer.Plugins.ArkPayServer.Models.ArkReceiveViewModel
 @{
@@ -45,7 +46,18 @@
     }
     else
     {
-        var paymentLink = hasAddress ? $"bitcoin:?ark={Model.Address}" : null;
+        // Single source of truth for BIP-21 — same shape the checkout uses
+        // (bitcoin:<boarding>?ark=<arkAddress>): wallets that only speak
+        // standard BIP-21 see the boarding address as the payable target;
+        // Ark-aware wallets pick up the ark= param too.
+        string? paymentLink = null;
+        if (hasAddress)
+        {
+            paymentLink = ArkadeBip21Builder.Create()
+                .WithArkAddress(Model.Address!)
+                .WithOnchainAddress(hasBoarding ? Model.BoardingAddress : null)
+                .Build();
+        }
         <noscript>
             @if (hasAddress)
             {
@@ -63,8 +75,8 @@
         <div class="nav flex-wrap align-items-center justify-content-center gap-2 mb-4">
             @if (hasAddress)
             {
-                <a class="btcpay-pill active" data-bs-toggle="tab" href="#address-tab">Address</a>
-                <a class="btcpay-pill" data-bs-toggle="tab" href="#link-tab">Link</a>
+                <a class="btcpay-pill" data-bs-toggle="tab" href="#address-tab">Address</a>
+                <a class="btcpay-pill active" data-bs-toggle="tab" href="#link-tab">Link</a>
             }
             @if (hasBoarding)
             {
@@ -75,7 +87,7 @@
             <div class="tab-content text-center">
                 @if (hasAddress)
                 {
-                    <div class="tab-pane payment-box show active" id="address-tab" role="tabpanel">
+                    <div class="tab-pane payment-box" id="address-tab" role="tabpanel">
                         <div class="qr-container" data-clipboard="@Model.Address">
                             <vc:qr-code data="@Model.Address" />
                         </div>
@@ -86,7 +98,7 @@
                             </div>
                         </div>
                     </div>
-                    <div class="tab-pane payment-box" id="link-tab" role="tabpanel">
+                    <div class="tab-pane payment-box show active" id="link-tab" role="tabpanel">
                         <div class="qr-container" data-clipboard="@paymentLink">
                             <vc:qr-code data="@paymentLink" />
                         </div>
