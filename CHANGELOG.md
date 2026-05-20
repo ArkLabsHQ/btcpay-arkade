@@ -1,5 +1,38 @@
 # Changelog
 
+## [2.1.15] - 2026-05-21
+
+### Features
+- **Per-wallet diagnostic log download.** Operators can pull a focused per-wallet log from the store overview instead of grep'ing the whole BTCPay log for the right wallet id. The download button sits next to the wallet identity on the overview tile.
+- **Boltz swap-creation tagged with the `btcpay-arkade` referral id.** Lets Boltz attribute volume back to btcpay-arkade for partner accounting; no behaviour change for the swap itself.
+- **Co-installs cleanly with the BTCPay Electrum plugin.** The Electrum plugin rip-and-replaces NBXplorer's DI registrations and leaves `ExplorerClient.RPCClient` null; `NBXplorerBlockchain` would NRE on every chain-time / fee / broadcast call. The Arkade plugin's `IBitcoinBlockchain` factory now detects an NBXplorer-incompatible explorer provider (type-name `Electrum` *or* `RPCClient == null`) and falls back to `EsploraBlockchain` against the network's default Esplora endpoint (`ArkNetworkConfig.EsploraUri`, populated per-network from the canonical ts-sdk defaults via NNark #96). Mainnet / Mutinynet / Signet / Regtest all carry a working default; operators with a custom `ark.json` can override via `esplora`. Inbound on-chain events under Electrum require the companion `NewOnChainTransactionEvent` republish (Kukks/BTCPayServerPlugins#132). (#64)
+
+### UX
+- **Receive page polish.** Title now reads "Receive Arkade" instead of "Receive ARK". Post-generation "New X" buttons stack vertically as quiet text links (one label per line, no `payment-box` padding inflating the row) so the action sits secondary to the QR/address panel above it; the unmet-state "Generate X" stays prominent as the real CTA. The unified BIP-21 payment URI now embeds the boarding address (`bitcoin:<boardingAddress>?ark=<arkAddress>`, same shape the checkout uses) and the Link tab is the default — so a single QR scan drives both Arkade-aware and onchain-only wallets.
+- **Brand: user-facing "Ark" → "Arkade" sweep.** 15 files / 46 strings across views (`InitialSetup`, `IntentBuilder`, `Contracts`, `ConfigurePayoutProcessor`, `StoreOverview`, `Send`, `Send2`, `Swaps`, `Vtxos`, `ListWallets`, `Intents`, `SpendOverview`, `LNPaymentMethodSetupTab`, `ArkadeMethodCheckout`) plus `ArkController` TempData / exception / error messages now consistently say "Arkade" in titles, headers, button text, help copy, and error messages. Code identifiers (`Ark` controller name, `ArkAddress`/`ArkVtxo` type names, the `?ark=` BIP-21 param, `BTC-CHAIN`) deliberately keep their shorthand.
+
+### Bug Fixes
+- **Send: "Max" no longer over-spends.** The Max amount wasn't subtracting the estimated fee, so build-intent then rejected the intent for missing fee headroom. The fee is now deducted from Max before the request.
+- **Send no longer crashes the plugin when Bitcoin Core RPC blips during fee estimation.** Transient RPC failures now degrade gracefully instead of throwing through the controller.
+- **Checkout: third-party BIP-21 params preserved on the Arkade tab.** Plugins like PayJoin (`pj=`) and Branta (`branta_*`) gate on `model.PaymentMethodId == "BTC-CHAIN"` and so were silently dropped from the Arkade BIP-21. The Arkade checkout extension now synthesises a bitcoin-tab pipeline, runs the other global extensions against it, and forwards their additions to the Arkade URI verbatim.
+- **Initial-setup wizard has a close (X) button.** Bailing out mid-import no longer requires hitting Back.
+
+### SDK (NNark)
+- **Per-network Esplora / Electrum endpoint defaults on `ArkNetworkConfig`.** New nullable `EsploraUri` / `ElectrumWsUri` / `ElectrumTcpUri` fields carrying the canonical ts-sdk defaults per network — apps that need an `IBitcoinBlockchain` without NBXplorer/bitcoind (e.g. the Arkade plugin's Electrum-fallback above) can pull the right endpoint straight off the preset. Electrum TCP endpoints are protocol-verified against the live public Fulcrum hosts (`server.version` → `{"result":["Fulcrum 2.1.0","1.4"]}`); 50001 plain TCP is the only port the public hosts actually expose, 50002 TLS is closed (use WSS at the host's port 443 via `ElectrumWsUri`). Regtest fills `electrs`'s `50000` binary-protocol port (NOT `30000`, which is electrs's HTTP REST — different protocol) (#96).
+- **Deterministic asset packet serialization + cross-SDK fixture parity.** `AssetPacketBuilder` now emits groups in a stable order (by asset id, then group index) regardless of input order, matching rust-sdk and ts-sdk so packets are reproducible and fixture-comparable across SDKs. Plus the 4 ts-sdk cross-SDK fixture files NNark lacked (`asset_ref` / `asset_input` / `asset_output` / `metadata`) imported with fixture-driven tests (393/393 green) (#94).
+- **Quieter VTXO sync at idle.** `VtxoSynchronizationService`'s 5-second safety-net poll no longer logs at `Info` on every empty tick — `Info` is kept only for productive polls (a VTXO landed) and the one-off cold-start catch-up. Stops 24 INFO lines/minute of pure noise from drowning the log on an idle wallet (#95).
+- **Boltz: `AddBoltzProvider` self-contained.** Direct-DI consumers (no `ArkApplicationBuilder`) now get `BoltzClient` registered as part of `AddBoltzProvider` instead of an opaque "Unable to resolve BoltzClient" error (#93).
+- **Unilateral exit support.** The non-cooperative path from a VTXO to an on-chain UTXO is now exposed by the SDK — recovery is possible without the Arkade operator's cooperation (#39).
+- **HD wallet gap-limit recovery via modular discovery providers.** Plugin can re-derive used addresses from a mnemonic without prior local state (#77).
+- **Per-wallet VTXO sync cursor in wallet metadata.** Cold-start catch-up window is "since last shutdown" instead of "all of history" — large wallets warm-start in seconds instead of re-fetching every VTXO (#78).
+- **Multi-provider swap architecture.** Boltz remains the concrete provider; the abstraction admits future swap providers without invasive changes (#79).
+- **Recovery: reconcile pending Arkade transactions stranded between Submit and Finalize.** Crash/timeout windows between submit and finalize now self-heal on next sync (#90).
+- **Swap + batch log entries scoped to `WalletId`.** Multi-wallet servers can grep logs cleanly per wallet (#84).
+- **Single persistent Boltz websocket** with subscribe/unsubscribe per swap (was one ws per swap; exhausted file handles on busy stores) (#83).
+- **Swaps marked Failed after 10 consecutive Boltz 404s** instead of hanging forever (#80).
+- **Blockchain: chain-time cached with fallback** on transient Bitcoin Core RPC failure (#85).
+- **EF Core: opt-in `DateTimeOffset → long ticks` mapping** so SQLite `ORDER BY` works correctly on persisted timestamps (#92).
+
 ## [2.1.14] - 2026-04-24
 
 ### Bug Fixes
