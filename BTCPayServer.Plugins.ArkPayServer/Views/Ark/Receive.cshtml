@@ -128,11 +128,16 @@
             </div>
         </div>
         <div class="payment-box">
-            <div class="mt-4 d-flex gap-2">
-                <button type="submit" name="command" value="generate-address" class="btn btn-primary flex-grow-1">
+            <div class="mt-4 d-flex gap-2 justify-content-center align-items-center">
+                @* "New X" is a refresh action once the address already exists, so a
+                   quiet text button is the right visual weight; "Generate X" stays
+                   a prominent CTA when that address is still missing. *@
+                <button type="submit" name="command" value="generate-address"
+                        class="btn @(hasAddress ? "btn-link" : "btn-primary flex-grow-1")">
                     @(hasAddress ? "New Ark address" : "Generate Ark address")
                 </button>
-                <button type="submit" name="command" value="generate-boarding-address" class="btn btn-outline-primary flex-grow-1">
+                <button type="submit" name="command" value="generate-boarding-address"
+                        class="btn @(hasBoarding ? "btn-link" : "btn-outline-primary flex-grow-1")">
                     @(hasBoarding ? "New boarding address" : "Generate boarding address")
                 </button>
             </div>
