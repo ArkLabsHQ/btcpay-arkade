@@ -88,6 +88,17 @@ public class FundedWalletTests : PlaywrightBaseTest
         Assert.True(hasFee, $"estimate-fees response missing a fee field: {feeJson}");
 
         // 2) Send 40k to the recipient via build-intent (uses one VTXO).
+        // Re-poll right before the POST: between the earlier poll and now
+        // we've created another store, browsed pages, and run estimate-fees
+        // — enough wall-clock that a batch settlement or VTXO state change
+        // can invalidate the originally captured outpoints. suggest-coins
+        // and build-intent occasionally disagree across that window
+        // ("No valid VTXOs selected" from build-intent's stricter check),
+        // so refresh outpoints to the live set just before submitting.
+        outpoints = await PollForSpendableCoinsAsync(
+            storeId, "ArkAddress", 40_000, TimeSpan.FromMinutes(1));
+        Assert.NotEmpty(outpoints);
+
         await GoToUrl($"/plugins/ark/stores/{storeId}/overview");
         token = (await GetAntiforgeryTokenAsync()) ?? "";
         var sendResp = await Page.Context.APIRequest.PostAsync(
