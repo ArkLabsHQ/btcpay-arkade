@@ -41,7 +41,7 @@
             <button class="btn btn-outline-primary w-100" type="submit" name="command" value="generate-boarding-address">
                 Generate boarding address
             </button>
-            <p class="text-muted small text-center mt-2 mb-0">Onchain Bitcoin deposit into Ark</p>
+            <p class="text-muted small text-center mt-2 mb-0">Onchain Bitcoin deposit into Arkade</p>
         </div>
     }
     else
@@ -49,7 +49,7 @@
         // Single source of truth for BIP-21 — same shape the checkout uses
         // (bitcoin:<boarding>?ark=<arkAddress>): wallets that only speak
         // standard BIP-21 see the boarding address as the payable target;
-        // Ark-aware wallets pick up the ark= param too.
+        // Arkade-aware wallets pick up the ark= param too.
         string? paymentLink = null;
         if (hasAddress)
         {
@@ -94,7 +94,7 @@
                         <div class="input-group mt-3">
                             <div class="form-floating">
                                 <vc:truncate-center text="@Model.Address" padding="15" elastic="true" classes="form-control-plaintext" id="Address" />
-                                <label for="Address">Ark Address</label>
+                                <label for="Address">Arkade Address</label>
                             </div>
                         </div>
                     </div>
@@ -122,7 +122,7 @@
                                 <label for="BoardingAddress">Boarding Address (Onchain)</label>
                             </div>
                         </div>
-                        <p class="text-muted small mt-2 mb-0">Send onchain BTC to board into Ark. Requires 1 confirmation + batch round.</p>
+                        <p class="text-muted small mt-2 mb-0">Send onchain BTC to board into Arkade. Requires 1 confirmation + batch round.</p>
                     </div>
                 }
             </div>
@@ -134,7 +134,7 @@
                vertically with minimal padding so each label fits on one line. *@
             <button type="submit" name="command" value="generate-address"
                     class="btn @(hasAddress ? "btn-link py-1" : "btn-primary")">
-                @(hasAddress ? "New Ark address" : "Generate Ark address")
+                @(hasAddress ? "New Arkade address" : "Generate Arkade address")
             </button>
             <button type="submit" name="command" value="generate-boarding-address"
                     class="btn @(hasBoarding ? "btn-link py-1" : "btn-outline-primary")">
