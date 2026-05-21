@@ -89,9 +89,20 @@ namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler
             catch (ExternalProcessFailedException e) when(e.Message.Contains("not enough funds"))
             {
                 var receiveJson = await ExecuteArk("receive");
-                var onchainAddr = JObject.Parse(receiveJson).GetValue("onchain_address")?.Value<string>()
-                    ?? throw new Exception("ark receive returned no onchain_address");
-                await Execute($"faucet {onchainAddr} 2");
+                // `ark receive` returns BOTH a `boarding_address` (P2TR boarding script
+                // that arkd will accept as a settle input) and an `onchain_address` (a
+                // plain BTC address — funds here are visible as wallet onchain balance
+                // but are NOT settle-able). Settle requires the boarding one; faucet-ing
+                // onchain_address yields confirmed funds that arkd silently ignores and
+                // settle fails with "fees (0) exceed total amount (0)".
+                var boardingAddr = JObject.Parse(receiveJson).GetValue("boarding_address")?.Value<string>()
+                    ?? throw new Exception("ark receive returned no boarding_address");
+                await Execute($"faucet {boardingAddr} 2");
+                // arkd's validateBoardingInput requires a CONFIRMED boarding UTXO. Without
+                // mining here, the wallet sees an unconfirmed input and settle aborts
+                // with the same "fees exceed total" message. Six blocks matches the
+                // regtest helper's pattern.
+                await Execute("rpc --generate 6");
                 await ExecuteArk("settle --password secret");
                 return await PayInvoice(payInvoiceContext);
             }
