@@ -11,14 +11,37 @@ namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler
     public class ArkadeCheckoutCheatModeExtension(Cheater cheater) : ICheckoutCheatModeExtension
     {
         private static bool IsWindows => RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
-        
+
+        // The arkd container provides the in-container ark CLI used by cheat mode.
+        // Nigiri's own `ark` subcommand hardcodes a container literally named "ark",
+        // which no longer matches the v0.9-split topology (daemon container is "arkd",
+        // signer-wallet sidecar is "ark-wallet"). Hit the daemon container directly so
+        // cheat mode is decoupled from the nigiri binary's expectations.
+        private static string ArkContainer =>
+            Environment.GetEnvironmentVariable("ARKADE_CHEAT_ARK_CONTAINER") ?? "arkd";
+
         public bool Handle(PaymentMethodId paymentMethodId) => paymentMethodId == ArkadePlugin.ArkadePaymentMethodId;
 
-        public async Task<string> Execute(string cmd)
+        public async Task<string> Execute(string nigiriCommand)
         {
-            var (fileName, arguments) = GetProcessInfo(cmd);
-            
-            var process = new System.Diagnostics.Process
+            var (fileName, arguments) = IsWindows
+                ? ("wsl", $"nigiri {nigiriCommand}")
+                : ("nigiri", nigiriCommand);
+            return await RunProcess(fileName, arguments, $"nigiri {nigiriCommand}");
+        }
+
+        private async Task<string> ExecuteArk(string arkSubcommand)
+        {
+            var dockerArgs = $"exec {ArkContainer} ark {arkSubcommand}";
+            var (fileName, arguments) = IsWindows
+                ? ("wsl", $"docker {dockerArgs}")
+                : ("docker", dockerArgs);
+            return await RunProcess(fileName, arguments, $"docker {dockerArgs}");
+        }
+
+        private static async Task<string> RunProcess(string fileName, string arguments, string display)
+        {
+            var process = new Process
             {
                 StartInfo = new ProcessStartInfo
                 {
@@ -36,9 +59,11 @@ namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler
             var error = await process.StandardError.ReadToEndAsync();
             await process.WaitForExitAsync();
 
-            return process.ExitCode != 0 ? throw new ExternalProcessFailedException($"nigiri {cmd}", error + output) : output;
+            return process.ExitCode != 0
+                ? throw new ExternalProcessFailedException(display, error + output)
+                : output;
         }
-        
+
         public async Task<ICheckoutCheatModeExtension.MineBlockResult> MineBlock(
             ICheckoutCheatModeExtension.MineBlockContext mineBlockContext)
         {
@@ -51,10 +76,10 @@ namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler
             var destination = payInvoiceContext.PaymentPrompt.Destination;
             var amt = Money.Coins(payInvoiceContext.Amount).Satoshi;
 
-            var nigiriArgs = $"ark send --to {destination} --amount {amt} --password secret";
+            var arkArgs = $"send --to {destination} --amount {amt} --password secret";
             try
             {
-               var output = await  Execute(nigiriArgs);
+               var output = await ExecuteArk(arkArgs);
                var arkOutput = JObject.Parse(output);
                var txId = arkOutput.GetValue("txid")?.Value<string>();
                if (txId is not null)
@@ -63,34 +88,18 @@ namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler
             }
             catch (ExternalProcessFailedException e) when(e.Message.Contains("not enough funds"))
             {
-                //
-                //nigiri settle
-                await Execute("faucet $(nigiri ark receive | jq -r \".onchain_address\") 2");
-                await Execute("ark settle --password secret");
+                var receiveJson = await ExecuteArk("receive");
+                var onchainAddr = JObject.Parse(receiveJson).GetValue("onchain_address")?.Value<string>()
+                    ?? throw new Exception("ark receive returned no onchain_address");
+                await Execute($"faucet {onchainAddr} 2");
+                await ExecuteArk("settle --password secret");
                 return await PayInvoice(payInvoiceContext);
             }
             catch (ExternalProcessFailedException e) when(e.Message.Contains("VTXO_RECOVERABLE"))
             {
-                await Execute("ark settle --password secret");
+                await ExecuteArk("settle --password secret");
                 return await PayInvoice(payInvoiceContext);
             }
-            
-        }
-
-        /// <summary>
-        /// Returns the appropriate process info for executing nigiri commands.
-        /// On Windows, uses WSL to execute nigiri. On Linux/macOS, executes directly.
-        /// </summary>
-        private static (string FileName, string Arguments) GetProcessInfo(string nigiriArgs)
-        {
-            if (IsWindows)
-            {
-                // On Windows, use WSL to execute nigiri
-                return ("wsl", $"nigiri {nigiriArgs}");
-            }
-            
-            // On Linux/macOS, execute nigiri directly
-            return ("nigiri", nigiriArgs);
         }
     }
 }
