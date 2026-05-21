@@ -96,6 +96,16 @@ jobs:
           TESTS_BTCNBXPLORERURL: "http://127.0.0.1:32838/"
           TESTS_POSTGRES: "Host=localhost;Port=5432;Database=btcpay_e2e_test;Username=postgres;Password=postgres"
           TESTS_HOSTNAME: "127.0.0.1"
+          # ArkadeCheckoutCheatModeExtension defaults to container name
+          # "arkd" (the SDK's intended v0.9-split topology, see
+          # submodules/NNark/regtest/docker/docker-compose.arkd-override.yml:
+          # `container_name: ${ARK_CONTAINER:-arkd}`). In CI the auto-
+          # derivation in `.env.defaults` lands on `ark` instead — the
+          # nigiri base compose's pre-existing service name wins. The
+          # plugin exposes ARKADE_CHEAT_ARK_CONTAINER for exactly this
+          # case; pin it to what start-env.sh actually creates so
+          # cheat-mode `docker exec` calls don't hit "No such container".
+          ARKADE_CHEAT_ARK_CONTAINER: "ark"
         run: dotnet test NArk.E2E.Tests/NArk.E2E.Tests.csproj --no-build --verbosity normal --logger "console;verbosity=detailed"
         timeout-minutes: 20
 
