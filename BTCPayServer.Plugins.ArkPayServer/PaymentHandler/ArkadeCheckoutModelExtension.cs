@@ -2,6 +2,7 @@ using BTCPayServer.Data;
 using BTCPayServer.Models.InvoicingModels;
 using BTCPayServer.Payments;
 using BTCPayServer.Services.Invoices;
+using Microsoft.Extensions.DependencyInjection;
 using Newtonsoft.Json.Linq;
 
 namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
@@ -12,20 +13,26 @@ public class ArkadeCheckoutModelExtension: ICheckoutModelExtension, IGlobalCheck
     private readonly IPaymentLinkExtension? _bitcoinPaymentLinkExtension;
     private readonly ArkadePaymentMethodHandler _handler;
     private readonly PaymentMethodHandlerDictionary _handlers;
-    private readonly IEnumerable<IGlobalCheckoutModelExtension> _globalExtensions;
+    // IServiceProvider, not IEnumerable<IGlobalCheckoutModelExtension>: this
+    // type is itself registered as IGlobalCheckoutModelExtension, so injecting
+    // the enumerable directly creates a DI cycle (the resolver builds every
+    // implementation before our constructor returns, including ourselves).
+    // Lazily resolving through the provider sidesteps the cycle since the
+    // singleton is cached by the time we actually enumerate at request time.
+    private readonly IServiceProvider _serviceProvider;
 
     private static readonly PaymentMethodId BitcoinOnchainPmi =
         PaymentTypes.CHAIN.GetPaymentMethodId("BTC");
 
     public ArkadeCheckoutModelExtension(
         IEnumerable<IPaymentLinkExtension> paymentLinkExtensions,
-        IEnumerable<IGlobalCheckoutModelExtension> globalExtensions,
+        IServiceProvider serviceProvider,
         PaymentMethodHandlerDictionary handlers,
         ArkadePaymentMethodHandler handler)
     {
         _handler = handler;
         _handlers = handlers;
-        _globalExtensions = globalExtensions;
+        _serviceProvider = serviceProvider;
         var linkList = paymentLinkExtensions as IList<IPaymentLinkExtension> ?? paymentLinkExtensions.ToList();
         _arkadePaymentLinkExtension =
             linkList.SingleOrDefault(p => p.PaymentMethodId == ArkadePlugin.ArkadePaymentMethodId) ??
@@ -123,7 +130,7 @@ public class ArkadeCheckoutModelExtension: ICheckoutModelExtension, IGlobalCheck
             Handler = bitcoinHandler,
         };
 
-        foreach (var global in _globalExtensions)
+        foreach (var global in _serviceProvider.GetServices<IGlobalCheckoutModelExtension>())
         {
             if (ReferenceEquals(global, this)) continue; // avoid recursion
             try
