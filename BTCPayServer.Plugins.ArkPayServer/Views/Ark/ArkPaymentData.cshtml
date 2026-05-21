@@ -26,16 +26,21 @@
 		// Boarding payments come from an on-chain BTC tx funding the P2TR
 		// boarding address. They share the invoice prompt but use a different
 		// address, contract, and on-chain explorer than the VTXO path. Detect
-		// via the IsBoarding flag set by the listener, with a fallback for
-		// older payment rows that pre-date the flag (compare the recorded
-		// destination against the prompt's known boarding address).
+		// via the IsBoarding flag set by the listener, with two fallbacks for
+		// older payment rows that pre-date the flag:
+		//   1) prefer `paymentData.Destination` (always set correctly from
+		//      ArkadePaymentData), since older rows stored the wrong value at
+		//      the top-level Blob2.destination due to a case-sensitive JSON
+		//      key bug;
+		//   2) compare against the prompt's known boarding address.
+		var paymentDestination = paymentData.Destination ?? payment.Destination;
 		var isBoarding = paymentData.IsBoarding
 		                 || (!string.IsNullOrEmpty(promptDetails.BoardingAddress)
-		                     && string.Equals(payment.Destination, promptDetails.BoardingAddress, StringComparison.OrdinalIgnoreCase));
+		                     && string.Equals(paymentDestination, promptDetails.BoardingAddress, StringComparison.OrdinalIgnoreCase));
 
 		var address = isBoarding && !string.IsNullOrEmpty(promptDetails.BoardingAddress)
 			? promptDetails.BoardingAddress
-			: payment.Destination;
+			: paymentDestination;
 		var contractString = isBoarding && !string.IsNullOrEmpty(promptDetails.BoardingContractString)
 			? promptDetails.BoardingContractString
 			: promptDetails.ContractString;

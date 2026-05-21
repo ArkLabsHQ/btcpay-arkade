@@ -178,10 +178,18 @@ public class ArkContractInvoiceListener(
             }.Set(freshInvoice, handler, details);
 
             // Override destination if payment came via boarding address (not the Ark contract address)
+            //
+            // The PaymentBlob is serialised through BTCPay's default camelCase resolver, so
+            // the on-disk JSON property is lowercase `destination` even though the C# field
+            // is `Destination`. JObject's indexer is case-sensitive — writing `blob["Destination"]`
+            // adds a sibling field instead of replacing the lowercase one, and the deserialiser
+            // then ignores our shadow value. Update the lowercase key (and remove any stale
+            // capital-D shadow left by earlier versions of this code).
             if (destination is not null)
             {
                 var blob = JObject.Parse(paymentData.Blob2);
-                blob["Destination"] = destination;
+                blob["destination"] = destination;
+                blob.Remove("Destination");
                 paymentData.Blob2 = blob.ToString(Newtonsoft.Json.Formatting.None);
             }
 
