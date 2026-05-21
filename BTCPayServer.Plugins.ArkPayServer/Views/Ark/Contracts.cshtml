@@ -329,9 +329,19 @@
                                             data-script="@contract.Script">
                                         <vc:icon symbol="actions-refresh" />
                                     </button>
+                                    @* Always render the expand-details button so the refresh / delete icons
+                                       keep the same column positions across rows. When the contract has no
+                                       VTXOs or swaps to reveal, the slot is held invisible (no click, no
+                                       collapse target). *@
                                     @if (hasVtxos || hasSwaps)
                                     {
                                         <button class="accordion-button collapsed only-for-js ms-0 d-inline-block" type="button" data-bs-toggle="collapse" data-bs-target="#@detailsId" aria-expanded="false" aria-controls="@detailsId">
+                                            <vc:icon symbol="caret-down" />
+                                        </button>
+                                    }
+                                    else
+                                    {
+                                        <button class="accordion-button collapsed only-for-js ms-0 d-inline-block invisible" type="button" tabindex="-1" aria-hidden="true" disabled>
                                             <vc:icon symbol="caret-down" />
                                         </button>
                                     }
