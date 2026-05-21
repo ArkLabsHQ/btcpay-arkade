@@ -112,7 +112,7 @@ The setup script will:
 | Setting | Default | Description |
 |---|---|---|
 | Boarding Address | Enabled | Show boarding address on invoices (on-chain entry to Arkade) |
-| Boarding Minimum | 330 sats | Minimum amount to display boarding address (dust threshold) |
+| Boarding Minimum | 5000 sats | Minimum amount to display boarding address (floor: 330 sats / P2TR dust) |
 | Sub-dust Payments | Disabled | Accept payments below 330 sats (no dust limit for VTXOs) |
 | Auto-sweep Address | — | Forward all received funds to this on-chain address automatically |
 

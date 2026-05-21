@@ -1,6 +1,7 @@
 @using BTCPayServer.Abstractions.Contracts
 @using BTCPayServer.Abstractions.Extensions
 @using BTCPayServer.Plugins.ArkPayServer.Helpers
+@using BTCPayServer.Plugins.ArkPayServer.PaymentHandler
 @using NArk.Abstractions.Wallets
 @using NArk.Abstractions.Intents
 @using NArk.Swaps.Models
@@ -129,7 +130,7 @@
                             <button type="submit" name="command" value="toggle-subdust"
                                     class="btn btn-sm badge text-primary btn-outline-secondary"
                                     @(Model.IsDestinationSweepEnabled && !Model.AllowSubDustAmounts ? "disabled" : "")
-                                    title="@(Model.IsDestinationSweepEnabled && !Model.AllowSubDustAmounts ? "Cannot enable while auto-sweep is active — sub-dust VTXOs cannot be swept on-chain" : "Accept payments below the on-chain dust threshold (~330 sats)")">
+                                    title="@(Model.IsDestinationSweepEnabled && !Model.AllowSubDustAmounts ? "Cannot enable while auto-sweep is active — sub-dust VTXOs cannot be swept on-chain" : $"Accept payments below the on-chain dust threshold (~{ArkadePaymentMethodConfig.P2trDustLimitSats} sats)")">
                                 @(Model.AllowSubDustAmounts ? "Enabled" : "Disabled")
                             </button>
                         </form>
@@ -445,9 +446,9 @@
 
                         <div class="mb-3">
                             <label asp-for="MinBoardingAmountSats" class="form-label">Minimum Amount (sats)</label>
-                            <input asp-for="MinBoardingAmountSats" class="form-control" type="number" min="330"
+                            <input asp-for="MinBoardingAmountSats" class="form-control" type="number" min="@ArkadePaymentMethodConfig.P2trDustLimitSats"
                                    value="@Model.MinBoardingAmountSats" />
-                            <div class="form-text">Invoices below this amount will not include a boarding address. Minimum: 330 sats (P2TR dust threshold).</div>
+                            <div class="form-text">Invoices below this amount will not include a boarding address. Minimum: @ArkadePaymentMethodConfig.P2trDustLimitSats sats (P2TR dust threshold).</div>
                         </div>
                     </div>
                     <div class="modal-footer">

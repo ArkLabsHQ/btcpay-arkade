@@ -2011,9 +2011,11 @@ public class ArkController(
 
         if (command == "save-boarding")
         {
-            var minAmount = model.MinBoardingAmountSats > 0 ? model.MinBoardingAmountSats : 330L;
-            if (minAmount < 330)
-                return RedirectWithError(nameof(StoreOverview), "Boarding minimum cannot be below the P2TR dust threshold (330 sats).", new { storeId });
+            var minAmount = model.MinBoardingAmountSats > 0
+                ? model.MinBoardingAmountSats
+                : ArkadePaymentMethodConfig.DefaultMinBoardingAmountSats;
+            if (minAmount < ArkadePaymentMethodConfig.P2trDustLimitSats)
+                return RedirectWithError(nameof(StoreOverview), $"Boarding minimum cannot be below the P2TR dust threshold ({ArkadePaymentMethodConfig.P2trDustLimitSats} sats).", new { storeId });
 
             var newConfig = config! with { BoardingEnabled = true, MinBoardingAmountSats = minAmount };
             store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], newConfig);
