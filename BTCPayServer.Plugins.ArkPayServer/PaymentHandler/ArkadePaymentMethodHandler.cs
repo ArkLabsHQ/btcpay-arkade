@@ -93,7 +93,11 @@ public class ArkadePaymentMethodHandler(
                         ? Network.TestNet
                         : Network.RegTest;
                 var boardingAddress = boardingContract.GetOnchainAddress(network);
-                details = details with { BoardingAddress = boardingAddress.ToString() };
+                details = details with
+                {
+                    BoardingAddress = boardingAddress.ToString(),
+                    BoardingContractString = boardingContract.ToString(),
+                };
                 context.TrackedDestinations.Add(boardingAddress.ToString());
                 context.TrackedDestinations.Add(boardingContract.GetScriptPubKey().ToHex());
 

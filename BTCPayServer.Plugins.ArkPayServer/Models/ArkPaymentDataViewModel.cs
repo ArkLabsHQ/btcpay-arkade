@@ -8,4 +8,5 @@ public class ArkPaymentDataViewModel
     public string Address { get; set; }
     public DateTimeOffset ReceivedTime { get; set; }
     public string Currency { get; set; }
+    public bool IsBoarding { get; set; }
 }
