@@ -233,16 +233,23 @@ public class ArkContractInvoiceListener(
             return;
         }
 
-        // Get the script from the contract string - need to parse with network
-        var serverInfo = await clientTransport.GetServerInfoAsync();
-        var contract = listenedContract.Details.GetContract(serverInfo.Network);
-        if (contract is null)
+        // ConfigurePrompt tags BOTH the Payment contract (the offchain Arkade
+        // address) and, when boarding is enabled, the Boarding contract with
+        // Source = "invoice:{id}". The previous implementation only toggled
+        // the Payment one (derived from the prompt's details), so the
+        // boarding contract stayed Active forever after settlement. Find every
+        // contract carrying this invoice's source tag and toggle them all.
+        // HTLC contracts use a different "swap:{id}" Source tag and are
+        // driven by OnSwapChanged based on swap state, not invoice state.
+        var walletId = listenedContract.Details.WalletId;
+        var invoiceSource = $"invoice:{invoice.Id}";
+        var contracts = await contractStorage.GetContracts(
+            walletIds: [walletId],
+            cancellationToken: CancellationToken.None);
+        foreach (var c in contracts.Where(c => c.Metadata?.GetValueOrDefault("Source") == invoiceSource))
         {
-            return;
+            await contractStorage.UpdateContractActivityState(walletId, c.Script, activityState);
         }
-
-        var script = contract.GetArkAddress().ScriptPubKey.ToHex();
-        await contractStorage.UpdateContractActivityState(listenedContract.Details.WalletId, script, activityState);
     }
 
     private ArkadeListenedContract? GetListenedArkadeInvoice(InvoiceEntity invoice)
