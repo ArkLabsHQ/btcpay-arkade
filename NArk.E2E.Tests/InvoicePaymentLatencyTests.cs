@@ -92,26 +92,34 @@ public class InvoicePaymentLatencyTests : PlaywrightBaseTest
         });
         Assert.False(string.IsNullOrEmpty(invoice.Id));
 
+        // BTCPay enforces antiforgery on every UI controller POST (see
+        // UIControllerAntiforgeryTokenAttribute registered in Startup);
+        // missing token = 400 with empty body. Grab one off any page
+        // that rendered a form — the Arkade overview always does.
+        await GoToUrl($"/plugins/ark/stores/{storeId}/overview");
+        var token = (await GetAntiforgeryTokenAsync()) ?? "";
+
         // Start the clock and trigger the cheat-mode pay. The
         // BTCPay route POST /i/{id}/test-payment invokes
         // ArkadeCheckoutCheatModeExtension.PayInvoice which shells out
         // `docker exec <arkd> ark send` — an out-of-round Ark tx that
         // arkd processes essentially instantly.
         var t0 = DateTimeOffset.UtcNow;
+        // BTCPay's UIInvoiceController.TestPayment doesn't decorate its
+        // request param with [FromBody], so ASP.NET MVC binds from form
+        // data — not JSON. Sending JSON silently falls back to default
+        // values (`PaymentMethodId="BTC"`) and the cheat-extension lookup
+        // returns null. Use form-urlencoded to match the binder.
         var payResp = await Page!.Context.APIRequest.PostAsync(
             new Uri(ServerUri!, $"/i/{invoice.Id}/test-payment").AbsoluteUri,
             new APIRequestContextOptions
             {
                 Headers = new Dictionary<string, string>
                 {
-                    ["Content-Type"] = "application/json"
+                    ["Content-Type"] = "application/x-www-form-urlencoded",
+                    ["RequestVerificationToken"] = token
                 },
-                DataObject = new
-                {
-                    Amount = 5000m,
-                    CryptoCode = "SATS",
-                    PaymentMethodId = "ARKADE"
-                }
+                Data = "Amount=5000&CryptoCode=SATS&PaymentMethodId=ARKADE"
             });
 
         var payBody = await payResp.TextAsync();
