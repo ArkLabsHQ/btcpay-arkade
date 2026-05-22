@@ -1,5 +1,6 @@
 @using System.Globalization
 @using BTCPayServer.Abstractions.Extensions
+@using BTCPayServer.Data
 @using BTCPayServer.Payments
 @using BTCPayServer.Plugins.ArkPayServer.Helpers
 @using BTCPayServer.Plugins.ArkPayServer.Models
@@ -54,6 +55,8 @@
 			Contract = contractString,
 			Currency = payment.Currency,
 			IsBoarding = isBoarding,
+			// Boarding payment stays Processing until its on-chain funding tx confirms.
+			IsUnconfirmed = isBoarding && payment.Status == PaymentStatus.Processing,
 		};
 		return vm;
 	}).Where(c => c != null).ToList();
@@ -100,6 +103,10 @@
 		                @if (payment.IsBoarding)
 		                {
 			                <span class="badge text-bg-info" title="On-chain boarding payment to the P2TR boarding address">Boarding</span>
+			                @if (payment.IsUnconfirmed)
+			                {
+				                <span class="badge text-bg-warning" title="On-chain funding tx not yet confirmed — not spendable or settled yet">Unconfirmed</span>
+			                }
 		                }
 		                else
 		                {

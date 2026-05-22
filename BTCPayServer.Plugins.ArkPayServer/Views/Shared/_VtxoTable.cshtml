@@ -121,6 +121,10 @@
                             {
                                 <span class="badge text-bg-secondary">Spent</span>
                             }
+                            else if (vtxo.IsUnconfirmedOnchain())
+                            {
+                                <span class="badge text-bg-warning">Unconfirmed</span>
+                            }
                             else if (vtxo.IsRecoverable(chainTime))
                             {
                                 <span class="badge text-bg-warning">Recoverable</span>
@@ -129,7 +133,7 @@
                             {
                                 <span class="badge text-bg-success">Unspent</span>
                             }
-                            @if (showSpendableStatus && isSpendable)
+                            @if (showSpendableStatus && isSpendable && !vtxo.IsUnconfirmedOnchain())
                             {
                                 <span class="badge text-bg-info">Spendable</span>
                             }

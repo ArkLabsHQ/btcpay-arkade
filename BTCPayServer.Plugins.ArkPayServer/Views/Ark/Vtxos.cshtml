@@ -153,6 +153,8 @@
                         var isSpendable = Model.SpendableOutpoints.Contains(vtxo.OutPoint);
                         var outpointValue = $"{vtxo.TransactionId}:{vtxo.TransactionOutputIndex}";
                         var isSpent = vtxo.IsSpent();
+                        // On-chain (boarding) UTXO still in the mempool: not spendable or settled yet.
+                        var isUnconfirmed = vtxo.IsUnconfirmedOnchain();
 
                         // Get contract info for this VTXO
                         Model.VtxoContracts.TryGetValue(vtxo.Script, out var contract);
@@ -197,15 +199,19 @@
                                 }
                             </td>
                             <td class="align-middle d-flex flex-wrap gap-1">
+                                @if (isUnconfirmed)
+                                {
+                                    <span class="badge text-bg-warning">Unconfirmed</span>
+                                }
                                 @if (vtxo.IsRecoverable(chainTime))
                                 {
                                     <span class="badge text-bg-warning">Recoverable</span>
                                 }
-                                @if (isSpendable)
+                                @if (isSpendable && !isUnconfirmed)
                                 {
                                     <span class="badge text-bg-info">Spendable</span>
                                 }
-                                @if (!vtxo.Preconfirmed)
+                                @if (!vtxo.Preconfirmed && !isUnconfirmed)
                                 {
                                     <span class="badge text-bg-light">Settled</span>
                                 }
