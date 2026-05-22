@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.1.17] - 2026-05-22
+
+### SDK (NNark)
+- **Indexer script subscription updated in place instead of restarting.** `VtxoSynchronizationService` now keeps one arkd `GetSubscription` stream open and adds/removes scripts via Subscribe/Unsubscribe as contracts come and go, rather than tearing the stream down and resubscribing on every change. It reconnects on the same subscription id, recreates it only if arkd reports it gone (TTL after a disconnect), and tears it down when the active set is empty; the 5-second fresh-derive safety-net poll remains the backstop, so detection never depends on the stream surviving. Removes per-change stream churn and the teardown/recreate window where a pushed event could be missed (#103).
+
 ## [2.1.16] - 2026-05-22
 
 ### Bug Fixes
