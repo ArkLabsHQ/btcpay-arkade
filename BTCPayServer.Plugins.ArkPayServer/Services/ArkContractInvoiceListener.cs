@@ -333,17 +333,6 @@ public class ArkContractInvoiceListener(
         }
     }
 
-    private ArkadeListenedContract? GetListenedArkadeInvoice(InvoiceEntity invoice)
-    {
-        var prompt = invoice.GetPaymentPrompt(ArkadePlugin.ArkadePaymentMethodId);
-        if (prompt?.Details is null)
-            return null;
-
-        return new ArkadeListenedContract(
-            arkadePaymentMethodHandler.ParsePaymentPromptDetails(prompt.Details),
-            invoice.Id);
-    }
-
     /// <summary>
     /// Resolves the Arkade wallet id backing an invoice from whichever Arkade
     /// prompt has been activated — the BTC-VTXO method or the dedicated asset
@@ -372,7 +361,7 @@ public class ArkContractInvoiceListener(
 
     private string GetCacheKey(string invoiceId)
     {
-        return $"{nameof(GetListenedArkadeInvoice)}-{invoiceId}";
+        return $"ArkadeInvoice-{invoiceId}";
     }
 
     private Task<InvoiceEntity> GetInvoice(string invoiceId)
@@ -390,14 +379,22 @@ public class ArkContractInvoiceListener(
 
     private async Task QueueMonitoredInvoices(CancellationToken cancellation)
     {
-        foreach (var invoice in await invoiceRepository.GetMonitoredInvoices(ArkadePlugin.ArkadePaymentMethodId,
-                     cancellation))
+        // Scan both Arkade methods: an invoice may have the BTC-VTXO ARKADE
+        // method excluded but the dedicated ARKADE-ASSET method active, so a
+        // single-method scan would miss it and never re-activate its contracts.
+        var arkadeInvoices = await invoiceRepository.GetMonitoredInvoices(
+            ArkadePlugin.ArkadePaymentMethodId, cancellation);
+        var assetInvoices = await invoiceRepository.GetMonitoredInvoices(
+            ArkadePlugin.ArkadeAssetPaymentMethodId, cancellation);
+
+        var queued = new HashSet<string>();
+        foreach (var invoice in arkadeInvoices.Concat(assetInvoices))
         {
-            if (GetListenedArkadeInvoice(invoice) is null) continue;
+            if (!queued.Add(invoice.Id)) continue;                 // dedupe across both scans
+            if (GetArkadeInvoiceWalletId(invoice) is null) continue;
             _checkInvoices.Writer.TryWrite(invoice.Id);
             memoryCache.Set(GetCacheKey(invoice.Id), invoice, GetExpiration(invoice));
         }
-
     }
 
     private async Task PollAllInvoices(CancellationToken cancellation)

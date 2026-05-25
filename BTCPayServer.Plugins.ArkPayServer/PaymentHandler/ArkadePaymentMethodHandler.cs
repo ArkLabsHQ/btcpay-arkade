@@ -18,9 +18,7 @@ public class ArkadePaymentMethodHandler(
     IContractService contractService,
     IClientTransport clientTransport,
     BoardingUtxoSyncService boardingUtxoSyncService,
-    IWalletStorage walletStorage,
-    AssetMetadataService assetMetadataService,
-    AssetRateResolver assetRateResolver
+    IWalletStorage walletStorage
 ) : IPaymentMethodHandler
 {
     public PaymentMethodId PaymentMethodId => ArkadePlugin.ArkadePaymentMethodId;
