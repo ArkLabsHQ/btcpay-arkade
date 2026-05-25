@@ -9,6 +9,7 @@
 @inject ArkNetworkConfig ArkNetworkConfig
 @inject IBitcoinBlockchain ChainTimeProvider
 @inject IClientTransport ClientTransport
+@inject BTCPayServer.Plugins.ArkPayServer.Services.AssetMetadataService AssetMetadata
 @model IEnumerable<ArkVtxo>
 
 @{
@@ -103,6 +104,18 @@
                         }
                         <td class="text-end">
                             <span class="font-monospace small" data-sensitive>@Money.Satoshis((long)vtxo.Amount).ToDecimal(MoneyUnit.BTC) BTC</span>
+                            @if (vtxo.Assets is { Count: > 0 })
+                            {
+                                foreach (var asset in vtxo.Assets)
+                                {
+                                    var assetDetails = await AssetMetadata.GetAssetDetailsAsync(asset.AssetId);
+                                    var label = AssetMetadata.GetTicker(assetDetails) ?? (asset.AssetId.Length > 10 ? asset.AssetId[..10] + "…" : asset.AssetId);
+                                    <br />
+                                    <span class="badge text-bg-success" style="font-size:.7rem;" data-sensitive>
+                                        @AssetMetadata.FormatAmount(asset.Amount, assetDetails) @label
+                                    </span>
+                                }
+                            }
                         </td>
                         <td class="text-end">
                             @if (vtxo.ExpiresAt.HasValue)

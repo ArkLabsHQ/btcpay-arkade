@@ -50,6 +50,15 @@
                     <span class="fw-semibold" style="color: var(--btcpay-body-text-muted)" data-testid="boarding-balance" data-sensitive>@FormatBtc(Model.BoardingBalance)</span>
                 </div>
             }
+            @foreach (var asset in Model.AssetBalances)
+            {
+                <div class="d-flex align-items-center gap-2">
+                    <span class="text-muted small">@(asset.Ticker ?? asset.Name ?? "Asset"):</span>
+                    <span class="fw-semibold text-success" data-testid="asset-balance" data-sensitive>
+                        @asset.FormattedAmount@(string.IsNullOrEmpty(asset.Ticker) ? "" : " " + asset.Ticker)
+                    </span>
+                </div>
+            }
         </div>
     }
     else
