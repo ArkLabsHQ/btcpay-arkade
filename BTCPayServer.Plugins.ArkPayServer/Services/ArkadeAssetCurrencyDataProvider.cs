@@ -3,6 +3,7 @@ using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Rates;
 using BTCPayServer.Services.Stores;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
 
@@ -16,13 +17,26 @@ namespace BTCPayServer.Plugins.ArkPayServer.Services;
 /// first occurrence wins (<see cref="Dictionary{TKey,TValue}.TryAdd"/>), which
 /// is harmless because each store prices against its own asset record.
 /// </para>
+/// <para>
+/// <b>DI note:</b> dependencies are resolved lazily through
+/// <see cref="IServiceProvider"/> inside <see cref="LoadCurrencyData"/> — NOT
+/// injected into the constructor. <see cref="CurrencyNameTable"/> takes
+/// <c>IEnumerable&lt;CurrencyDataProvider&gt;</c>, so injecting
+/// <see cref="PaymentMethodHandlerDictionary"/> here would force the whole
+/// payment-handler graph to build while <see cref="CurrencyNameTable"/> is
+/// still constructing — and core handlers depend back on
+/// <see cref="CurrencyNameTable"/>, forming a DI cycle that hangs startup.
+/// Resolving at load time (after the table is constructed) sidesteps it, the
+/// same way <c>ArkadeCheckoutModelExtension</c> does for its own cycle.
+/// </para>
 /// </summary>
-public class ArkadeAssetCurrencyDataProvider(
-    StoreRepository stores,
-    PaymentMethodHandlerDictionary handlers) : CurrencyDataProvider
+public class ArkadeAssetCurrencyDataProvider(IServiceProvider serviceProvider) : CurrencyDataProvider
 {
     public async Task<CurrencyData[]> LoadCurrencyData(CancellationToken cancellationToken)
     {
+        var stores = serviceProvider.GetRequiredService<StoreRepository>();
+        var handlers = serviceProvider.GetRequiredService<PaymentMethodHandlerDictionary>();
+
         var seen = new Dictionary<string, CurrencyData>(StringComparer.OrdinalIgnoreCase);
         foreach (var store in await stores.GetStores())
         {
