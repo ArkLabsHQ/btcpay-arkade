@@ -23,7 +23,6 @@ public class ArkadeAssetPaymentMethodHandler(
     BTCPayServerEnvironment btcPayServerEnvironment,
     IContractService contractService,
     IClientTransport clientTransport,
-    PaymentMethodHandlerDictionary handlers,
     AssetRateResolver assetRateResolver
 ) : IPaymentMethodHandler
 {
@@ -46,12 +45,16 @@ public class ArkadeAssetPaymentMethodHandler(
 
         // The asset method is enabled by its own thin config; the wallet and the
         // tracked-asset list live on the BTC-VTXO ARKADE config (single source of truth).
-        if (ParsePaymentMethodConfig(store.GetPaymentMethodConfigs()[PaymentMethodId]) is not ArkadeAssetPaymentMethodConfig)
+        // Parse both via this handler's serializer (both methods use the same
+        // BlobSerializer) so we never inject PaymentMethodHandlerDictionary — a
+        // handler depending on the dictionary it belongs to is a DI cycle that
+        // hangs startup.
+        var configs = store.GetPaymentMethodConfigs();
+        if (configs.GetValueOrDefault(PaymentMethodId)?.ToObject<ArkadeAssetPaymentMethodConfig>(Serializer) is null)
             throw new PaymentMethodUnavailableException("Arkade Asset payment method not configured");
 
-        var arkadeConfig = store.GetPaymentMethodConfig<ArkadePaymentMethodConfig>(
-            ArkadePlugin.ArkadePaymentMethodId, handlers);
-        if (arkadeConfig?.WalletId is not { } walletId)
+        if (configs.GetValueOrDefault(ArkadePlugin.ArkadePaymentMethodId)
+                ?.ToObject<ArkadePaymentMethodConfig>(Serializer) is not { WalletId: { } walletId } arkadeConfig)
             throw new PaymentMethodUnavailableException("Arkade wallet not configured");
 
         var enabledAssets = arkadeConfig.Assets.Where(a => a.Enabled).ToList();
