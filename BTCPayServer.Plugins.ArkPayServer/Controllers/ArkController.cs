@@ -2094,6 +2094,7 @@ public class ArkController(
 
             var newConfig = config with { TrackedAssets = assets };
             store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], newConfig);
+            SyncAssetPaymentMethod(store, newConfig);
             await storeRepository.UpdateStore(store);
             await assetCurrencyRegistrar.RefreshAsync(cancellationToken);
             return RedirectWithSuccess(nameof(StoreOverview),
@@ -2106,6 +2107,7 @@ public class ArkController(
             var assets = config!.Assets.Where(a => !a.AssetId.Equals(assetId, StringComparison.OrdinalIgnoreCase)).ToList();
             var newConfig = config with { TrackedAssets = assets };
             store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], newConfig);
+            SyncAssetPaymentMethod(store, newConfig);
             await storeRepository.UpdateStore(store);
             await assetCurrencyRegistrar.RefreshAsync(cancellationToken);
             return RedirectWithSuccess(nameof(StoreOverview), "Removed tracked asset.", new { storeId });
@@ -2138,6 +2140,24 @@ public class ArkController(
             Name = assetMetadataService.GetName(details),
             Decimals = assetMetadataService.GetDecimals(details),
         });
+    }
+
+    /// <summary>
+    /// Enables the dedicated ARKADE-ASSET payment method exactly when the store
+    /// has at least one enabled tracked asset; clears it otherwise. The asset
+    /// method's config is thin (just the wallet id) — the asset list lives on
+    /// the <see cref="ArkadePaymentMethodConfig"/> it reads at prompt time.
+    /// Mutates <paramref name="store"/> in place; the caller persists via
+    /// <c>UpdateStore</c>.
+    /// </summary>
+    private void SyncAssetPaymentMethod(StoreData store, ArkadePaymentMethodConfig arkadeConfig)
+    {
+        var assetPmi = ArkadePlugin.ArkadeAssetPaymentMethodId;
+        if (arkadeConfig.WalletId is { } walletId && arkadeConfig.Assets.Any(a => a.Enabled))
+            store.SetPaymentMethodConfig(
+                paymentMethodHandlerDictionary[assetPmi], new ArkadeAssetPaymentMethodConfig(walletId));
+        else
+            store.SetPaymentMethodConfig(assetPmi, null);
     }
 
     [HttpGet("stores/{storeId}/contracts")]
@@ -2584,6 +2604,7 @@ public class ArkController(
         var lnEnabled = lnConfig?.ConnectionString?.StartsWith("type=arkade", StringComparison.InvariantCultureIgnoreCase) is true;
 
         store.SetPaymentMethodConfig(ArkadePlugin.ArkadePaymentMethodId, null);
+        store.SetPaymentMethodConfig(ArkadePlugin.ArkadeAssetPaymentMethodId, null);
         if (lnEnabled)
             store.SetPaymentMethodConfig(GetLightningPaymentMethod(), null);
 

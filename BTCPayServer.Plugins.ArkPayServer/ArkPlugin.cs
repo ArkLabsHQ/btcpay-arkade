@@ -39,8 +39,10 @@ namespace BTCPayServer.Plugins.ArkPayServer;
 public class ArkadePlugin : BaseBTCPayServerPlugin
 {
     internal const string CheckoutBodyComponentName = "arkadeCheckoutBody";
+    internal const string AssetCheckoutBodyComponentName = "arkadeAssetCheckoutBody";
 
     internal static readonly PaymentMethodId ArkadePaymentMethodId = new("ARKADE");
+    internal static readonly PaymentMethodId ArkadeAssetPaymentMethodId = new("ARKADE-ASSET");
     internal static readonly PayoutMethodId ArkadePayoutMethodId = PayoutMethodId.Parse("ARKADE");
 
     public override IBTCPayServerPlugin.PluginDependency[] Dependencies { get; } =
@@ -90,6 +92,11 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         services.AddSingleton<ArkadePaymentLinkExtension>();
         services.AddSingleton<IPaymentLinkExtension>(sp => sp.GetRequiredService<ArkadePaymentLinkExtension>());
 
+        // Dedicated Arkade Asset payment method (payer picks an asset at checkout).
+        // Its link + checkout extensions are registered alongside the checkout component.
+        services.AddSingleton<ArkadeAssetPaymentMethodHandler>();
+        services.AddSingleton<IPaymentMethodHandler>(sp => sp.GetRequiredService<ArkadeAssetPaymentMethodHandler>());
+
         services.AddSingleton<ArkPayoutHandler>();
         services.AddSingleton<IPayoutHandler>(sp => sp.GetRequiredService<ArkPayoutHandler>());
 
@@ -97,6 +104,7 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         services.AddSingleton<IPayoutProcessorFactory>(sp => sp.GetRequiredService<ArkAutomatedPayoutSenderFactory>());
 
         services.AddDefaultPrettyName(ArkadePaymentMethodId, "Arkade");
+        services.AddDefaultPrettyName(ArkadeAssetPaymentMethodId, "Arkade Asset");
     }
 
     private static void RegisterDatabase(IServiceCollection services)
