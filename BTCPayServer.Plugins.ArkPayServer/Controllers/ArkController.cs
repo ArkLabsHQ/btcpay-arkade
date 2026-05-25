@@ -18,6 +18,7 @@ using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
 using BTCPayServer.Plugins.ArkPayServer.Services;
 using BTCPayServer.Plugins.ArkPayServer.Services.WalletLogger;
+using BTCPayServer.Rating;
 using BTCPayServer.Security;
 using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Stores;
@@ -73,6 +74,7 @@ public class ArkController(
     IWalletProvider walletProvider,
     ISpendingService arkadeSpender,
     AssetMetadataService assetMetadataService,
+    AssetCurrencyRegistrar assetCurrencyRegistrar,
     IFeeEstimator feeEstimator,
     IContractService contractService,
     IBitcoinBlockchain bitcoinTimeChainProvider,
@@ -350,15 +352,18 @@ public class ArkController(
             // Silently ignore - swaps section will show empty
         }
 
-        // Resolve a friendly label for the accepted asset (id → name/ticker)
-        string? assetAcceptanceLabel = null;
-        if (config.AssetAcceptance is { } acceptanceCfg)
+        // Tracked assets (managed list) — Ticker/Name/Decimals are cached on
+        // the config, so the list renders without indexer round-trips.
+        var trackedAssetRows = config.Assets.Select(a => new TrackedAssetRow
         {
-            var ad = await assetMetadataService.GetAssetDetailsAsync(acceptanceCfg.AssetId, cancellationToken);
-            assetAcceptanceLabel = assetMetadataService.GetName(ad)
-                ?? assetMetadataService.GetTicker(ad)
-                ?? acceptanceCfg.AssetId;
-        }
+            AssetId = a.AssetId,
+            CurrencyCode = a.CurrencyCode,
+            Ticker = a.Ticker,
+            Name = a.Name,
+            Decimals = a.Decimals,
+            RateScript = a.RateScript,
+            Enabled = a.Enabled,
+        }).ToList();
 
         return View(new StoreOverviewViewModel
         {
@@ -373,12 +378,7 @@ public class ArkController(
             AllowSubDustAmounts = config.AllowSubDustAmounts,
             BoardingEnabled = config.BoardingEnabled,
             MinBoardingAmountSats = config.MinBoardingAmountSats,
-            AssetAcceptanceEnabled = config.AssetAcceptance is not null,
-            AssetAcceptanceAssetId = config.AssetAcceptance?.AssetId,
-            AssetAcceptanceRateMode = config.AssetAcceptance?.RateMode ?? AssetRateMode.FixedReferenceCurrency,
-            AssetAcceptancePricePerUnit = config.AssetAcceptance?.PricePerUnit ?? 0m,
-            AssetAcceptanceReferenceCurrency = config.AssetAcceptance?.ReferenceCurrency,
-            AssetAcceptanceAssetLabel = assetAcceptanceLabel,
+            TrackedAssets = trackedAssetRows,
             Wallet = wallet?.Secret,
             WalletType = wallet?.WalletType ?? WalletType.SingleKey,
             CanManagePrivateKeys = canManagePrivateKeys,
@@ -2048,50 +2048,96 @@ public class ArkController(
             return RedirectWithSuccess(nameof(StoreOverview), "Boarding disabled.", new { storeId });
         }
 
-        if (command == "save-asset-acceptance")
+        if (command is "add-asset" or "edit-asset")
         {
-            var assetId = model.AssetAcceptanceAssetId?.Trim();
-            var referenceCurrency = string.IsNullOrWhiteSpace(model.AssetAcceptanceReferenceCurrency)
-                ? null
-                : model.AssetAcceptanceReferenceCurrency.Trim().ToUpperInvariant();
+            var row = model.AssetForm;
+            var asset = new TrackedArkadeAsset(
+                row.AssetId?.Trim() ?? "",
+                row.CurrencyCode?.Trim().ToUpperInvariant() ?? "",
+                string.IsNullOrWhiteSpace(row.Ticker) ? null : row.Ticker.Trim(),
+                string.IsNullOrWhiteSpace(row.Name) ? null : row.Name.Trim(),
+                row.Decimals,
+                row.RateScript?.Trim() ?? "",
+                row.Enabled);
 
-            var acceptance = new ArkadeAssetAcceptance(
-                assetId ?? string.Empty,
-                model.AssetAcceptanceRateMode,
-                model.AssetAcceptancePricePerUnit,
-                referenceCurrency);
-
-            if (!acceptance.IsValid(out var validationError))
+            if (!asset.IsValid(out var validationError))
                 return RedirectWithError(nameof(StoreOverview), validationError!, new { storeId });
-
-            // Confirm the asset exists on the indexer before accepting it —
-            // otherwise checkout would price against an unknown asset.
-            var assetDetails = await assetMetadataService.GetAssetDetailsAsync(acceptance.AssetId, cancellationToken);
-            if (assetDetails is null)
+            if (!RateRules.TryParse(asset.RateScript, out _, out var scriptErrors))
                 return RedirectWithError(nameof(StoreOverview),
-                    $"Asset '{acceptance.AssetId}' was not found on the Ark indexer. Check the asset id.",
-                    new { storeId });
+                    $"Rate script does not compile: {string.Join("; ", scriptErrors)}", new { storeId });
 
-            var newConfig = config! with { AssetAcceptance = acceptance };
+            var assets = config!.Assets.ToList();
+            var existingIdx = assets.FindIndex(a => a.AssetId.Equals(asset.AssetId, StringComparison.OrdinalIgnoreCase));
+
+            // Currency code must be unique within the store (it registers as a BTCPay currency).
+            if (assets.Any(a => !a.AssetId.Equals(asset.AssetId, StringComparison.OrdinalIgnoreCase)
+                                && a.CurrencyCode.Equals(asset.CurrencyCode, StringComparison.OrdinalIgnoreCase)))
+                return RedirectWithError(nameof(StoreOverview),
+                    $"Currency code {asset.CurrencyCode} is already used by another tracked asset.", new { storeId });
+
+            if (command == "add-asset")
+            {
+                if (existingIdx >= 0)
+                    return RedirectWithError(nameof(StoreOverview), $"Asset {asset.AssetId} is already tracked.", new { storeId });
+                // Confirm the asset exists on the indexer before tracking it.
+                if (await assetMetadataService.GetAssetDetailsAsync(asset.AssetId, cancellationToken) is null)
+                    return RedirectWithError(nameof(StoreOverview),
+                        $"Asset '{asset.AssetId}' was not found on the Arkade indexer. Check the asset id.", new { storeId });
+                assets.Add(asset);
+            }
+            else // edit-asset
+            {
+                if (existingIdx < 0)
+                    return RedirectWithError(nameof(StoreOverview), $"Asset {asset.AssetId} is not tracked.", new { storeId });
+                assets[existingIdx] = asset;
+            }
+
+            var newConfig = config with { TrackedAssets = assets };
             store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], newConfig);
             await storeRepository.UpdateStore(store);
-
-            var label = assetMetadataService.GetName(assetDetails)
-                ?? assetMetadataService.GetTicker(assetDetails)
-                ?? acceptance.AssetId;
+            await assetCurrencyRegistrar.RefreshAsync(cancellationToken);
             return RedirectWithSuccess(nameof(StoreOverview),
-                $"Now accepting {label} as payment.", new { storeId });
+                $"{(command == "add-asset" ? "Added" : "Updated")} tracked asset {asset.CurrencyCode}.", new { storeId });
         }
 
-        if (command == "disable-asset-acceptance")
+        if (command == "remove-asset")
         {
-            var newConfig = config! with { AssetAcceptance = null };
+            var assetId = model.AssetForm.AssetId?.Trim() ?? "";
+            var assets = config!.Assets.Where(a => !a.AssetId.Equals(assetId, StringComparison.OrdinalIgnoreCase)).ToList();
+            var newConfig = config with { TrackedAssets = assets };
             store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], newConfig);
             await storeRepository.UpdateStore(store);
-            return RedirectWithSuccess(nameof(StoreOverview), "Asset acceptance disabled.", new { storeId });
+            await assetCurrencyRegistrar.RefreshAsync(cancellationToken);
+            return RedirectWithSuccess(nameof(StoreOverview), "Removed tracked asset.", new { storeId });
         }
 
         return RedirectToAction(nameof(StoreOverview), new { storeId });
+    }
+
+    /// <summary>
+    /// Looks up an Arkade asset's metadata on the arkd indexer so the add-asset
+    /// form can prefill ticker/name/decimals from just the asset id.
+    /// </summary>
+    [HttpGet("stores/{storeId}/asset-metadata")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> FetchAssetMetadata(string storeId, string? assetId, CancellationToken cancellationToken)
+    {
+        assetId = assetId?.Trim() ?? "";
+        if (string.IsNullOrEmpty(assetId))
+            return Json(new AssetMetadataResult { Found = false });
+
+        var details = await assetMetadataService.GetAssetDetailsAsync(assetId, cancellationToken);
+        if (details is null)
+            return Json(new AssetMetadataResult { Found = false, AssetId = assetId });
+
+        return Json(new AssetMetadataResult
+        {
+            Found = true,
+            AssetId = assetId,
+            Ticker = assetMetadataService.GetTicker(details),
+            Name = assetMetadataService.GetName(details),
+            Decimals = assetMetadataService.GetDecimals(details),
+        });
     }
 
     [HttpGet("stores/{storeId}/contracts")]

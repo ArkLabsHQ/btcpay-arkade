@@ -151,12 +151,12 @@
                     <div class="d-flex justify-content-between align-items-center mb-2">
                         <span class="text-muted">Asset Payments</span>
                         <button type="button" class="btn btn-sm badge btn-outline-secondary text-primary"
-                                data-bs-toggle="modal" data-bs-target="#assetAcceptanceModal"
+                                data-bs-toggle="modal" data-bs-target="#assetsModal"
                                 data-testid="asset-acceptance-btn"
-                                title="Accept an Arkade asset (e.g. a stablecoin) as payment at a merchant-declared rate">
-                            @if (Model.AssetAcceptanceEnabled)
+                                title="Accept Arkade assets (e.g. a stablecoin) as payment at a merchant-declared rate">
+                            @if (Model.TrackedAssets.Count > 0)
                             {
-                                <text>@(Model.AssetAcceptanceAssetLabel ?? "Enabled")</text>
+                                <text>@Model.TrackedAssets.Count tracked</text>
                             }
                             else
                             {
@@ -492,100 +492,222 @@
     </div>
 }
 
-<!-- Asset Acceptance Configuration Modal -->
-<div class="modal fade" id="assetAcceptanceModal" tabindex="-1" aria-labelledby="assetAcceptanceModalLabel" aria-hidden="true">
-    <div class="modal-dialog">
+<!-- Tracked Arkade Assets Modal -->
+<div class="modal fade" id="assetsModal" tabindex="-1" aria-labelledby="assetsModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title" id="assetAcceptanceModalLabel">Accept an Arkade Asset</h5>
+                <h5 class="modal-title" id="assetsModalLabel">Tracked Arkade Assets</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
-            <form asp-action="UpdateWalletConfig" method="post" asp-route-storeId="@storeId">
-                <div class="modal-body">
-                    <p class="text-muted small mb-3">
-                        Settle invoices in an Arkade asset (e.g. a USD-pegged stablecoin) instead of bitcoin.
-                        Arkade assets aren't quoted on exchanges, so you declare the price yourself —
-                        either pegged to a real currency (priced through this store's rate settings)
-                        or directly in satoshis.
-                    </p>
+            <div class="modal-body">
+                <p class="text-muted small mb-3">
+                    Accept Arkade assets (e.g. a USD-pegged stablecoin) as payment. Arkade assets aren't
+                    quoted on exchanges, so you declare each asset's price with a free-form
+                    <a href="https://docs.btcpayserver.org/Development/RateRules/" target="_blank" rel="noreferrer">BTCPay rate rule</a>
+                    — e.g. <code>USDARK_USD = 1;</code> to peg one unit to one US dollar (converted to BTC via this
+                    store's rate settings), or <code>BTC_MYA = 100000;</code> to set 100&#8201;000 units per bitcoin.
+                    Each tracked asset is registered as a store currency.
+                </p>
+
+                @if (Model.TrackedAssets.Count > 0)
+                {
+                    <div class="table-responsive mb-3">
+                        <table class="table table-sm align-middle" data-testid="tracked-assets-table">
+                            <thead>
+                                <tr>
+                                    <th>Code</th>
+                                    <th>Name</th>
+                                    <th class="text-end">Decimals</th>
+                                    <th>Rate script</th>
+                                    <th>Status</th>
+                                    <th class="text-end">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var asset in Model.TrackedAssets)
+                                {
+                                    <tr>
+                                        <td class="fw-semibold">@asset.CurrencyCode</td>
+                                        <td>@(asset.Name ?? asset.Ticker ?? "—")</td>
+                                        <td class="text-end">@asset.Decimals</td>
+                                        <td><code class="small text-truncate d-inline-block" style="max-width: 14rem;" title="@asset.RateScript">@asset.RateScript</code></td>
+                                        <td>
+                                            @if (asset.Enabled)
+                                            {
+                                                <span class="badge bg-success">Enabled</span>
+                                            }
+                                            else
+                                            {
+                                                <span class="badge bg-secondary">Disabled</span>
+                                            }
+                                        </td>
+                                        <td class="text-end text-nowrap">
+                                            <button type="button" class="btn btn-sm btn-outline-secondary asset-edit-btn"
+                                                    data-asset-id="@asset.AssetId"
+                                                    data-currency-code="@asset.CurrencyCode"
+                                                    data-ticker="@asset.Ticker"
+                                                    data-name="@asset.Name"
+                                                    data-decimals="@asset.Decimals"
+                                                    data-rate-script="@asset.RateScript"
+                                                    data-enabled="@asset.Enabled.ToString().ToLowerInvariant()">
+                                                Edit
+                                            </button>
+                                            <form asp-action="UpdateWalletConfig" asp-route-storeId="@storeId" method="post" class="d-inline">
+                                                <input type="hidden" name="AssetForm.AssetId" value="@asset.AssetId" />
+                                                <button type="submit" name="command" value="remove-asset"
+                                                        class="btn btn-sm btn-outline-danger"
+                                                        onclick="return confirm('Stop tracking @asset.CurrencyCode?');">
+                                                    Remove
+                                                </button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                    <hr />
+                }
+
+                <form asp-action="UpdateWalletConfig" asp-route-storeId="@storeId" method="post" id="assetForm">
+                    <h6 class="mb-3" id="assetFormTitle">Add an asset</h6>
 
                     <div class="mb-3">
-                        <label asp-for="AssetAcceptanceAssetId" class="form-label">Asset ID</label>
-                        <input asp-for="AssetAcceptanceAssetId" class="form-control font-monospace"
-                               data-testid="asset-acceptance-asset-id"
-                               placeholder="&lt;32-byte txid hex&gt;&lt;groupIndex&gt;" />
-                        <div class="form-text">The Arkade asset id (issuance txid + group index). Must exist on the Ark indexer.</div>
+                        <label asp-for="AssetForm.AssetId" class="form-label">Asset ID</label>
+                        <div class="input-group">
+                            <input asp-for="AssetForm.AssetId" class="form-control font-monospace"
+                                   data-testid="asset-form-asset-id"
+                                   placeholder="&lt;32-byte txid hex&gt;&lt;groupIndex&gt;" />
+                            <button type="button" class="btn btn-outline-secondary" id="assetFetchBtn"
+                                    data-fetch-url="@Url.Action("FetchAssetMetadata", new { storeId })">
+                                Fetch
+                            </button>
+                        </div>
+                        <div class="form-text" id="assetFetchHelp">The Arkade asset id (issuance txid + group index). Click Fetch to prefill from the indexer.</div>
                     </div>
 
-                    <div class="mb-3">
-                        <label asp-for="AssetAcceptanceRateMode" class="form-label">Pricing model</label>
-                        <select asp-for="AssetAcceptanceRateMode" class="form-select"
-                                data-testid="asset-acceptance-rate-mode" id="assetRateMode">
-                            <option value="@AssetRateMode.FixedReferenceCurrency">Fixed price in a reference currency</option>
-                            <option value="@AssetRateMode.SatsPerUnit">Fixed price in satoshis</option>
-                        </select>
-                    </div>
-
-                    <div class="mb-3">
-                        <label asp-for="AssetAcceptancePricePerUnit" class="form-label">Price per unit</label>
-                        <input asp-for="AssetAcceptancePricePerUnit" class="form-control" type="number"
-                               step="any" min="0" data-testid="asset-acceptance-price" />
-                        <div class="form-text" id="assetPriceHelp">
-                            For the reference-currency model: how much of the reference currency one whole
-                            asset unit is worth (e.g. <code>1</code> for a 1:1 USD stablecoin).
-                            For the satoshi model: satoshis per whole asset unit.
+                    <div class="row">
+                        <div class="col-sm-6 mb-3">
+                            <label asp-for="AssetForm.CurrencyCode" class="form-label">Currency code</label>
+                            <input asp-for="AssetForm.CurrencyCode" class="form-control text-uppercase"
+                                   data-testid="asset-form-currency-code" placeholder="USDARK" maxlength="10" />
+                            <div class="form-text">Registered as a store currency. Unique within this store.</div>
+                        </div>
+                        <div class="col-sm-3 mb-3">
+                            <label asp-for="AssetForm.Decimals" class="form-label">Decimals</label>
+                            <input asp-for="AssetForm.Decimals" class="form-control" type="number" min="0" max="18"
+                                   data-testid="asset-form-decimals" />
+                        </div>
+                        <div class="col-sm-3 mb-3">
+                            <label asp-for="AssetForm.Ticker" class="form-label">Ticker</label>
+                            <input asp-for="AssetForm.Ticker" class="form-control" data-testid="asset-form-ticker" placeholder="USDARK" />
                         </div>
                     </div>
 
-                    <div class="mb-3" id="assetReferenceCurrencyRow">
-                        <label asp-for="AssetAcceptanceReferenceCurrency" class="form-label">Reference currency</label>
-                        <input asp-for="AssetAcceptanceReferenceCurrency" class="form-control"
-                               data-testid="asset-acceptance-reference-currency"
-                               placeholder="USD" maxlength="10" />
+                    <div class="mb-3">
+                        <label asp-for="AssetForm.Name" class="form-label">Name</label>
+                        <input asp-for="AssetForm.Name" class="form-control" data-testid="asset-form-name" placeholder="USD Arkade" />
+                    </div>
+
+                    <div class="mb-3">
+                        <label asp-for="AssetForm.RateScript" class="form-label">Rate script</label>
+                        <textarea asp-for="AssetForm.RateScript" class="form-control font-monospace" rows="3"
+                                  data-testid="asset-form-rate-script" placeholder="USDARK_USD = 1;"></textarea>
                         <div class="form-text">
-                            The currency the price above is denominated in. The invoice → @("@") this
-                            currency conversion uses this store's existing rate configuration.
+                            A BTCPay rate rule that prices this asset. The plugin evaluates the
+                            <code>BTC → @("@")CODE</code> pair, combined with this store's rate rules
+                            (your global rate script is never modified).
                         </div>
                     </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    @if (Model.AssetAcceptanceEnabled)
-                    {
-                        <button type="submit" name="command" value="disable-asset-acceptance"
-                                class="btn btn-outline-danger" data-testid="asset-acceptance-disable">
-                            Disable
+
+                    <div class="form-check mb-3">
+                        <input asp-for="AssetForm.Enabled" class="form-check-input" data-testid="asset-form-enabled" />
+                        <label asp-for="AssetForm.Enabled" class="form-check-label">Enabled (offered at checkout)</label>
+                    </div>
+
+                    <div class="d-flex justify-content-end gap-2">
+                        <button type="button" class="btn btn-outline-secondary d-none" id="assetFormCancelEdit">Cancel edit</button>
+                        <button type="submit" name="command" value="add-asset" class="btn btn-primary"
+                                id="assetSubmitBtn" data-testid="asset-form-submit">
+                            Add asset
                         </button>
-                        <button type="submit" name="command" value="save-asset-acceptance"
-                                class="btn btn-primary" data-testid="asset-acceptance-save">
-                            Save
-                        </button>
-                    }
-                    else
-                    {
-                        <button type="submit" name="command" value="save-asset-acceptance"
-                                class="btn btn-primary" data-testid="asset-acceptance-save">
-                            Enable
-                        </button>
-                    }
-                </div>
-            </form>
+                    </div>
+                </form>
+            </div>
         </div>
     </div>
 </div>
 
 <script>
     (function () {
-        var modeEl = document.getElementById('assetRateMode');
-        var refRow = document.getElementById('assetReferenceCurrencyRow');
-        if (!modeEl || !refRow) return;
-        function sync() {
-            // "0" is the FixedReferenceCurrency enum value (first declared).
-            var isFixed = modeEl.value === '@AssetRateMode.FixedReferenceCurrency' || modeEl.value === '0';
-            refRow.style.display = isFixed ? '' : 'none';
+        var form = document.getElementById('assetForm');
+        if (!form) return;
+        var idEl = document.getElementById('AssetForm_AssetId');
+        var codeEl = document.getElementById('AssetForm_CurrencyCode');
+        var tickerEl = document.getElementById('AssetForm_Ticker');
+        var nameEl = document.getElementById('AssetForm_Name');
+        var decimalsEl = document.getElementById('AssetForm_Decimals');
+        var scriptEl = document.getElementById('AssetForm_RateScript');
+        var enabledEl = document.getElementById('AssetForm_Enabled');
+        var submitBtn = document.getElementById('assetSubmitBtn');
+        var title = document.getElementById('assetFormTitle');
+        var cancelEdit = document.getElementById('assetFormCancelEdit');
+        var fetchBtn = document.getElementById('assetFetchBtn');
+        var fetchHelp = document.getElementById('assetFetchHelp');
+
+        function setAddMode() {
+            form.reset();
+            submitBtn.value = 'add-asset';
+            submitBtn.textContent = 'Add asset';
+            title.textContent = 'Add an asset';
+            idEl.readOnly = false;
+            cancelEdit.classList.add('d-none');
+            fetchHelp.textContent = 'The Arkade asset id (issuance txid + group index). Click Fetch to prefill from the indexer.';
         }
-        modeEl.addEventListener('change', sync);
-        sync();
+
+        document.querySelectorAll('.asset-edit-btn').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                idEl.value = btn.dataset.assetId || '';
+                codeEl.value = btn.dataset.currencyCode || '';
+                tickerEl.value = btn.dataset.ticker || '';
+                nameEl.value = btn.dataset.name || '';
+                decimalsEl.value = btn.dataset.decimals || '0';
+                scriptEl.value = btn.dataset.rateScript || '';
+                enabledEl.checked = btn.dataset.enabled === 'true';
+                submitBtn.value = 'edit-asset';
+                submitBtn.textContent = 'Save changes';
+                title.textContent = 'Edit ' + (btn.dataset.currencyCode || 'asset');
+                idEl.readOnly = true;   // asset id is the key — cannot change on edit
+                cancelEdit.classList.remove('d-none');
+                form.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            });
+        });
+
+        if (cancelEdit) cancelEdit.addEventListener('click', setAddMode);
+
+        if (fetchBtn) {
+            fetchBtn.addEventListener('click', function () {
+                var id = (idEl.value || '').trim();
+                if (!id) { fetchHelp.textContent = 'Enter an asset id first.'; return; }
+                fetchBtn.disabled = true;
+                fetchHelp.textContent = 'Looking up…';
+                fetch(fetchBtn.dataset.fetchUrl + '?assetId=' + encodeURIComponent(id), {
+                    headers: { 'Accept': 'application/json' }
+                })
+                    .then(function (r) { return r.json(); })
+                    .then(function (d) {
+                        if (!d.found) { fetchHelp.textContent = 'Asset not found on the indexer.'; return; }
+                        if (d.ticker) tickerEl.value = d.ticker;
+                        if (d.name) nameEl.value = d.name;
+                        if (typeof d.decimals === 'number') decimalsEl.value = d.decimals;
+                        if (!codeEl.value && d.ticker) codeEl.value = d.ticker.toUpperCase();
+                        fetchHelp.textContent = 'Prefilled from the indexer.';
+                    })
+                    .catch(function () { fetchHelp.textContent = 'Lookup failed. Enter details manually.'; })
+                    .finally(function () { fetchBtn.disabled = false; });
+            });
+        }
     })();
 </script>
 

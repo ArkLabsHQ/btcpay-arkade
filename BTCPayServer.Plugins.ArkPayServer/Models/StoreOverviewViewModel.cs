@@ -22,16 +22,13 @@ public class StoreOverviewViewModel
     public bool BoardingEnabled { get; set; }
     public long MinBoardingAmountSats { get; set; }
 
-    // --- Arkade asset acceptance (settle invoices in a merchant-declared
-    // Arkade asset at a merchant-declared rate). Disabled = BTC-VTXO only.
-    public bool AssetAcceptanceEnabled { get; set; }
-    public string? AssetAcceptanceAssetId { get; set; }
-    public AssetRateMode AssetAcceptanceRateMode { get; set; } = AssetRateMode.FixedReferenceCurrency;
-    public decimal AssetAcceptancePricePerUnit { get; set; }
-    public string? AssetAcceptanceReferenceCurrency { get; set; }
+    // --- Tracked Arkade assets (managed list; accepted for payment via the
+    // dedicated "Arkade Asset" payment method, priced by a per-asset rate
+    // script). Empty = BTC-VTXO only.
+    public List<TrackedAssetRow> TrackedAssets { get; set; } = [];
 
-    /// <summary>Resolved display name/ticker for the accepted asset, if known.</summary>
-    public string? AssetAcceptanceAssetLabel { get; set; }
+    /// <summary>Bound form for the add/edit-asset modal.</summary>
+    public TrackedAssetRow AssetForm { get; set; } = new();
 
     /// <summary>
     /// The type of wallet (SingleKey/legacy or HD/mnemonic).

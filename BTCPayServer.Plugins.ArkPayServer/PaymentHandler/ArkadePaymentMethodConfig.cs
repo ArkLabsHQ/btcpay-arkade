@@ -6,64 +6,39 @@ public record ArkadePaymentMethodConfig(
     bool AllowSubDustAmounts = false,
     bool BoardingEnabled = true,
     long MinBoardingAmountSats = ArkadePaymentMethodConfig.DefaultMinBoardingAmountSats,
-    ArkadeAssetAcceptance? AssetAcceptance = null)
+    IReadOnlyList<TrackedArkadeAsset>? TrackedAssets = null)
 {
     public const long P2trDustLimitSats = 330L;
 
     public const long DefaultMinBoardingAmountSats = 5000L;
+
+    /// <summary>Tracked assets, never null (empty when none configured).</summary>
+    public IReadOnlyList<TrackedArkadeAsset> Assets => TrackedAssets ?? [];
 }
 
 /// <summary>
-/// How a merchant prices an accepted Arkade asset. Arkade assets aren't on
-/// exchanges, so the price is merchant-declared. Two models:
-/// <list type="bullet">
-/// <item><see cref="FixedReferenceCurrency"/> — 1 asset unit costs
-/// <c>PricePerUnit</c> of <c>ReferenceCurrency</c> (e.g. a USD-pegged
-/// stablecoin: 1 unit = 1 USD). The invoice→reference-currency leg goes
-/// through BTCPay's existing rate pipeline.</item>
-/// <item><see cref="SatsPerUnit"/> — 1 asset unit costs <c>PricePerUnit</c>
-/// satoshis. Only BTCPay's BTC rate for the invoice currency is needed.</item>
-/// </list>
+/// A store-tracked Arkade asset the merchant accepts as payment. The rate is
+/// merchant-declared via a free-form BTCPay rate-rule <see cref="RateScript"/>
+/// (Arkade assets aren't exchange-listed). Ticker/Name/Decimals are cached from
+/// the arkd indexer for display and settlement math. The asset is registered as
+/// a BTCPay currency under <see cref="CurrencyCode"/>.
 /// </summary>
-public enum AssetRateMode
-{
-    FixedReferenceCurrency,
-    SatsPerUnit
-}
-
-/// <summary>
-/// Store-scoped configuration making the Arkade payment method settle an
-/// invoice in a specific Arkade asset at a merchant-declared rate.
-/// Null on <see cref="ArkadePaymentMethodConfig"/> = asset acceptance off
-/// (BTC-VTXO behaviour unchanged).
-/// </summary>
-public record ArkadeAssetAcceptance(
+public record TrackedArkadeAsset(
     string AssetId,
-    AssetRateMode RateMode,
-    decimal PricePerUnit,
-    string? ReferenceCurrency = null)
+    string CurrencyCode,
+    string? Ticker,
+    string? Name,
+    int Decimals,
+    string RateScript,
+    bool Enabled)
 {
-    /// <summary>
-    /// Validates the acceptance config is internally consistent.
-    /// </summary>
+    /// <summary>Validates the tracked-asset config is internally consistent.</summary>
     public bool IsValid(out string? error)
     {
-        if (string.IsNullOrWhiteSpace(AssetId))
-        {
-            error = "An asset id is required.";
-            return false;
-        }
-        if (PricePerUnit <= 0m)
-        {
-            error = "Price per unit must be greater than zero.";
-            return false;
-        }
-        if (RateMode == AssetRateMode.FixedReferenceCurrency &&
-            string.IsNullOrWhiteSpace(ReferenceCurrency))
-        {
-            error = "A reference currency is required for the fixed-currency rate model.";
-            return false;
-        }
+        if (string.IsNullOrWhiteSpace(AssetId)) { error = "An asset id is required."; return false; }
+        if (string.IsNullOrWhiteSpace(CurrencyCode)) { error = "A currency code is required."; return false; }
+        if (Decimals is < 0 or > 18) { error = "Decimals must be between 0 and 18."; return false; }
+        if (string.IsNullOrWhiteSpace(RateScript)) { error = "A rate script is required."; return false; }
         error = null;
         return true;
     }

@@ -12,6 +12,7 @@ using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
 using BTCPayServer.Plugins.ArkPayServer.Services;
 using BTCPayServer.Plugins.ArkPayServer.Services.WalletLogger;
+using BTCPayServer.Services.Rates;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -268,6 +269,11 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         // amount due, routing the reference-currency leg through BTCPay's
         // own rate pipeline.
         services.AddSingleton<AssetRateResolver>();
+
+        // Surfaces each store's tracked-asset codes as BTCPay currencies, and
+        // refreshes the currency table after a tracked-asset CRUD op.
+        services.AddSingleton<CurrencyDataProvider, ArkadeAssetCurrencyDataProvider>();
+        services.AddSingleton<AssetCurrencyRegistrar>();
 
         services.AddSingleton<ISweepPolicy, DestinationSweepPolicy>();
 

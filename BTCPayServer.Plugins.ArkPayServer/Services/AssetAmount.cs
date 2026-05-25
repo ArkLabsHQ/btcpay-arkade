@@ -26,6 +26,21 @@ public static class AssetAmount
     }
 
     /// <summary>
+    /// Converts a whole-unit amount due into raw base units for settlement:
+    /// rounds <b>up</b> (the merchant must never be underpaid) and clamps to at
+    /// least one base unit (a zero-amount asset output is meaningless). Returns
+    /// the base units and the actual display amount they represent. Pure — no
+    /// rate lookup — so it's unit-testable independently of the rate pipeline.
+    /// </summary>
+    public static (ulong BaseUnits, decimal ActualDisplay) BaseUnitsDue(decimal displayUnits, int decimals)
+    {
+        var scale = Pow10(decimals);
+        var baseUnitsExact = System.Math.Max(1m, System.Math.Ceiling(displayUnits * scale));
+        var baseUnits = (ulong)baseUnitsExact;
+        return (baseUnits, baseUnitsExact / scale);
+    }
+
+    /// <summary>
     /// Formats a raw base-unit amount using the asset's declared decimals:
     /// no trailing zeros, no trailing dot, and always at least the integer
     /// part (150 with decimals=2 → "1.5"; 100 with decimals=0 → "100";

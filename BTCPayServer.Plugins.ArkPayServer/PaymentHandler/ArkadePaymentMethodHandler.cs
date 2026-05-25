@@ -108,53 +108,6 @@ public class ArkadePaymentMethodHandler(
                 _ = Task.Run(() => boardingUtxoSyncService.SyncAsync(CancellationToken.None));
         }
 
-        // Arkade asset acceptance: when the store prices this invoice in a
-        // merchant-accepted asset, compute the asset amount due and surface
-        // it on the prompt. The BTC destination/expiry plumbing above is
-        // untouched — the asset amount is an additional, displayed
-        // settlement requirement against the same Ark address.
-        if (arkadePaymentMethodConfig.AssetAcceptance is { } acceptance)
-        {
-            if (!acceptance.IsValid(out var cfgErr))
-                throw new PaymentMethodUnavailableException($"Asset acceptance misconfigured: {cfgErr}");
-
-            // Bound the indexer + rate round-trips so a hung indexer/rate
-            // provider can't block invoice creation indefinitely (mirrors
-            // the 5s GetServerInfoAsync timeout above; a little more headroom
-            // since this also does a rate fetch).
-            using var assetCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-
-            var assetDetails = await assetMetadataService.GetAssetDetailsAsync(
-                acceptance.AssetId, assetCts.Token);
-            var assetDecimals = assetMetadataService.GetDecimals(assetDetails);
-            var dueSats = Money.Coins(context.Prompt.Calculate().Due).Satoshi;
-
-            AssetAmountDue assetDue;
-            try
-            {
-                assetDue = await assetRateResolver.ResolveAsync(
-                    context.Store, acceptance, dueSats, assetDecimals, assetCts.Token);
-            }
-            catch (Exception ex) when (ex is InvalidOperationException or OperationCanceledException)
-            {
-                throw new PaymentMethodUnavailableException($"Asset pricing unavailable: {ex.Message}");
-            }
-
-            context.Logs.Write(
-                $"Asset {acceptance.AssetId}: {assetDue.RateDescription}",
-                InvoiceEventData.EventSeverity.Info);
-
-            details = details with
-            {
-                AssetId = acceptance.AssetId,
-                AssetName = assetMetadataService.GetName(assetDetails),
-                AssetTicker = assetMetadataService.GetTicker(assetDetails),
-                AssetDecimals = assetDecimals,
-                AssetBaseUnitsDue = assetDue.BaseUnits,
-                AssetFormattedAmountDue = assetDue.FormattedAmount
-            };
-        }
-
         context.Prompt.Details = JObject.FromObject(details, Serializer);
     }
 
