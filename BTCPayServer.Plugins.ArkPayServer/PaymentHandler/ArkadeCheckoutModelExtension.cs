@@ -3,6 +3,7 @@ using BTCPayServer.Models.InvoicingModels;
 using BTCPayServer.Payments;
 using BTCPayServer.Services.Invoices;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 
 namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
@@ -20,6 +21,7 @@ public class ArkadeCheckoutModelExtension: ICheckoutModelExtension, IGlobalCheck
     // Lazily resolving through the provider sidesteps the cycle since the
     // singleton is cached by the time we actually enumerate at request time.
     private readonly IServiceProvider _serviceProvider;
+    private readonly ILogger<ArkadeCheckoutModelExtension> _logger;
 
     private static readonly PaymentMethodId BitcoinOnchainPmi =
         PaymentTypes.CHAIN.GetPaymentMethodId("BTC");
@@ -28,11 +30,13 @@ public class ArkadeCheckoutModelExtension: ICheckoutModelExtension, IGlobalCheck
         IEnumerable<IPaymentLinkExtension> paymentLinkExtensions,
         IServiceProvider serviceProvider,
         PaymentMethodHandlerDictionary handlers,
-        ArkadePaymentMethodHandler handler)
+        ArkadePaymentMethodHandler handler,
+        ILogger<ArkadeCheckoutModelExtension> logger)
     {
         _handler = handler;
         _handlers = handlers;
         _serviceProvider = serviceProvider;
+        _logger = logger;
         var linkList = paymentLinkExtensions as IList<IPaymentLinkExtension> ?? paymentLinkExtensions.ToList();
         _arkadePaymentLinkExtension =
             linkList.SingleOrDefault(p => p.PaymentMethodId == ArkadePlugin.ArkadePaymentMethodId) ??
@@ -62,7 +66,23 @@ public class ArkadeCheckoutModelExtension: ICheckoutModelExtension, IGlobalCheck
         // PaymentMethodId == "BTC-CHAIN") would have appended to the bitcoin
         // tab's URL. They never see the Arkade tab on their own — we have to
         // synthesise their pipeline. See HarvestUpstreamGlobalParams below.
-        var (extraForUrl, extraForQr) = HarvestUpstreamGlobalParams(context);
+        //
+        // Best-effort: this replays third-party plugin hooks against a synthetic
+        // bitcoin context, so it's exposed to their (and BTCPay's) failure modes.
+        // A throw here would propagate out of ModifyCheckoutModel and make BTCPay
+        // disable the entire Arkade plugin, so any failure must degrade to "no
+        // harvested params" rather than break checkout rendering.
+        var extraForUrl = "";
+        var extraForQr = "";
+        try
+        {
+            (extraForUrl, extraForQr) = HarvestUpstreamGlobalParams(context);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to harvest upstream BIP-21 params for the Arkade checkout; rendering without them");
+        }
 
         // Full BIP21 with all params for "Pay in wallet" link
         context.Model.InvoiceBitcoinUrl = AppendQuery(paymentLink, extraForUrl);
@@ -107,7 +127,13 @@ public class ArkadeCheckoutModelExtension: ICheckoutModelExtension, IGlobalCheck
     private (string ExtraForUrl, string ExtraForQr) HarvestUpstreamGlobalParams(CheckoutModelContext realCtx)
     {
         var bitcoinPrompt = realCtx.InvoiceEntity.GetPaymentPrompt(BitcoinOnchainPmi);
-        if (bitcoinPrompt is null || _bitcoinPaymentLinkExtension is null) return ("", "");
+        // Require an ACTIVATED bitcoin prompt: with lazy payment methods the prompt
+        // exists but stays unactivated (Details == null) until the customer opens the
+        // bitcoin tab. BitcoinPaymentLinkExtension.GetPaymentLink → ParsePaymentPromptDetails
+        // does details.ToObject<>() and NREs on null Details. There's also nothing to
+        // harvest from a tab that was never activated (its plugins didn't run either).
+        if (bitcoinPrompt is not { Activated: true, Details: not null } || _bitcoinPaymentLinkExtension is null)
+            return ("", "");
         var bitcoinHandler = _handlers.TryGet(BitcoinOnchainPmi);
         if (bitcoinHandler is null) return ("", "");
 
