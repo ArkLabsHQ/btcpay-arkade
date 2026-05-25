@@ -93,29 +93,13 @@ public class ArkadeCheckoutModelExtension: ICheckoutModelExtension, IGlobalCheck
         // case-sensitive payloads (PayJoin's onion URLs, Branta's base64 secrets, etc.).
         context.Model.InvoiceBitcoinUrlQR = AppendQuery(UpperCaseQrUri(paymentLink), extraForQr);
 
-        // Pass boarding flag + asset-acceptance details to checkout component
+        // Pass the boarding flag to the checkout component. Asset acceptance now
+        // lives on the dedicated ARKADE-ASSET method, not on this BTC-VTXO prompt.
         if (context.Prompt.Details is not null)
         {
             var details = _handler.ParsePaymentPromptDetails(context.Prompt.Details);
             if (!string.IsNullOrEmpty(details.BoardingAddress))
                 context.Model.AdditionalData["hasBoardingAddress"] = JToken.FromObject(true);
-
-            // When the store accepts an Arkade asset for this invoice, the
-            // customer settles by sending the asset (not BTC) to the same
-            // Ark address. Surface what/how-much so checkout can say so.
-            if (!string.IsNullOrEmpty(details.AssetId) &&
-                !string.IsNullOrEmpty(details.AssetFormattedAmountDue))
-            {
-                context.Model.AdditionalData["assetAcceptance"] = JToken.FromObject(new
-                {
-                    assetId = details.AssetId,
-                    name = details.AssetName,
-                    ticker = details.AssetTicker,
-                    decimals = details.AssetDecimals,
-                    amountDue = details.AssetFormattedAmountDue,
-                    baseUnitsDue = details.AssetBaseUnitsDue.ToString()
-                });
-            }
         }
     }
 

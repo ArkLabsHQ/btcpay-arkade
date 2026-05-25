@@ -39,21 +39,6 @@ public record ArkadePromptDetails
     public string? BoardingAddress { get; init; }
     public string? BoardingContractString { get; init; }
 
-    // --- Arkade asset acceptance (null unless the store accepts an asset
-    // for this payment method; additive, so existing prompts deserialize
-    // unchanged). When set, the customer settles by sending this many
-    // base units of <see cref="AssetId"/> to the Ark address above.
-    public string? AssetId { get; init; }
-    public string? AssetName { get; init; }
-    public string? AssetTicker { get; init; }
-    public int AssetDecimals { get; init; }
-
-    /// <summary>Raw base-unit asset amount the customer must send.</summary>
-    public ulong AssetBaseUnitsDue { get; init; }
-
-    /// <summary>Asset amount due, formatted to the asset's decimals.</summary>
-    public string? AssetFormattedAmountDue { get; init; }
-
     /// <summary>
     /// Parses the contract with the specified network.
     /// </summary>

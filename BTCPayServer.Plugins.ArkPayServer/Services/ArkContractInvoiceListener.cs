@@ -2,6 +2,7 @@
 using BTCPayServer.Client.Models;
 using BTCPayServer.Data;
 using BTCPayServer.Events;
+using BTCPayServer.Payments;
 using BTCPayServer.Plugins.ArkPayServer.Models;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Services.Invoices;
@@ -26,6 +27,7 @@ public class ArkContractInvoiceListener(
     IMemoryCache memoryCache,
     InvoiceRepository invoiceRepository,
     ArkadePaymentMethodHandler arkadePaymentMethodHandler,
+    ArkadeAssetPaymentMethodHandler arkadeAssetPaymentMethodHandler,
     IClientTransport clientTransport,
     EventAggregator eventAggregator,
     IContractStorage contractStorage,
@@ -118,52 +120,25 @@ public class ArkContractInvoiceListener(
                 paymentDestination = address.ToString(network.ChainName == ChainName.Mainnet);
                 inv = await invoiceRepository.GetInvoiceFromAddress(
                     ArkadePlugin.ArkadePaymentMethodId, paymentDestination);
+
+                // The dedicated Arkade Asset method derives its own address, so a
+                // VTXO arriving there matches no ARKADE invoice. Try the asset
+                // method and, if the arriving asset is one this invoice offered,
+                // settle that instead.
+                if (inv is null)
+                {
+                    var assetInvoice = await invoiceRepository.GetInvoiceFromAddress(
+                        ArkadePlugin.ArkadeAssetPaymentMethodId, paymentDestination);
+                    if (assetInvoice is not null)
+                    {
+                        await HandleAssetPayment(assetInvoice, vtxo, paymentDestination);
+                        return;
+                    }
+                }
             }
 
             if (inv is null)
                 return;
-
-            // Asset acceptance: when this invoice is priced in an Arkade
-            // asset it settles on the *asset* arriving at the address, not
-            // on the carrier VTXO's (dust) sat value. Credit BTC in
-            // proportion to the asset received so BTCPay's accounting
-            // (partial / settled / overpaid) stays correct.
-            decimal? assetCreditBtc = null;
-            var arkPrompt = inv.GetPaymentPrompt(ArkadePlugin.ArkadePaymentMethodId);
-            if (arkPrompt?.Details is not null)
-            {
-                var promptDetails = arkadePaymentMethodHandler.ParsePaymentPromptDetails(arkPrompt.Details);
-                if (!string.IsNullOrEmpty(promptDetails.AssetId) && promptDetails.AssetBaseUnitsDue > 0)
-                {
-                    // arkd returns asset ids as lowercase hex (txid‖groupIndex);
-                    // the prompt stores the merchant-entered id. Compare
-                    // case-insensitively so a mixed-case config still matches.
-                    var received = vtxo.Assets?
-                        .Where(a => string.Equals(a.AssetId, promptDetails.AssetId, StringComparison.OrdinalIgnoreCase))
-                        .Aggregate(0UL, (sum, a) => sum + a.Amount) ?? 0UL;
-                    if (received == 0UL)
-                    {
-                        // Asset invoice, but this VTXO carries none of the
-                        // expected asset (e.g. a stray BTC VTXO). Don't
-                        // credit its sats — that would wrongly settle.
-                        return;
-                    }
-                    // Credit BTC strictly proportional to the asset received —
-                    // NOT capped at 100%. An over-payment in the asset must
-                    // surface as an over-payment in BTCPay's books (refund /
-                    // reconciliation workflows depend on it); silently
-                    // clamping would hide excess the customer actually sent.
-                    // TotalDue is fixed at invoice creation (independent of
-                    // later payments), so reading it from the pre-lock `inv`
-                    // snapshot is safe — unlike the payment list, which
-                    // HandlePaymentData re-fetches inside _paymentLock.
-                    var ratio = (decimal)received / promptDetails.AssetBaseUnitsDue;
-                    assetCreditBtc = arkPrompt.Calculate().TotalDue * ratio;
-                    logger.LogInformation(
-                        "Invoice {invoiceId}: asset {assetId} received {received} (due {due}) → crediting {btc} BTC",
-                        inv.Id, promptDetails.AssetId, received, promptDetails.AssetBaseUnitsDue, assetCreditBtc);
-                }
-            }
 
             // Boarding payments: Processing until confirmed, then Settled
             var isConfirmed = !isBoarding || vtxo.Metadata?.GetValueOrDefault("Confirmed") == "True";
@@ -177,12 +152,72 @@ public class ArkContractInvoiceListener(
                 Script = vtxo.Script,
                 SeenAt = vtxo.CreatedAt
             };
-            await HandlePaymentData(vtxoEntity, inv, arkadePaymentMethodHandler, paymentDestination, isConfirmed, isBoarding, assetCreditBtc);
+            await HandlePaymentData(vtxoEntity, inv, arkadePaymentMethodHandler,
+                ArkadePlugin.ArkadePaymentMethodId, paymentDestination, isConfirmed, isBoarding);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error handling VTXO change for {TxId}:{Index}", vtxo.TransactionId, vtxo.TransactionOutputIndex);
         }
+    }
+
+    /// <summary>
+    /// Settles a payment on the dedicated Arkade Asset method. The invoice offered
+    /// one option per enabled asset (each a fixed base-unit amount due); match the
+    /// arriving VTXO's assets against those options by asset id and credit BTC in
+    /// proportion to the asset received, so BTCPay's accounting (partial / settled
+    /// / overpaid) stays correct. A VTXO carrying none of the offered assets is
+    /// ignored — it can't settle the invoice.
+    /// </summary>
+    private async Task HandleAssetPayment(InvoiceEntity invoice, ArkVtxo vtxo, string destination)
+    {
+        var prompt = invoice.GetPaymentPrompt(ArkadePlugin.ArkadeAssetPaymentMethodId);
+        if (prompt?.Details is null)
+            return;
+        var details = arkadeAssetPaymentMethodHandler.ParsePaymentPromptDetails(prompt.Details);
+
+        // Match strictly by asset id against the offered options. arkd returns
+        // asset ids as lowercase hex; the option stores the merchant-entered id,
+        // so compare case-insensitively.
+        ArkadeAssetOption? matched = null;
+        ulong received = 0UL;
+        foreach (var option in details.Options)
+        {
+            var amount = vtxo.Assets?
+                .Where(a => string.Equals(a.AssetId, option.AssetId, StringComparison.OrdinalIgnoreCase))
+                .Aggregate(0UL, (sum, a) => sum + a.Amount) ?? 0UL;
+            if (amount > 0UL)
+            {
+                matched = option;
+                received = amount;
+                break;
+            }
+        }
+        if (matched is null || matched.BaseUnitsDue == 0UL)
+            return; // no offered asset arrived on this VTXO
+
+        // Credit BTC strictly proportional to the asset received — NOT capped at
+        // 100%. An over-payment in the asset must surface as an over-payment in
+        // BTCPay's books (refund / reconciliation depend on it). TotalDue is fixed
+        // at invoice creation, so reading it from the pre-lock prompt snapshot is safe.
+        var ratio = (decimal)received / matched.BaseUnitsDue;
+        var creditBtc = prompt.Calculate().TotalDue * ratio;
+        logger.LogInformation(
+            "Invoice {invoiceId}: Arkade asset {assetId} received {received} (due {due}) → crediting {btc} BTC",
+            invoice.Id, matched.AssetId, received, matched.BaseUnitsDue, creditBtc);
+
+        // Asset VTXOs are off-chain Arkade VTXOs (never boarding) → confirmed on arrival.
+        var vtxoEntity = new VtxoEntity
+        {
+            TransactionId = vtxo.TransactionId,
+            TransactionOutputIndex = (int)vtxo.TransactionOutputIndex,
+            Amount = (long)vtxo.Amount,
+            Script = vtxo.Script,
+            SeenAt = vtxo.CreatedAt
+        };
+        await HandlePaymentData(vtxoEntity, invoice, arkadeAssetPaymentMethodHandler,
+            ArkadePlugin.ArkadeAssetPaymentMethodId, destination, isConfirmed: true, isBoarding: false,
+            amountOverrideBtc: creditBtc);
     }
 
     private Task ReceivedPayment(InvoiceEntity invoice, PaymentEntity payment)
@@ -195,9 +230,8 @@ public class ArkContractInvoiceListener(
         return Task.CompletedTask;
     }
     
-    private async Task HandlePaymentData(VtxoEntity vtxo, InvoiceEntity invoice, ArkadePaymentMethodHandler handler, string? destination = null, bool isConfirmed = true, bool isBoarding = false, decimal? amountOverrideBtc = null)
+    private async Task HandlePaymentData(VtxoEntity vtxo, InvoiceEntity invoice, IPaymentMethodHandler handler, PaymentMethodId pmi, string? destination = null, bool isConfirmed = true, bool isBoarding = false, decimal? amountOverrideBtc = null)
     {
-        var pmi = ArkadePlugin.ArkadePaymentMethodId;
         var details = new ArkadePaymentData($"{vtxo.TransactionId}:{vtxo.TransactionOutputIndex}", destination, isBoarding);
         var status = isConfirmed ? PaymentStatus.Settled : PaymentStatus.Processing;
 
@@ -277,21 +311,18 @@ public class ArkContractInvoiceListener(
         var activityState = invoice.Status == InvoiceStatus.New
             ? ContractActivityState.Active
             : ContractActivityState.Inactive;
-        var listenedContract = GetListenedArkadeInvoice(invoice);
-        if (listenedContract is null)
+        var walletId = GetArkadeInvoiceWalletId(invoice);
+        if (walletId is null)
         {
             return;
         }
 
-        // ConfigurePrompt tags BOTH the Payment contract (the offchain Arkade
-        // address) and, when boarding is enabled, the Boarding contract with
-        // Source = "invoice:{id}". The previous implementation only toggled
-        // the Payment one (derived from the prompt's details), so the
-        // boarding contract stayed Active forever after settlement. Find every
-        // contract carrying this invoice's source tag and toggle them all.
-        // HTLC contracts use a different "swap:{id}" Source tag and are
-        // driven by OnSwapChanged based on swap state, not invoice state.
-        var walletId = listenedContract.Details.WalletId;
+        // ConfigurePrompt tags every contract it derives for this invoice with
+        // Source = "invoice:{id}": the BTC-VTXO Payment contract, the Boarding
+        // contract (when enabled), and the Arkade Asset method's receive
+        // contract. Find every contract carrying this invoice's source tag and
+        // toggle them all. HTLC contracts use a different "swap:{id}" Source tag
+        // and are driven by OnSwapChanged based on swap state, not invoice state.
         var invoiceSource = $"invoice:{invoice.Id}";
         var contracts = await contractStorage.GetContracts(
             walletIds: [walletId],
@@ -311,6 +342,26 @@ public class ArkContractInvoiceListener(
         return new ArkadeListenedContract(
             arkadePaymentMethodHandler.ParsePaymentPromptDetails(prompt.Details),
             invoice.Id);
+    }
+
+    /// <summary>
+    /// Resolves the Arkade wallet id backing an invoice from whichever Arkade
+    /// prompt has been activated — the BTC-VTXO method or the dedicated asset
+    /// method. Both derive their contracts from the same wallet and tag them
+    /// Source = "invoice:{id}", so either id is sufficient to find and toggle
+    /// every contract for the invoice.
+    /// </summary>
+    private string? GetArkadeInvoiceWalletId(InvoiceEntity invoice)
+    {
+        var arkPrompt = invoice.GetPaymentPrompt(ArkadePlugin.ArkadePaymentMethodId);
+        if (arkPrompt?.Details is not null)
+            return arkadePaymentMethodHandler.ParsePaymentPromptDetails(arkPrompt.Details).WalletId;
+
+        var assetPrompt = invoice.GetPaymentPrompt(ArkadePlugin.ArkadeAssetPaymentMethodId);
+        if (assetPrompt?.Details is not null)
+            return arkadeAssetPaymentMethodHandler.ParsePaymentPromptDetails(assetPrompt.Details).WalletId;
+
+        return null;
     }
 
     private static DateTimeOffset GetExpiration(InvoiceEntity invoice)
