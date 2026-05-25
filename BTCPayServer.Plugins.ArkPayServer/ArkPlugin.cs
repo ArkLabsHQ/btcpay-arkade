@@ -93,9 +93,12 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         services.AddSingleton<IPaymentLinkExtension>(sp => sp.GetRequiredService<ArkadePaymentLinkExtension>());
 
         // Dedicated Arkade Asset payment method (payer picks an asset at checkout).
-        // Its link + checkout extensions are registered alongside the checkout component.
         services.AddSingleton<ArkadeAssetPaymentMethodHandler>();
         services.AddSingleton<IPaymentMethodHandler>(sp => sp.GetRequiredService<ArkadeAssetPaymentMethodHandler>());
+        services.AddSingleton<ArkadeAssetPaymentLinkExtension>();
+        services.AddSingleton<IPaymentLinkExtension>(sp => sp.GetRequiredService<ArkadeAssetPaymentLinkExtension>());
+        services.AddSingleton<ArkadeAssetCheckoutModelExtension>();
+        services.AddSingleton<ICheckoutModelExtension>(sp => sp.GetRequiredService<ArkadeAssetCheckoutModelExtension>());
 
         services.AddSingleton<ArkPayoutHandler>();
         services.AddSingleton<IPayoutHandler>(sp => sp.GetRequiredService<ArkPayoutHandler>());
@@ -305,6 +308,7 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
     private static void RegisterUIExtensions(IServiceCollection services)
     {
         services.AddUIExtension("checkout-end", "Arkade/ArkadeMethodCheckout");
+        services.AddUIExtension("checkout-end", "Arkade/ArkadeAssetMethodCheckout");
         services.AddUIExtension("dashboard-setup-guide-payment", "/Views/Ark/DashboardSetupGuidePayment.cshtml");
         services.AddUIExtension("store-invoices-payments", "/Views/Ark/ArkPaymentData.cshtml");
         services.AddUIExtension("store-wallets-nav", "/Views/Ark/ArkWalletNav.cshtml");

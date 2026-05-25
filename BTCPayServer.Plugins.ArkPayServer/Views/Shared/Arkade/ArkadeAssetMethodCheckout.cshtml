@@ -1,0 +1,68 @@
+@using BTCPayServer.Plugins.ArkPayServer
+@using Newtonsoft.Json.Linq
+@model BTCPayServer.Models.InvoicingModels.CheckoutModel
+
+<template id="@ArkadePlugin.AssetCheckoutBodyComponentName">
+    <div class="payment-box">
+        <div v-if="!selected" class="alert alert-warning text-center" data-testid="asset-none">
+            No Arkade asset is available for this invoice.
+        </div>
+        <template v-else>
+            <div v-if="options.length > 1" class="mb-3">
+                <label class="form-label" for="ArkadeAssetSelect">Pay with</label>
+                <select id="ArkadeAssetSelect" class="form-select" v-model="selectedIndex" data-testid="asset-option-select">
+                    <option v-for="(opt, i) in options" :key="opt.assetId" :value="i">
+                        {{ opt.ticker || opt.currencyCode }} — {{ opt.formattedDue }}{{ opt.ticker ? ' ' + opt.ticker : '' }}
+                    </option>
+                </select>
+            </div>
+
+            <div class="text-center mb-3" data-testid="asset-amount-due">
+                <div class="fw-semibold fs-5">
+                    {{ selected.formattedDue }}<span v-if="selected.ticker"> {{ selected.ticker }}</span>
+                </div>
+                <div class="small text-muted">
+                    Send this amount of {{ selected.ticker || selected.currencyCode }} to the Arkade address below.
+                </div>
+            </div>
+
+            <div class="qr-container clipboard-button" :data-qr-value="selected.bip321Uri" :data-clipboard="selected.bip321Uri" data-testid="asset-qr">
+                <div>
+                    <qrcode :value="selected.bip321Uri" tag="div" :options="qrOptions" />
+                </div>
+                <img class="qr-icon" :src="model.cryptoImage" :alt="model.paymentMethodName" />
+            </div>
+
+            <div v-if="model.address" class="input-group mt-3" data-testid="asset-ark-address">
+                <div class="form-floating" id="ArkadeAssetAddress_@Model.PaymentMethodId">
+                    <vc:truncate-center text="model.address" is-vue="true" padding="15" elastic="true" classes="form-control-plaintext" />
+                    <label>Arkade Address</label>
+                </div>
+            </div>
+
+            <a v-if="model.showPayInWalletButton" class="btn btn-primary rounded-pill w-100 mt-4" target="_blank"
+               :href="selected.bip321Uri" :title="$t('Arkade payment link')" v-t="'pay_in_wallet'" data-testid="asset-pay-in-wallet-btn"></a>
+        </template>
+    </div>
+</template>
+
+<script>
+    Vue.component(@Safe.Json(ArkadePlugin.AssetCheckoutBodyComponentName), {
+        props: ['model', 'nfcSupported', 'nfcScanning', 'nfcErrorMessage', 'nfcWarningMessage'],
+        template: @Safe.Json("#" + ArkadePlugin.AssetCheckoutBodyComponentName),
+        components: {
+            qrcode: VueQrcode
+        },
+        data () {
+            return {
+                options: @Safe.Json(Model.AdditionalData.TryGetValue("arkadeAssetOptions", out var opts) ? opts : new JArray()),
+                selectedIndex: 0
+            };
+        },
+        computed: {
+            selected () {
+                return this.options && this.options.length ? this.options[this.selectedIndex] : null;
+            }
+        }
+    });
+</script>
