@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.1.18] - 2026-05-22
+
+### Bug Fixes
+- **Checkout no longer crashes (and disables the plugin) when the bitcoin payment method is unactivated.** With lazy payment methods, the BTC-CHAIN prompt exists on an invoice but stays unactivated (`Details`/`Destination` null) until the customer opens the bitcoin tab. The Arkade checkout's BIP-21 "harvest" step (which replays bitcoin-onchain-only plugins like PayJoin/Branta to preserve their params on the unified Arkade QR) only checked that the bitcoin prompt was non-null, then called `BitcoinPaymentLinkExtension.GetPaymentLink` → `ParsePaymentPromptDetails`, which `NullReferenceException`ed on the null `Details`. Because that threw out of `ICheckoutModelExtension.ModifyCheckoutModel`, BTCPay disabled the **entire** Arkade plugin whenever such a checkout was opened. Now the harvest requires an activated bitcoin prompt (nothing to harvest from an unactivated tab anyway), and the whole harvest is wrapped so any failure degrades to "no harvested params" instead of breaking checkout rendering.
+
 ## [2.1.17] - 2026-05-22
 
 ### SDK (NNark)
