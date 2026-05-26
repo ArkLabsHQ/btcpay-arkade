@@ -4,3 +4,6 @@
 [submodule "submodules/NNark"]
 	path = submodules/NNark
 	url = https://github.com/arkade-os/dotnet-sdk.git
+[submodule "regtest"]
+	path = regtest
+	url = https://github.com/ArkLabsHQ/arkade-regtest.git

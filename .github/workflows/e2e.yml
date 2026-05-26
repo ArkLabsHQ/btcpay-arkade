@@ -46,8 +46,8 @@ jobs:
       - name: Cache nigiri binary
         uses: actions/cache@v4
         with:
-          path: submodules/NNark/regtest/_build
-          key: nigiri-${{ runner.os }}-${{ hashFiles('submodules/NNark/regtest/.env.defaults', 'submodules/NNark/.env.regtest') }}
+          path: regtest/_build
+          key: nigiri-${{ runner.os }}-${{ hashFiles('regtest/.env.defaults', '.env.regtest') }}
 
       - name: Start nigiri / Ark stack
         # Provides bitcoin (18443), nbxplorer (32838), arkd (7070), boltz,
@@ -55,9 +55,7 @@ jobs:
         # bitcoin/nbxplorer endpoints via TESTS_BTCRPCCONNECTION and
         # TESTS_BTCNBXPLORERURL below; the GHA postgres service container
         # supplies BTCPay's DB.
-        run: |
-          chmod +x submodules/NNark/regtest/*.sh submodules/NNark/regtest/helpers/*.sh
-          ./submodules/NNark/regtest/start-env.sh
+        run: bash ./regtest/start-env.sh
         timeout-minutes: 12
 
       - name: Restore + Build solution and E2E test project
@@ -90,7 +88,7 @@ jobs:
       - name: Run E2E tests
         env:
           # Point BTCPay's ServerTester at nigiri-provided backing services.
-          # nigiri's bitcoind uses admin1/123 (see submodules/NNark/regtest
+          # nigiri's bitcoind uses admin1/123 (see regtest
           # base compose). Postgres is the GHA service container above.
           TESTS_BTCRPCCONNECTION: "server=http://127.0.0.1:18443;admin1:123"
           TESTS_BTCNBXPLORERURL: "http://127.0.0.1:32838/"
@@ -98,7 +96,7 @@ jobs:
           TESTS_HOSTNAME: "127.0.0.1"
           # ArkadeCheckoutCheatModeExtension defaults to container name
           # "arkd" (the SDK's intended v0.9-split topology, see
-          # submodules/NNark/regtest/docker/docker-compose.arkd-override.yml:
+          # regtest/docker/docker-compose.arkd-override.yml:
           # `container_name: ${ARK_CONTAINER:-arkd}`). In CI the auto-
           # derivation in `.env.defaults` lands on `ark` instead — the
           # nigiri base compose's pre-existing service name wins. The
@@ -127,5 +125,8 @@ jobs:
       - name: Stop nigiri
         if: always()
         run: |
-          chmod +x submodules/NNark/regtest/*.sh submodules/NNark/regtest/helpers/*.sh 2>/dev/null
-          ./submodules/NNark/regtest/clean-env.sh || true
+          set -a
+          . ./regtest/.env.defaults
+          [ ! -f .env.regtest ] || . ./.env.regtest
+          set +a
+          bash ./regtest/clean-env.sh || true
