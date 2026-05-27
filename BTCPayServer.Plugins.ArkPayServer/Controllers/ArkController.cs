@@ -24,6 +24,7 @@ using BTCPayServer.Services.Stores;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NArk.Abstractions;
 using NArk.Abstractions.Fees;
@@ -85,6 +86,8 @@ public class ArkController(
     IHttpClientFactory httpClientFactory,
     BoardingUtxoSyncService boardingUtxoSyncService,
     IWalletLogStore walletLogStore,
+    RecoveryStatusTracker recoveryStatusTracker,
+    IServiceProvider serviceProvider,
     ILogger<ArkController> logger) : Controller
 {
     // Post-operation VTXO refresh only needs to catch updates since the operation
@@ -172,35 +175,11 @@ public class ArkController(
                 }
             }
 
-            // Sync all known contracts for this wallet to pick up any existing VTXOs.
-            // For wallets with a long history this can poll arkd once per contract (the
-            // indexer currently requires one-by-one script queries), so do it in the
-            // background instead of blocking the HTTP request and timing out.
-            var contracts = await contractStorage.GetContracts(
-                walletIds: [walletSettings.WalletId!], cancellationToken: HttpContext.RequestAborted);
-            if (contracts.Count > 0)
-            {
-                var initBoardingContracts = contracts
-                    .Where(c => c.Type == ArkBoardingContract.ContractType).ToList();
-                var initNonBoardingScripts = contracts
-                    .Where(c => c.Type != ArkBoardingContract.ContractType)
-                    .Select(c => c.Script).ToHashSet();
-                var importedWalletId = walletSettings.WalletId!;
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        if (initNonBoardingScripts.Count > 0)
-                            await vtxoSyncService.PollScriptsForVtxos(initNonBoardingScripts, CancellationToken.None);
-                        if (initBoardingContracts.Count > 0)
-                            await boardingUtxoSyncService.SyncAsync(initBoardingContracts, CancellationToken.None);
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogWarning(ex, "Background import sync failed for wallet {WalletId}", importedWalletId);
-                    }
-                });
-            }
+            // On import, recover the wallet in the background (off the request thread —
+            // a gap-limit scan polls arkd per index): discover contracts across derivation
+            // indices + server signers (incl. legacy/deprecated), restore swaps, finalize
+            // pending txs, resync funds, then sync boarding UTXOs.
+            StartBackgroundRecovery(walletSettings.WalletId!);
 
             var config = new ArkadePaymentMethodConfig(walletSettings.WalletId!, walletSettings.IsOwnedByStore);
             store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], config);
@@ -261,6 +240,68 @@ public class ArkController(
             ModelState.AddModelError(nameof(model.Wallet), ex.Message);
             return View(model);
         }
+    }
+
+    /// <summary>
+    /// Starts unified wallet recovery for <paramref name="walletId"/> on a background
+    /// thread (a gap-limit scan polls arkd per index), tracking status for the overview.
+    /// Discovers contracts (incl. legacy deprecated-signer scripts) + the derivation
+    /// index, restores swaps, finalizes pending txs and resyncs offchain funds, then
+    /// syncs boarding (on-chain) UTXOs. <c>IWalletRecoveryService</c> is only registered
+    /// when swaps (Boltz) are configured; without it this degrades to a boarding-only sync.
+    /// </summary>
+    private void StartBackgroundRecovery(string walletId)
+    {
+        var recoveryService = serviceProvider.GetService<NArk.Swaps.Recovery.IWalletRecoveryService>();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                recoveryStatusTracker.SetRunning(walletId);
+
+                var contractsRecovered = 0;
+                var swapsAudited = 0;
+                var fundsSynced = 0;
+                if (recoveryService is not null)
+                {
+                    var report = await recoveryService.RecoverAsync(walletId, cancellationToken: CancellationToken.None);
+                    contractsRecovered = report.ContractsRecovered;
+                    swapsAudited = report.SwapAudit.Count;
+                    fundsSynced = report.FundsScriptsSynced;
+                }
+
+                // Boarding (on-chain) UTXOs aren't covered by offchain recovery.
+                var boardingContracts = (await contractStorage.GetContracts(
+                        walletIds: [walletId], cancellationToken: CancellationToken.None))
+                    .Where(c => c.Type == ArkBoardingContract.ContractType).ToList();
+                if (boardingContracts.Count > 0)
+                    await boardingUtxoSyncService.SyncAsync(boardingContracts, CancellationToken.None);
+
+                recoveryStatusTracker.SetCompleted(walletId,
+                    recoveryService is not null ? contractsRecovered : boardingContracts.Count,
+                    swapsAudited, fundsSynced);
+            }
+            catch (Exception ex)
+            {
+                recoveryStatusTracker.SetFailed(walletId, ex.Message);
+                logger.LogWarning(ex, "Background wallet recovery failed for wallet {WalletId}", walletId);
+            }
+        });
+    }
+
+    [HttpPost("stores/{storeId}/rescan")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> Rescan(string storeId)
+    {
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
+        if (errorResult != null) return errorResult;
+        if (!config!.GeneratedByStore || string.IsNullOrEmpty(config.WalletId))
+            return RedirectWithError(nameof(StoreOverview),
+                "Rescan requires a store-managed wallet.", new { storeId });
+
+        StartBackgroundRecovery(config.WalletId);
+        return RedirectWithSuccess(nameof(StoreOverview),
+            "Wallet rescan started — contracts, funds and swaps will refresh shortly.", new { storeId });
     }
 
     [HttpGet("stores/{storeId}/overview")]
@@ -386,6 +427,7 @@ public class ArkController(
             Wallet = wallet?.Secret,
             WalletType = wallet?.WalletType ?? WalletType.SingleKey,
             CanManagePrivateKeys = canManagePrivateKeys,
+            RecoveryStatus = config.WalletId is { } recoveryWalletId ? recoveryStatusTracker.Get(recoveryWalletId) : null,
             ArkOperatorUrl = arkNetworkConfig.ArkUri,
             ArkOperatorConnected = arkOperatorConnected,
             ArkOperatorError = ArkOperatorAvailability.DescribeMessage(arkOperatorError),

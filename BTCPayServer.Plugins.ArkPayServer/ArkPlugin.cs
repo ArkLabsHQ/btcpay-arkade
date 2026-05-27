@@ -239,6 +239,9 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
     private static void RegisterPluginServices(IServiceCollection services)
     {
+        // Tracks the background wallet-recovery job per wallet (import-triggered + manual Rescan).
+        services.AddSingleton<RecoveryStatusTracker>();
+
         // Per-wallet diagnostic log store. Captures NArk + plugin log
         // entries that carry a `WalletId` (either via BeginScope or the
         // structured-log args) into a rolling file per wallet so the

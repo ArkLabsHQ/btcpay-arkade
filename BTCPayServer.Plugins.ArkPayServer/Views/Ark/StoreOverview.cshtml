@@ -2,6 +2,7 @@
 @using BTCPayServer.Abstractions.Extensions
 @using BTCPayServer.Plugins.ArkPayServer.Helpers
 @using BTCPayServer.Plugins.ArkPayServer.PaymentHandler
+@using BTCPayServer.Plugins.ArkPayServer.Services
 @using NArk.Abstractions.Wallets
 @using NArk.Abstractions.Intents
 @using NArk.Swaps.Models
@@ -158,6 +159,38 @@
                             Download
                         </a>
                     </div>
+
+                    @if (Model.CanManagePrivateKeys)
+                    {
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="text-muted">Wallet Recovery</span>
+                            <form asp-action="Rescan" asp-route-storeId="@storeId" method="post" class="d-inline">
+                                <button type="submit"
+                                        class="btn btn-sm badge btn-outline-secondary text-primary"
+                                        title="Rescan the indexer + boltz to rebuild contracts, derivation index, funds and swaps for this wallet"
+                                        data-testid="rescan-wallet-btn">
+                                    Rescan
+                                </button>
+                            </form>
+                        </div>
+                        @if (Model.RecoveryStatus is { } rec)
+                        {
+                            <div class="small mb-2" data-testid="recovery-status">
+                                @if (rec.State == RecoveryState.Running)
+                                {
+                                    <span class="text-muted"><span class="spinner-border spinner-border-sm"></span> Recovery in progress…</span>
+                                }
+                                else if (rec.State == RecoveryState.Completed)
+                                {
+                                    <span class="text-muted">Last recovery: @rec.ContractsRecovered contracts, @rec.FundsSynced VTXOs, @rec.SwapsAudited swaps.</span>
+                                }
+                                else
+                                {
+                                    <span class="text-danger">Last recovery failed: @rec.Error</span>
+                                }
+                            </div>
+                        }
+                    }
                 </div>
             </div>
         </div>
