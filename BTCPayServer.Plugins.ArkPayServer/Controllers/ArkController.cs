@@ -63,6 +63,7 @@ public class ArkController(
     StoreRepository storeRepository,
     PaymentMethodHandlerDictionary paymentMethodHandlerDictionary,
     IClientTransport clientTransport,
+    ArkOperatorHealthService arkOperatorHealth,
     ArkadeSpendingService arkadeSpendingService,
     ArkAutomatedPayoutSenderFactory payoutSenderFactory,
     PayoutProcessorService payoutProcessorService,
@@ -150,7 +151,7 @@ public class ArkController(
                 }
                 catch (Exception ex)
                 {
-                    TempData[WellKnownTempData.ErrorMessage] = "Could not update wallet: " + ex.Message;
+                    TempData[WellKnownTempData.ErrorMessage] = DescribeArkError(ex, "Could not update wallet");
                     return View(model);
                 }
             }
@@ -260,7 +261,7 @@ public class ArkController(
         }
         catch (Exception ex)
         {
-            TempData[WellKnownTempData.ErrorMessage] = $"Unable to fetch balances: {ex.Message}";
+            TempData[WellKnownTempData.ErrorMessage] = DescribeArkError(ex, "Unable to fetch balances");
         }
 
         var signerAvailable = await walletProvider.GetAddressProviderAsync(config.WalletId!, cancellationToken) != null;
@@ -367,7 +368,7 @@ public class ArkController(
             CanManagePrivateKeys = canManagePrivateKeys,
             ArkOperatorUrl = arkNetworkConfig.ArkUri,
             ArkOperatorConnected = arkOperatorConnected,
-            ArkOperatorError = arkOperatorError,
+            ArkOperatorError = ArkOperatorAvailability.DescribeMessage(arkOperatorError),
             BoltzUrl = arkNetworkConfig.BoltzUri,
             BoltzConnected = boltzConnected,
             BoltzError = boltzError,
@@ -454,7 +455,7 @@ public class ArkController(
         }
         catch (Exception ex)
         {
-            TempData[WellKnownTempData.ErrorMessage] = $"Failed to check receive address: {ex.Message}";
+            TempData[WellKnownTempData.ErrorMessage] = DescribeArkError(ex, "Failed to check receive address");
         }
 
         return View(model);
@@ -505,7 +506,7 @@ public class ArkController(
         }
         catch (Exception ex)
         {
-            TempData[WellKnownTempData.ErrorMessage] = $"Failed to generate address: {ex.Message}";
+            TempData[WellKnownTempData.ErrorMessage] = DescribeArkError(ex, "Failed to generate address");
         }
 
         return RedirectToAction(nameof(Receive), new { storeId });
@@ -685,7 +686,7 @@ public class ArkController(
         }
         catch (ArkadePaymentFailedException e)
         {
-            TempData[WellKnownTempData.ErrorMessage] = $"Payment failed: reason: {e.Message}";
+            TempData[WellKnownTempData.ErrorMessage] = DescribeArkError(e, "Payment failed: reason");
             return RedirectToAction(nameof(SpendOverview),
                 new {storeId = store.Id, destinations = model.PrefilledDestination});
         }
@@ -2541,7 +2542,7 @@ public class ArkController(
         }
         catch (Exception ex)
         {
-            TempData[WellKnownTempData.ErrorMessage] = $"Failed to create refresh intent: {ex.Message}";
+            TempData[WellKnownTempData.ErrorMessage] = DescribeArkError(ex, "Failed to create refresh intent");
         }
 
         return RedirectToAction(nameof(StoreOverview), new { storeId });
@@ -2987,7 +2988,7 @@ public class ArkController(
             DefaultAddress = defaultAddress,
             ArkOperatorUrl = arkNetworkConfig.ArkUri,
             ArkOperatorConnected = arkOperatorConnected,
-            ArkOperatorError = arkOperatorError,
+            ArkOperatorError = ArkOperatorAvailability.DescribeMessage(arkOperatorError),
             BoltzUrl = arkNetworkConfig.BoltzUri,
             BoltzConnected = boltzConnected,
             BoltzError = boltzError
@@ -3106,6 +3107,18 @@ public class ArkController(
     {
         TempData[WellKnownTempData.ErrorMessage] = message;
         return RedirectToAction(action, routeValues);
+    }
+
+    /// <summary>
+    /// Maps an exception to a user-facing message. When the Arkade operator is unreachable
+    /// it returns the friendly <see cref="ArkOperatorAvailability.UnavailableMessage"/> and
+    /// flips the status banner immediately (so the next page already reflects the outage);
+    /// otherwise it returns the original error prefixed with <paramref name="context"/>.
+    /// </summary>
+    private string DescribeArkError(Exception ex, string context)
+    {
+        arkOperatorHealth.ReportFailure(ex); // no-op unless ex looks like operator-unreachable
+        return ArkOperatorAvailability.Describe(ex, context);
     }
 
     /// <summary>

@@ -260,6 +260,10 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
         services.AddSingleton<ArkadeSpendingService>();
 
+        // Tracks Arkade-operator reachability so plugin pages can show a friendly
+        // "operator unavailable" banner instead of leaking raw gRPC/HTTP errors.
+        services.AddSingleton<ArkOperatorHealthService>();
+
         services.AddSingleton<ISweepPolicy, DestinationSweepPolicy>();
 
         services.AddSingleton<ArkadeCheckoutModelExtension>();
