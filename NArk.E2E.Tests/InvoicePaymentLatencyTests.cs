@@ -255,15 +255,35 @@ public class InvoicePaymentLatencyTests : PlaywrightBaseTest
                 throw new InvalidOperationException(
                     $"nigiri rpc --generate 6 failed: {mineResult.StandardError.Trim()}");
 
-            var settleResult = await Cli.Wrap("docker")
-                .WithArguments(new[] { "exec", container, "ark", "settle", "--password", "secret" })
-                .WithValidation(CommandResultValidation.None)
-                .ExecuteBufferedAsync();
-            if (!settleResult.IsSuccess)
-                throw new InvalidOperationException(
-                    $"ark settle failed (exit={settleResult.ExitCode}): " +
-                    $"stderr={settleResult.StandardError.Trim()}, " +
-                    $"stdout={settleResult.StandardOutput.Trim()}");
+            // Retry settle to absorb the faucet/mine propagation race: when the
+            // `nigiri faucet` TX hasn't reached bitcoind's mempool before we
+            // mined, the boarding UTXO isn't in the confirmed chain and arkd
+            // settles with no inputs ("fees (0) exceed total amount (0)").
+            // Mine one extra block and retry — idempotent because settle is.
+            const int settleAttempts = 5;
+            CliWrap.Buffered.BufferedCommandResult settleResult = null!;
+            for (var attempt = 1; attempt <= settleAttempts; attempt++)
+            {
+                settleResult = await Cli.Wrap("docker")
+                    .WithArguments(new[] { "exec", container, "ark", "settle", "--password", "secret" })
+                    .WithValidation(CommandResultValidation.None)
+                    .ExecuteBufferedAsync();
+                if (settleResult.IsSuccess) break;
+
+                var racey = settleResult.StandardOutput.Contains(
+                    "fees (0) exceed total amount (0)", StringComparison.Ordinal);
+                if (!racey || attempt == settleAttempts)
+                    throw new InvalidOperationException(
+                        $"ark settle failed (exit={settleResult.ExitCode}, attempt={attempt}/{settleAttempts}): " +
+                        $"stderr={settleResult.StandardError.Trim()}, " +
+                        $"stdout={settleResult.StandardOutput.Trim()}");
+
+                await Task.Delay(TimeSpan.FromSeconds(2));
+                await Cli.Wrap("nigiri")
+                    .WithArguments(new[] { "rpc", "--generate", "1" })
+                    .WithValidation(CommandResultValidation.None)
+                    .ExecuteBufferedAsync();
+            }
 
             if (await GetArkdOffchainSatsAsync(container) < 10_000)
                 throw new InvalidOperationException(
