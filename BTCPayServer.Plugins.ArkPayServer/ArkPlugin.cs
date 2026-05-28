@@ -18,6 +18,7 @@ using Microsoft.Extensions.Logging;
 using NArk.Abstractions.Blockchain;
 using NArk.Abstractions.Intents;
 using NArk.Abstractions.Safety;
+using NArk.Abstractions.Wallets;
 using NArk.Blockchain;
 using NArk.Hosting;
 using NArk.Core.Models.Options;
@@ -259,6 +260,29 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
             new WalletScopedLoggerProvider(sp.GetRequiredService<IWalletLogStore>()));
 
         services.AddSingleton<ArkadeSpendingService>();
+
+        // Remote-signer transport seam.
+        //
+        // NArk's DefaultWalletProvider accepts an optional IRemoteSignerTransport
+        // and uses it when a WalletType.Remote wallet needs an IArkadeWalletSigner.
+        // The companion BTCPayServer.Plugins.App plugin registers an
+        // IBTCPayAppDeviceProxy that bridges signing calls to a connected
+        // BTCPayApp device over its SignalR hub.
+        //
+        // We resolve IRemoteSignerTransport at call-time so:
+        //  - WatchOnly wallets stay fully functional (read-only) without any
+        //    proxy registered — DefaultWalletProvider only fetches the transport
+        //    when a Remote-wallet signer is materialized, never for WatchOnly.
+        //  - The descriptive "install the App companion plugin" error only fires
+        //    when signing is actually attempted on a Remote wallet, not at
+        //    container build time. This keeps stores with no device pairing
+        //    fully bootable.
+        services.AddSingleton<IRemoteSignerTransport>(sp =>
+            sp.GetService<IBTCPayAppDeviceProxy>()
+            ?? throw new InvalidOperationException(
+                "No IBTCPayAppDeviceProxy is registered. " +
+                "Install the BTCPayServer.Plugins.App companion plugin to enable " +
+                "remote signing for watch-only/remote wallets."));
 
         // Tracks Arkade-operator reachability so plugin pages can show a friendly
         // "operator unavailable" banner instead of leaking raw gRPC/HTTP errors.
