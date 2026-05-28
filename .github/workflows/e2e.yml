@@ -68,6 +68,26 @@ jobs:
           echo "${GITHUB_WORKSPACE}/submodules/NNark/regtest/_build/nigiri/build" >> "$GITHUB_PATH"
         timeout-minutes: 12
 
+      - name: Resolve arkd container name
+        # The arkd container's name depends on which regtest pin is active.
+        # Older pins hardcode `container_name: ark` in docker-compose.arkd-override.yml;
+        # newer pins use `container_name: ${ARK_CONTAINER:-arkd}` (the v0.9-split
+        # convention, where ARK_CONTAINER auto-derives to "arkd" when ARKD_IMAGE is set).
+        # Probe both so cheat-mode `docker exec` targets whichever actually exists;
+        # mirrors the test's ResolveArkdContainerAsync which probes the same pair.
+        id: arkd-container
+        run: |
+          for c in arkd ark; do
+            if docker inspect -f '{{.Name}}' "$c" >/dev/null 2>&1; then
+              echo "name=$c" >> "$GITHUB_OUTPUT"
+              echo "Resolved arkd container: $c"
+              exit 0
+            fi
+          done
+          echo "ERROR: Could not find arkd container (tried 'arkd' and 'ark')" >&2
+          docker ps -a --format 'table {{.Names}}\t{{.Status}}'
+          exit 1
+
       - name: Restore + Build solution and E2E test project
         run: |
           dotnet restore NArk.sln
@@ -104,16 +124,13 @@ jobs:
           TESTS_BTCNBXPLORERURL: "http://127.0.0.1:32838/"
           TESTS_POSTGRES: "Host=localhost;Port=5432;Database=btcpay_e2e_test;Username=postgres;Password=postgres"
           TESTS_HOSTNAME: "127.0.0.1"
-          # ArkadeCheckoutCheatModeExtension defaults to container name
-          # "arkd" (the SDK's intended v0.9-split topology, see
-          # submodules/NNark/regtest/docker/docker-compose.arkd-override.yml:
-          # `container_name: ${ARK_CONTAINER:-arkd}`). In CI the auto-
-          # derivation in `.env.defaults` lands on `ark` instead — the
-          # nigiri base compose's pre-existing service name wins. The
-          # plugin exposes ARKADE_CHEAT_ARK_CONTAINER for exactly this
-          # case; pin it to what start-env.sh actually creates so
-          # cheat-mode `docker exec` calls don't hit "No such container".
-          ARKADE_CHEAT_ARK_CONTAINER: "ark"
+          # ArkadeCheckoutCheatModeExtension shells out `docker exec
+          # $ARKADE_CHEAT_ARK_CONTAINER ark send`. Older regtest pins land on
+          # container name `ark` (nigiri base wins); newer pins apply the
+          # v0.9-split override that renames to `arkd`. Resolved dynamically
+          # by the previous step so cheat-mode targets whichever exists,
+          # rather than pinning to a name that goes stale across regtest bumps.
+          ARKADE_CHEAT_ARK_CONTAINER: ${{ steps.arkd-container.outputs.name }}
         run: dotnet test NArk.E2E.Tests/NArk.E2E.Tests.csproj --no-build --verbosity normal --logger "console;verbosity=detailed"
         timeout-minutes: 20
 
