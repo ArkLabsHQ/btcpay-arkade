@@ -58,6 +58,14 @@ jobs:
         run: |
           chmod +x submodules/NNark/regtest/*.sh submodules/NNark/regtest/helpers/*.sh
           ./submodules/NNark/regtest/start-env.sh
+          # Persist nigiri on PATH for subsequent steps. start-env.sh only
+          # `export PATH=…` in its own shell, but the binary lives in
+          # `_build/nigiri/build/` (not on the default runner PATH). Tests
+          # that fall through to the nigiri-funding path in
+          # EnsureArkdCliReadyAsync need it findable from the dotnet
+          # process. Whether the binary was cache-restored or freshly
+          # built, the path is the same.
+          echo "${GITHUB_WORKSPACE}/submodules/NNark/regtest/_build/nigiri/build" >> "$GITHUB_PATH"
         timeout-minutes: 12
 
       - name: Restore + Build solution and E2E test project
