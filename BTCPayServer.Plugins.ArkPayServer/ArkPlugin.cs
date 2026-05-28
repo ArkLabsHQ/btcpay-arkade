@@ -263,26 +263,29 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
         // Remote-signer transport seam.
         //
-        // NArk's DefaultWalletProvider accepts an optional IRemoteSignerTransport
-        // and uses it when a WalletType.Remote wallet needs an IArkadeWalletSigner.
-        // The companion BTCPayServer.Plugins.App plugin registers an
-        // IBTCPayAppDeviceProxy that bridges signing calls to a connected
-        // BTCPayApp device over its SignalR hub.
+        // NArk's DefaultWalletProvider takes IRemoteSignerTransport? as an
+        // optional ctor param. ASP.NET Core DI invokes the registered factory
+        // when the consumer is constructed regardless of the C# default-value
+        // sugar, so the factory MUST NOT throw — it would abort the whole
+        // host build the moment the plugin loaded, even on stores that have
+        // no Remote wallets to sign for. Instead:
         //
-        // We resolve IRemoteSignerTransport at call-time so:
-        //  - WatchOnly wallets stay fully functional (read-only) without any
-        //    proxy registered — DefaultWalletProvider only fetches the transport
-        //    when a Remote-wallet signer is materialized, never for WatchOnly.
-        //  - The descriptive "install the App companion plugin" error only fires
-        //    when signing is actually attempted on a Remote wallet, not at
-        //    container build time. This keeps stores with no device pairing
-        //    fully bootable.
+        //  - When the companion BTCPayServer.Plugins.App plugin is installed
+        //    it registers an IBTCPayAppDeviceProxy that bridges signing calls
+        //    to a connected BTCPayApp device over its SignalR hub; we forward
+        //    that as the IRemoteSignerTransport.
+        //  - When no companion plugin is installed, we hand back a
+        //    MissingDeviceProxyTransport sentinel whose four signer methods
+        //    each throw a clear "install the App companion plugin" message.
+        //    NArk's DefaultWalletProvider only wraps the transport in a
+        //    RemoteArkadeWalletSigner for WalletType.Remote wallets, and only
+        //    on a call to GetSignerAsync — so a) plain WatchOnly wallets never
+        //    touch this code path, b) the descriptive error fires exactly at
+        //    the moment a Remote wallet tries to sign, not at container build
+        //    time.
         services.AddSingleton<IRemoteSignerTransport>(sp =>
             sp.GetService<IBTCPayAppDeviceProxy>()
-            ?? throw new InvalidOperationException(
-                "No IBTCPayAppDeviceProxy is registered. " +
-                "Install the BTCPayServer.Plugins.App companion plugin to enable " +
-                "remote signing for watch-only/remote wallets."));
+            ?? (IRemoteSignerTransport)new MissingDeviceProxyTransport());
 
         // Tracks Arkade-operator reachability so plugin pages can show a friendly
         // "operator unavailable" banner instead of leaking raw gRPC/HTTP errors.
