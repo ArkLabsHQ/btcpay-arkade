@@ -132,7 +132,9 @@ public class ArkController(
                     // Watch-only import: walletSettings.Wallet carries the
                     // account descriptor verbatim. Hand it to NArk's
                     // CreateWatchOnlyWallet helper (added in dotnet-sdk#107)
-                    // which stamps WalletType.WatchOnly and leaves Secret null.
+                    // which leaves Secret null on the resulting ArkWalletInfo
+                    // so DefaultWalletProvider.GetSignerAsync returns null
+                    // unless an IRemoteSignerTransport claims the wallet.
                     // The factory throws on an unparseable descriptor and the
                     // outer try/catch surfaces that to the form below.
                     var wallet = walletSettings.IsWatchOnlyDescriptor
@@ -206,10 +208,14 @@ public class ArkController(
             // Set Arkade as the default payment method
             store.SetDefaultPaymentId(ArkadePlugin.ArkadePaymentMethodId);
 
-            // Enable Lightning by default if not already configured
+            // Enable Lightning by default if not already configured. Skip watch-only wallets:
+            // Arkade-backed Lightning needs batch participation (signing), and without a paired
+            // remote signer the wallet would accept LN invoices at checkout but fail at
+            // settlement after the customer has already committed to paying. The merchant can
+            // still flip it on manually once a companion signer is paired.
             var lightningPaymentMethodId = GetLightningPaymentMethod();
             var existingLnConfig = store.GetPaymentMethodConfig<LightningPaymentMethodConfig>(lightningPaymentMethodId, paymentMethodHandlerDictionary);
-            if (existingLnConfig == null)
+            if (existingLnConfig == null && !walletSettings.IsWatchOnlyDescriptor)
             {
                 var lnurlPaymentMethodId = PaymentTypes.LNURL.GetPaymentMethodId("BTC");
                 

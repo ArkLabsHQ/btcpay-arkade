@@ -8,21 +8,29 @@ namespace BTCPayServer.Plugins.ArkPayServer.Services;
 
 /// <summary>
 /// Sentinel <see cref="IRemoteSignerTransport"/> used when no
-/// <see cref="IBTCPayAppDeviceProxy"/> is registered. Every signing
-/// method throws a clear "install the App companion plugin" error, so
-/// the failure surfaces exactly at the moment a <see cref="WalletType.Remote"/>
-/// wallet tries to sign — not at container build time. Pure
-/// <see cref="WalletType.WatchOnly"/> wallets never reach this code path,
-/// because NArk's <c>DefaultWalletProvider.GetSignerAsync</c> only
-/// materializes a <c>RemoteArkadeWalletSigner</c> over the transport for
-/// <c>WalletType.Remote</c>.
+/// <see cref="IBTCPayAppDeviceProxy"/> is registered. <see cref="KnowsWalletAsync"/>
+/// returns <c>false</c> for every wallet so NArk's <c>DefaultWalletProvider</c>
+/// never wires it up as a signing source — a wallet imported via the watch-only
+/// flow stays watch-only end-to-end (Send/sign operations surface a generic
+/// "no signing material" failure at the call site).
 /// </summary>
+/// <remarks>
+/// The three signing methods still throw a clear "install the App companion
+/// plugin" message as defence-in-depth, in case a future <c>DefaultWalletProvider</c>
+/// change or a third-party caller routes a sign request through this sentinel
+/// without consulting <see cref="KnowsWalletAsync"/> first.
+/// </remarks>
 internal sealed class MissingDeviceProxyTransport : IRemoteSignerTransport
 {
     private const string ErrorMessage =
         "No IBTCPayAppDeviceProxy is registered. " +
         "Install the BTCPayServer.Plugins.App companion plugin and pair a BTCPayApp device " +
-        "to enable remote signing for watch-only/remote wallets.";
+        "to enable remote signing for watch-only wallets.";
+
+    public Task<bool> KnowsWalletAsync(
+        string walletId,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(false);
 
     public Task<ECPubKey> GetPubKeyAsync(
         string walletId,
@@ -34,7 +42,7 @@ internal sealed class MissingDeviceProxyTransport : IRemoteSignerTransport
         string walletId,
         OutputDescriptor descriptor,
         MusigContext context,
-        MusigPrivNonce nonce,
+        string sessionId,
         CancellationToken cancellationToken = default)
         => throw new InvalidOperationException(ErrorMessage);
 
@@ -45,10 +53,11 @@ internal sealed class MissingDeviceProxyTransport : IRemoteSignerTransport
         CancellationToken cancellationToken = default)
         => throw new InvalidOperationException(ErrorMessage);
 
-    public Task<MusigPrivNonce> GenerateNoncesAsync(
+    public Task<MusigPubNonce> GenerateNoncesAsync(
         string walletId,
         OutputDescriptor descriptor,
         MusigContext context,
+        string sessionId,
         CancellationToken cancellationToken = default)
         => throw new InvalidOperationException(ErrorMessage);
 }

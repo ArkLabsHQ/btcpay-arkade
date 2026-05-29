@@ -275,14 +275,13 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         //    to a connected BTCPayApp device over its SignalR hub; we forward
         //    that as the IRemoteSignerTransport.
         //  - When no companion plugin is installed, we hand back a
-        //    MissingDeviceProxyTransport sentinel whose four signer methods
-        //    each throw a clear "install the App companion plugin" message.
-        //    NArk's DefaultWalletProvider only wraps the transport in a
-        //    RemoteArkadeWalletSigner for WalletType.Remote wallets, and only
-        //    on a call to GetSignerAsync — so a) plain WatchOnly wallets never
-        //    touch this code path, b) the descriptive error fires exactly at
-        //    the moment a Remote wallet tries to sign, not at container build
-        //    time.
+        //    MissingDeviceProxyTransport sentinel whose KnowsWalletAsync returns
+        //    false for every wallet — so a wallet imported via the watch-only
+        //    flow falls through to genuine watch-only (DefaultWalletProvider
+        //    returns null from GetSignerAsync). The three signing methods still
+        //    throw a descriptive "install the App companion plugin" message as
+        //    defence-in-depth, but the happy path now matches user intent: pick
+        //    "watch-only" and you get watch-only, not a runtime nag.
         services.AddSingleton<IRemoteSignerTransport>(sp =>
             sp.GetService<IBTCPayAppDeviceProxy>()
             ?? (IRemoteSignerTransport)new MissingDeviceProxyTransport());
