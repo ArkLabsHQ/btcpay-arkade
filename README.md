@@ -269,6 +269,48 @@ At any time, a user can exit to on-chain Bitcoin without the operator's cooperat
 
 ---
 
+## Greenfield REST API
+
+The plugin exposes a store-scoped REST API under `/api/v1/stores/{storeId}/arkade/*`. Endpoints are authenticated via BTCPay's standard Greenfield API key scheme and use the same permission policies as the rest of BTCPay (`btcpay.store.cansettings`, `btcpay.store.canmodifystoresettings`).
+
+### Endpoints
+
+- `GET /api/v1/stores/{storeId}/arkade/wallet` — current Arkade wallet config.
+- `POST /api/v1/stores/{storeId}/arkade/wallet` — create or import a wallet.
+- `PATCH /api/v1/stores/{storeId}/arkade/wallet/settings` — update destination, sub-dust, boarding.
+- `DELETE /api/v1/stores/{storeId}/arkade/wallet` — unlink wallet from the store.
+- `GET /api/v1/stores/{storeId}/arkade/balance` — available / locked / recoverable / boarding sats.
+- `GET|POST /api/v1/stores/{storeId}/arkade/address` — read or mint a receive / boarding address.
+- `POST /api/v1/stores/{storeId}/arkade/send` — send to an Ark address, BIP21 URI, or BOLT11 invoice.
+- `GET /api/v1/stores/{storeId}/arkade/vtxos` — list VTXOs.
+- `GET /api/v1/stores/{storeId}/arkade/intents` — list pending batch intents.
+- `DELETE /api/v1/stores/{storeId}/arkade/intents/{intentTxId}` — cancel an intent.
+- `GET /api/v1/stores/{storeId}/arkade/contracts` — list address derivations.
+- `GET /api/v1/stores/{storeId}/arkade/swaps` — list Lightning / chain swaps.
+- `GET /api/v1/stores/{storeId}/arkade/server-info` — Ark operator info.
+- `GET /api/v1/stores/{storeId}/arkade/status` — overall service status.
+- `GET /api/v1/stores/{storeId}/arkade/boltz-limits` — Boltz swap limits and fees.
+- `POST /api/v1/stores/{storeId}/arkade/sync` — force a VTXO + boarding sync.
+
+### Send example
+
+```http
+POST /api/v1/stores/{storeId}/arkade/send
+Authorization: token <api-key>
+Content-Type: application/json
+
+{
+  "destination": "ark1...",
+  "amountSats": 25000,
+  "inputOutpoints": ["abc...:0", "def...:1"]
+}
+```
+
+- `amountSats` is required when the destination is a bare Ark address. For BIP21 URIs it overrides any embedded `amount`. For Lightning destinations it must be omitted (the BOLT11 invoice fixes the amount).
+- `inputOutpoints` is optional. When provided, only the listed VTXOs are spent — automatic coin selection is bypassed. Must be omitted for Lightning destinations.
+
+---
+
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for the full version history.

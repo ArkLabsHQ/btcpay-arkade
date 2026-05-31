@@ -4,6 +4,7 @@ using BTCPayServer.Client;
 using BTCPayServer.Data;
 using BTCPayServer.Payments;
 using BTCPayServer.Payments.Lightning;
+using BTCPayServer.Plugins.ArkPayServer.Exceptions;
 using BTCPayServer.Plugins.ArkPayServer.Models.Api.Greenfield;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Services;
@@ -417,9 +418,26 @@ public class ArkGreenfieldController(
         try
         {
             var store = HttpContext.GetStoreData();
-            var txId = await arkadeSpendingService.Spend(store!, request.Destination, cancellationToken);
+            var txId = await arkadeSpendingService.Spend(
+                store!,
+                request.Destination,
+                request.AmountSats,
+                request.InputOutpoints,
+                cancellationToken);
 
             return Ok(new ArkSendResponse { TxId = txId });
+        }
+        catch (MalformedPaymentDestination ex)
+        {
+            return this.CreateAPIError("invalid-destination", ex.Message);
+        }
+        catch (IncompleteArkadeSetupException ex)
+        {
+            return this.CreateAPIError("incomplete-setup", ex.Message);
+        }
+        catch (ArkadePaymentFailedException ex)
+        {
+            return this.CreateAPIError("send-failed", ex.Message);
         }
         catch (Exception ex)
         {
