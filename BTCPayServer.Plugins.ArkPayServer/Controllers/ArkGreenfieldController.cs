@@ -5,6 +5,8 @@ using BTCPayServer.Data;
 using BTCPayServer.Payments;
 using BTCPayServer.Payments.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.Exceptions;
+using BTCPayServer.Plugins.ArkPayServer.Models;
+using BTCPayServer.Plugins.ArkPayServer.Models.Api;
 using BTCPayServer.Plugins.ArkPayServer.Models.Api.Greenfield;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Services;
@@ -19,6 +21,7 @@ using NArk.Abstractions;
 using NArk.Abstractions.Blockchain;
 using NArk.Abstractions.Contracts;
 using NArk.Abstractions.Extensions;
+using NArk.Abstractions.Fees;
 using NArk.Abstractions.Intents;
 using NArk.Abstractions.VTXOs;
 using NArk.Abstractions.Wallets;
@@ -49,6 +52,7 @@ public class ArkGreenfieldController(
     IClientTransport clientTransport,
     ArkadeSpendingService arkadeSpendingService,
     ISpendingService arkadeSpender,
+    IFeeEstimator feeEstimator,
     IContractService contractService,
     IChainTimeProvider bitcoinTimeChainProvider,
     VtxoSynchronizationService vtxoSyncService,
@@ -443,6 +447,216 @@ public class ArkGreenfieldController(
         {
             return this.CreateAPIError("send-failed", ex.Message);
         }
+    }
+
+    #endregion
+
+    #region Fee estimation
+
+    /// <summary>
+    /// Estimate fees for a prospective Arkade send without submitting anything.
+    /// Mirrors the data shown in the MVC Send wizard's fee breakdown.
+    /// </summary>
+    [HttpPost("~/api/v1/stores/{storeId}/arkade/estimate-fees")]
+    [Authorize(Policy = Policies.CanViewStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Greenfield)]
+    public async Task<IActionResult> EstimateFees(string storeId, [FromBody] ArkFeeEstimateRequest request,
+        CancellationToken cancellationToken)
+    {
+        var (config, error) = GetStoreConfig();
+        if (error != null) return error;
+
+        request ??= new ArkFeeEstimateRequest();
+        request.Outputs ??= [];
+        request.InputOutpoints ??= [];
+
+        try
+        {
+            var serverInfo = await clientTransport.GetServerInfoAsync(cancellationToken);
+            var response = new ArkFeeEstimateData();
+
+            // Lightning short-circuit: single destination that looks like a Lightning destination.
+            if (request.Outputs.Count == 1)
+            {
+                var dest = request.Outputs[0].Destination?.Trim() ?? string.Empty;
+                if (ArkSpendHelpers.IsLightningDestination(dest))
+                {
+                    if (boltzLimitsValidator == null)
+                        return this.CreateAPIError(503, "boltz-not-configured",
+                            "Lightning swaps are not available: Boltz integration is not configured.");
+
+                    var limits = await boltzLimitsValidator.GetAllLimitsAsync(cancellationToken);
+                    if (limits == null)
+                        return this.CreateAPIError(503, "boltz-unavailable",
+                            "Boltz instance does not support Ark.");
+
+                    var amountSats = request.Outputs[0].AmountSats ?? 0L;
+                    if (amountSats <= 0)
+                        return this.CreateAPIError("missing-amount",
+                            "amountSats is required when estimating a Lightning fee.");
+
+                    response.IsLightning = true;
+                    response.FeePercentage = limits.SubmarineFeePercentage * 100m;
+                    response.MinerFeeSats = limits.SubmarineMinerFee;
+                    response.EstimatedFeeSats =
+                        (long)Math.Ceiling(amountSats * limits.SubmarineFeePercentage) + limits.SubmarineMinerFee;
+                    response.FeeDescription =
+                        $"{limits.SubmarineFeePercentage * 100m:F2}% + {limits.SubmarineMinerFee} sats miner fee";
+                    return Ok(response);
+                }
+            }
+
+            // Non-Lightning: resolve coins (auto or explicit), then build outputs and estimate.
+            var isAutoMode = string.Equals(request.CoinSelectionMode, "auto", StringComparison.OrdinalIgnoreCase);
+            List<ArkCoin> coins;
+
+            if (isAutoMode)
+            {
+                var allCoins = await arkadeSpender.GetAvailableCoins(config!.WalletId!, cancellationToken);
+                var lockedOutpoints = await intentStorage.GetLockedVtxoOutpoints(config.WalletId!, cancellationToken);
+                var lockedSet = new HashSet<OutPoint>(lockedOutpoints);
+                var availableCoins = allCoins.Where(c => !lockedSet.Contains(c.Outpoint)).ToList();
+                if (!availableCoins.Any())
+                    return this.CreateAPIError("no-spendable-coins", "No spendable coins available.");
+
+                var (destType, targetSats) = ClassifyEstimateTarget(request);
+                var nonRecoverable = availableCoins.Where(c => !c.Swept).ToList();
+
+                SuggestCoinsResponse suggestion = destType switch
+                {
+                    DestinationType.LightningInvoice =>
+                        ArkSpendHelpers.SelectCoins(
+                            nonRecoverable.Any() ? nonRecoverable : availableCoins, targetSats, SpendType.Swap),
+                    DestinationType.BitcoinAddress =>
+                        ArkSpendHelpers.SelectCoins(availableCoins, targetSats, SpendType.Batch),
+                    _ when string.Equals(request.SpendType, "Batch", StringComparison.OrdinalIgnoreCase) =>
+                        ArkSpendHelpers.SelectCoins(availableCoins, targetSats, SpendType.Batch),
+                    _ => nonRecoverable.Any()
+                        ? ArkSpendHelpers.SelectCoins(nonRecoverable, targetSats, SpendType.Offchain)
+                        : ArkSpendHelpers.SelectCoins(availableCoins, targetSats, SpendType.Batch),
+                };
+
+                if (suggestion.Error != null)
+                    return this.CreateAPIError("coin-selection-failed", suggestion.Error);
+
+                var selectedSet = suggestion.SuggestedOutpoints.ToHashSet();
+                coins = availableCoins
+                    .Where(c => selectedSet.Contains(ArkSpendHelpers.FormatOutpoint(c)))
+                    .ToList();
+                response.SelectedOutpoints = suggestion.SuggestedOutpoints;
+            }
+            else
+            {
+                coins = await ResolveCoinsForOutpoints(config!.WalletId!, request.InputOutpoints, cancellationToken);
+            }
+
+            if (coins.Count == 0)
+                return this.CreateAPIError("no-valid-coins",
+                    "No valid coins found for the requested outpoints.");
+
+            response.TotalInputSats = coins.Sum(c => c.TxOut.Value.Satoshi);
+            response.SelectedCoinCount = coins.Count;
+
+            // Build outputs.
+            var outputs = new List<ArkTxOut>();
+            foreach (var outputReq in request.Outputs)
+            {
+                if (string.IsNullOrWhiteSpace(outputReq.Destination)) continue;
+
+                var (dest, _, outputType) = ArkSpendHelpers.ParseOutputDestination(outputReq.Destination!, serverInfo.Network);
+                if (dest == null) continue;
+
+                var amount = outputReq.AmountSats.HasValue
+                    ? Money.Satoshis(outputReq.AmountSats.Value)
+                    : (request.Outputs.Count == 1 ? Money.Satoshis(response.TotalInputSats) : Money.Zero);
+
+                if (amount > Money.Zero)
+                    outputs.Add(new ArkTxOut(outputType, amount, dest));
+            }
+
+            // Consolidation placeholder when no explicit outputs.
+            if (outputs.Count == 0)
+            {
+                var totalInput = coins.Sum(c => c.TxOut.Value);
+                var placeholderDest = coins.First().Contract.GetArkAddress();
+                outputs.Add(new ArkTxOut(ArkTxOutType.Vtxo, totalInput, placeholderDest));
+            }
+
+            // Batch with on-chain outputs: include a synthetic change VTXO so the estimator
+            // sees the full output set.
+            var hasOnchain = outputs.Any(o => o.Type == ArkTxOutType.Onchain);
+            var totalOutputSats = outputs.Sum(o => o.Value.Satoshi);
+            var totalCoinsSats = coins.Sum(c => c.TxOut.Value.Satoshi);
+            if (hasOnchain && totalCoinsSats > totalOutputSats)
+            {
+                var changePlaceholder = coins.First().Contract.GetArkAddress();
+                outputs.Add(new ArkTxOut(
+                    ArkTxOutType.Vtxo,
+                    Money.Satoshis(totalCoinsSats - totalOutputSats),
+                    changePlaceholder));
+            }
+
+            // Offchain Arkade-only sends are fee-free.
+            if (string.Equals(request.SpendType, "Arkade", StringComparison.OrdinalIgnoreCase) && !hasOnchain)
+            {
+                response.EstimatedFeeSats = 0;
+                response.FeeDescription = "No fee for Arkade transactions";
+            }
+            else
+            {
+                response.EstimatedFeeSats = await feeEstimator.EstimateFeeAsync(
+                    coins.ToArray(), outputs.ToArray(), cancellationToken);
+                response.FeeDescription = hasOnchain ? "Batch transaction fee" : "Ark service fee";
+            }
+
+            return Ok(response);
+        }
+        catch (Exception ex)
+        {
+            return this.CreateAPIError("fee-estimate-failed", ex.Message);
+        }
+    }
+
+    private static (DestinationType DestType, long? TargetSats) ClassifyEstimateTarget(ArkFeeEstimateRequest request)
+    {
+        var destType = DestinationType.ArkAddress;
+        long? targetSats = null;
+
+        var firstWithDest = request.Outputs.FirstOrDefault(o => !string.IsNullOrWhiteSpace(o.Destination));
+        if (firstWithDest != null)
+        {
+            var firstDest = firstWithDest.Destination!.Trim();
+            if (ArkSpendHelpers.IsLightningDestination(firstDest))
+                destType = DestinationType.LightningInvoice;
+            else if (firstDest.StartsWith("bc1", StringComparison.OrdinalIgnoreCase)
+                  || firstDest.StartsWith("tb1", StringComparison.OrdinalIgnoreCase)
+                  || firstDest.StartsWith("bcrt1", StringComparison.OrdinalIgnoreCase)
+                  || firstDest.StartsWith("1") || firstDest.StartsWith("3"))
+                destType = DestinationType.BitcoinAddress;
+
+            var amounts = request.Outputs.Where(o => o.AmountSats.HasValue).Select(o => o.AmountSats!.Value).ToList();
+            if (amounts.Count > 0)
+                targetSats = amounts.Sum();
+        }
+
+        return (destType, targetSats);
+    }
+
+    private async Task<List<ArkCoin>> ResolveCoinsForOutpoints(
+        string walletId, IReadOnlyList<string> outpoints, CancellationToken cancellationToken)
+    {
+        if (outpoints == null || outpoints.Count == 0)
+            return [];
+
+        var available = await arkadeSpender.GetAvailableCoins(walletId, cancellationToken);
+        var byOutpoint = available.ToDictionary(ArkSpendHelpers.FormatOutpoint);
+        var coins = new List<ArkCoin>(outpoints.Count);
+        foreach (var raw in outpoints)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) continue;
+            if (byOutpoint.TryGetValue(raw.Trim(), out var coin))
+                coins.Add(coin);
+        }
+        return coins;
     }
 
     #endregion

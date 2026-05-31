@@ -282,6 +282,7 @@ The plugin exposes a store-scoped REST API under `/api/v1/stores/{storeId}/arkad
 - `GET /api/v1/stores/{storeId}/arkade/balance` — available / locked / recoverable / boarding sats.
 - `GET|POST /api/v1/stores/{storeId}/arkade/address` — read or mint a receive / boarding address.
 - `POST /api/v1/stores/{storeId}/arkade/send` — send to an Ark address, BIP21 URI, or BOLT11 invoice.
+- `POST /api/v1/stores/{storeId}/arkade/estimate-fees` — estimate fees for a prospective send (Arkade / Batch / Lightning).
 - `GET /api/v1/stores/{storeId}/arkade/vtxos` — list VTXOs.
 - `GET /api/v1/stores/{storeId}/arkade/intents` — list pending batch intents.
 - `DELETE /api/v1/stores/{storeId}/arkade/intents/{intentTxId}` — cancel an intent.

@@ -768,69 +768,8 @@ public class ArkController(
         }
     }
 
-    private (IDestination? Destination, Money? Amount, ArkTxOutType OutputType) ParseOutputDestination(SpendOutputViewModel output, Network network)
-    {
-        var destination = output.Destination.Trim();
-
-        // Try direct Ark address -> VTXO output
-        if (ArkAddress.TryParse(destination, out var arkAddress))
-        {
-            return (arkAddress, null, ArkTxOutType.Vtxo);
-        }
-
-        // Try direct Bitcoin address -> Onchain output
-        try
-        {
-            var btcAddress = BitcoinAddress.Create(destination, network);
-            return (btcAddress, null, ArkTxOutType.Onchain);
-        }
-        catch
-        {
-            // Not a valid Bitcoin address, continue
-        }
-
-        // Try BIP21 URI
-        if (Uri.TryCreate(destination, UriKind.Absolute, out var uri) &&
-            uri.Scheme.Equals("bitcoin", StringComparison.OrdinalIgnoreCase))
-        {
-            var host = uri.AbsoluteUri[(uri.Scheme.Length + 1)..].Split('?')[0];
-            var qs = uri.ParseQueryString();
-
-            // Check for ark parameter in query string -> VTXO output
-            if (qs["ark"] is { } arkQs && ArkAddress.TryParse(arkQs, out var qsArkAddress))
-            {
-                var amount = qs["amount"] is { } amountStr && decimal.TryParse(amountStr, System.Globalization.CultureInfo.InvariantCulture, out var amountDec)
-                    ? Money.Coins(amountDec)
-                    : null;
-                return (qsArkAddress, amount, ArkTxOutType.Vtxo);
-            }
-
-            // Try host as Ark address -> VTXO output
-            if (ArkAddress.TryParse(host, out var hostArkAddress))
-            {
-                var amount = qs["amount"] is { } amountStr && decimal.TryParse(amountStr, System.Globalization.CultureInfo.InvariantCulture, out var amountDec)
-                    ? Money.Coins(amountDec)
-                    : null;
-                return (hostArkAddress, amount, ArkTxOutType.Vtxo);
-            }
-
-            // Try host as Bitcoin address -> Onchain output
-            try
-            {
-                var btcAddress = BitcoinAddress.Create(host, network);
-                var amount = qs["amount"] is { } amountStr && decimal.TryParse(amountStr, System.Globalization.CultureInfo.InvariantCulture, out var amountDec)
-                    ? Money.Coins(amountDec)
-                    : null;
-                return (btcAddress, amount, ArkTxOutType.Onchain);
-            }
-            catch
-            {
-                // Not a valid Bitcoin address
-            }
-        }
-
-        return (null, null, ArkTxOutType.Vtxo);
-    }
+    private static (IDestination? Destination, Money? Amount, ArkTxOutType OutputType) ParseOutputDestination(SpendOutputViewModel output, Network network)
+        => ArkSpendHelpers.ParseOutputDestination(output.Destination, network);
 
     private async Task ReloadSelectedVtxos(IntentBuilderViewModel model, string walletId, CancellationToken token)
     {
@@ -1841,53 +1780,7 @@ public class ArkController(
         List<ArkCoin> coins,
         long? targetSats,
         SpendType spendType)
-    {
-        if (!coins.Any())
-        {
-            return new SuggestCoinsResponse { Error = "No coins available" };
-        }
-
-        // Sort by amount descending for efficient selection
-        var sorted = coins.OrderByDescending(c => c.TxOut.Value.Satoshi).ToList();
-
-        // If no target, select all (send-all mode)
-        if (!targetSats.HasValue)
-        {
-            return new SuggestCoinsResponse
-            {
-                SuggestedOutpoints = sorted.Select(c => $"{c.Outpoint.Hash}:{c.Outpoint.N}").ToList(),
-                TotalSats = sorted.Sum(c => c.TxOut.Value.Satoshi),
-                SpendType = spendType
-            };
-        }
-
-        // Greedy selection to meet target
-        var selected = new List<ArkCoin>();
-        long total = 0;
-
-        foreach (var coin in sorted)
-        {
-            selected.Add(coin);
-            total += coin.TxOut.Value.Satoshi;
-            if (total >= targetSats.Value)
-                break;
-        }
-
-        if (total < targetSats.Value)
-        {
-            return new SuggestCoinsResponse
-            {
-                Error = $"Insufficient funds. Need {targetSats.Value} sats but only {total} sats available."
-            };
-        }
-
-        return new SuggestCoinsResponse
-        {
-            SuggestedOutpoints = selected.Select(c => $"{c.Outpoint.Hash}:{c.Outpoint.N}").ToList(),
-            TotalSats = total,
-            SpendType = spendType
-        };
-    }
+        => ArkSpendHelpers.SelectCoins(coins, targetSats, spendType);
 
     private async Task<List<ArkCoin>> GetCoinsForOutpoints(string walletId, List<string> outpoints, CancellationToken token)
     {
@@ -3741,11 +3634,7 @@ public class ArkController(
         return ParseSend2Destination(rawDestination, amountBtc, network);
     }
 
-    private static bool IsLightningDestination(string dest) =>
-        dest.StartsWith("ln", StringComparison.OrdinalIgnoreCase) ||
-        dest.StartsWith("lightning:", StringComparison.OrdinalIgnoreCase) ||
-        dest.StartsWith("lnurl", StringComparison.OrdinalIgnoreCase) ||
-        dest.IsValidEmail();
+    private static bool IsLightningDestination(string dest) => ArkSpendHelpers.IsLightningDestination(dest);
 
     private Send2DestinationViewModel ParseSend2Destination(string rawDestination, decimal? amountBtc, Network network)
     {
