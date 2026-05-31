@@ -3636,131 +3636,21 @@ public class ArkController(
 
     private static bool IsLightningDestination(string dest) => ArkSpendHelpers.IsLightningDestination(dest);
 
-    private Send2DestinationViewModel ParseSend2Destination(string rawDestination, decimal? amountBtc, Network network)
+    private static Send2DestinationViewModel ParseSend2Destination(string rawDestination, decimal? amountBtc, Network network)
     {
-        var result = new Send2DestinationViewModel
+        var parsed = ArkSpendHelpers.ParseSendDestination(rawDestination, amountBtc, network);
+        return new Send2DestinationViewModel
         {
-            RawDestination = rawDestination
+            RawDestination = parsed.RawDestination,
+            Type = parsed.Type,
+            ResolvedAddress = parsed.ResolvedAddress,
+            AmountSats = parsed.AmountSats,
+            PayoutId = parsed.PayoutId,
+            LnurlMinSats = parsed.LnurlMinSats,
+            LnurlMaxSats = parsed.LnurlMaxSats,
+            IsValid = parsed.IsValid,
+            Error = parsed.Error
         };
-
-        // Convert amount to sats if provided
-        var amountSats = amountBtc.HasValue ? (long)(amountBtc.Value * 100_000_000m) : 0L;
-
-        // Try direct Ark address
-        if (ArkAddress.TryParse(rawDestination, out var arkAddress))
-        {
-            result.Type = Send2DestinationType.ArkAddress;
-            result.ResolvedAddress = rawDestination;
-            result.AmountSats = amountSats;
-            result.IsValid = true;
-            if (amountSats <= 0)
-                result.Error = "Amount is required for Ark address";
-            return result;
-        }
-
-        // Try BOLT11 Lightning invoice
-        if (rawDestination.StartsWith("ln", StringComparison.OrdinalIgnoreCase) ||
-            rawDestination.StartsWith("lightning:", StringComparison.OrdinalIgnoreCase))
-        {
-            var invoiceStr = rawDestination.StartsWith("lightning:", StringComparison.OrdinalIgnoreCase)
-                ? rawDestination[10..]
-                : rawDestination;
-
-            try
-            {
-                var invoice = BOLT11PaymentRequest.Parse(invoiceStr, network);
-                result.Type = Send2DestinationType.LightningInvoice;
-                result.ResolvedAddress = invoiceStr;
-                result.AmountSats = amountSats > 0 ? amountSats : (long)(invoice.MinimumAmount?.ToUnit(LightMoneyUnit.Satoshi) ?? 0);
-                result.IsValid = result.AmountSats > 0;
-                if (!result.IsValid)
-                    result.Error = "Invoice amount could not be determined";
-                return result;
-            }
-            catch
-            {
-                result.Error = "Invalid Lightning invoice";
-                return result;
-            }
-        }
-
-        // Try BIP21 URI
-        if (Uri.TryCreate(rawDestination, UriKind.Absolute, out var uri) &&
-            uri.Scheme.Equals("bitcoin", StringComparison.OrdinalIgnoreCase))
-        {
-            var host = uri.AbsoluteUri[(uri.Scheme.Length + 1)..].Split('?')[0];
-            var qs = uri.ParseQueryString();
-
-            // Extract payout ID if present (from payout handler redirect)
-            result.PayoutId = qs["payout"];
-
-            // Extract amount from BIP21 if not provided
-            if (amountSats == 0 && qs["amount"] is { } amountStr &&
-                decimal.TryParse(amountStr, System.Globalization.CultureInfo.InvariantCulture, out var amountDec))
-            {
-                amountSats = (long)(amountDec * 100_000_000m);
-            }
-
-            // Check for ark= parameter first (preferred)
-            if (qs["ark"] is { } arkQs && ArkAddress.TryParse(arkQs, out var qsArkAddress))
-            {
-                result.Type = Send2DestinationType.Bip21Ark;
-                result.ResolvedAddress = arkQs;
-                result.AmountSats = amountSats;
-                result.IsValid = true;
-                if (amountSats <= 0)
-                    result.Error = "Amount is required";
-                return result;
-            }
-
-            // Check for lightning= parameter
-            if (qs["lightning"] is { } lnQs)
-            {
-                try
-                {
-                    var invoice = BOLT11PaymentRequest.Parse(lnQs, network);
-                    result.Type = Send2DestinationType.Bip21Lightning;
-                    result.ResolvedAddress = lnQs;
-                    result.AmountSats = amountSats > 0 ? amountSats : (long)(invoice.MinimumAmount?.ToUnit(LightMoneyUnit.Satoshi) ?? 0);
-                    result.IsValid = result.AmountSats > 0;
-                    if (!result.IsValid)
-                        result.Error = "Invoice amount could not be determined";
-                    return result;
-                }
-                catch
-                {
-                    // Invalid lightning invoice in BIP21
-                }
-            }
-
-            // Try host as Ark address
-            if (ArkAddress.TryParse(host, out var hostArkAddress))
-            {
-                result.Type = Send2DestinationType.Bip21Ark;
-                result.ResolvedAddress = host;
-                result.AmountSats = amountSats;
-                result.IsValid = true;
-                if (amountSats <= 0)
-                    result.Error = "Amount is required";
-                return result;
-            }
-
-            // Bitcoin address without ark/lightning is not supported in Send2 (offchain only)
-            result.Error = "BIP21 URI does not contain an Ark address or Lightning invoice. Send2 only supports offchain transfers.";
-            return result;
-        }
-
-        // LNURL / Lightning Address (requires async resolution — use ParseSend2DestinationAsync)
-        if (rawDestination.StartsWith("lnurl", StringComparison.OrdinalIgnoreCase) ||
-            rawDestination.IsValidEmail())
-        {
-            result.Type = Send2DestinationType.Lnurl;
-            result.Error = "LNURL/Lightning Address requires async resolution";
-            return result;
-        }
-
-        result.Error = "Unrecognized destination format. Use an Ark address, Lightning invoice, or BIP21 URI with ark/lightning parameter.";
-        return result;
     }
 
     private async Task EstimateSend2Fees(Send2ViewModel model, string walletId, CancellationToken token)

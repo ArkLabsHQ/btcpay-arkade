@@ -1,7 +1,9 @@
+using BTCPayServer;
 using BTCPayServer.Abstractions.Constants;
 using BTCPayServer.Abstractions.Extensions;
 using BTCPayServer.Client;
 using BTCPayServer.Data;
+using BTCPayServer.Lightning;
 using BTCPayServer.Payments;
 using BTCPayServer.Payments.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.Exceptions;
@@ -63,6 +65,7 @@ public class ArkGreenfieldController(
     IWalletProvider walletProvider,
     IIntentStorage intentStorage,
     BoardingUtxoSyncService boardingUtxoSyncService,
+    IHttpClientFactory httpClientFactory,
     BoltzLimitsValidator? boltzLimitsValidator) : ControllerBase
 {
     private string? CurrentStoreId => HttpContext.GetStoreData()?.Id;
@@ -658,6 +661,131 @@ public class ArkGreenfieldController(
         }
         return coins;
     }
+
+    #endregion
+
+    #region Parse destination
+
+    /// <summary>
+    /// Parse and classify a destination string without spending. Mirrors the MVC parse-destination
+    /// AJAX endpoint used by the Send wizard for rich destination display.
+    /// </summary>
+    [HttpPost("~/api/v1/stores/{storeId}/arkade/parse-destination")]
+    [Authorize(Policy = Policies.CanViewStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Greenfield)]
+    public async Task<IActionResult> ParseDestination(string storeId,
+        [FromBody] ArkParseDestinationRequest request, CancellationToken cancellationToken)
+    {
+        var (_, error) = GetStoreConfig();
+        if (error != null) return error;
+
+        request ??= new ArkParseDestinationRequest();
+        if (string.IsNullOrWhiteSpace(request.Destination))
+            return this.CreateAPIError("missing-destination", "Destination is required.");
+
+        try
+        {
+            var serverInfo = await clientTransport.GetServerInfoAsync(cancellationToken);
+            var rawDestination = request.Destination.Trim();
+
+            ParsedSendDestination parsed;
+            if (rawDestination.IsValidEmail() ||
+                rawDestination.StartsWith("lnurl", StringComparison.OrdinalIgnoreCase))
+            {
+                parsed = await ResolveLnurlDestinationAsync(
+                    rawDestination, request.AmountBtc, cancellationToken);
+            }
+            else
+            {
+                parsed = ArkSpendHelpers.ParseSendDestination(
+                    rawDestination, request.AmountBtc, serverInfo.Network);
+            }
+
+            return Ok(MapParsedDestination(parsed));
+        }
+        catch (Exception ex)
+        {
+            return Ok(new ArkParsedDestinationData
+            {
+                RawDestination = request.Destination,
+                Type = Send2DestinationType.Unknown.ToString(),
+                IsValid = false,
+                Error = ex.Message
+            });
+        }
+    }
+
+    private async Task<ParsedSendDestination> ResolveLnurlDestinationAsync(
+        string rawDestination, decimal? amountBtc, CancellationToken cancellationToken)
+    {
+        var result = new ParsedSendDestination
+        {
+            RawDestination = rawDestination,
+            Type = Send2DestinationType.Lnurl
+        };
+
+        try
+        {
+            Uri lnurl = rawDestination.IsValidEmail()
+                ? LNURL.LNURL.ExtractUriFromInternetIdentifier(rawDestination)
+                : LNURL.LNURL.Parse(rawDestination, out _);
+
+            var httpClient = httpClientFactory.CreateClient();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, cancellationToken);
+
+            var rawInfo = await LNURL.LNURL.FetchInformation(lnurl, httpClient, linked.Token);
+            if (rawInfo is not LNURLPayRequest info)
+            {
+                result.Error = "Not a valid LNURL-pay endpoint";
+                return result;
+            }
+
+            result.ResolvedAddress = rawDestination;
+            result.LnurlMinSats = (long)info.MinSendable.ToUnit(LightMoneyUnit.Satoshi);
+            result.LnurlMaxSats = (long)info.MaxSendable.ToUnit(LightMoneyUnit.Satoshi);
+
+            // Intersect with Boltz submarine swap limits when available.
+            if (boltzLimitsValidator != null)
+            {
+                var limits = await boltzLimitsValidator.GetAllLimitsAsync(cancellationToken);
+                if (limits != null)
+                {
+                    result.LnurlMinSats = Math.Max(result.LnurlMinSats, limits.SubmarineMinAmount);
+                    result.LnurlMaxSats = Math.Min(result.LnurlMaxSats, limits.SubmarineMaxAmount);
+                }
+            }
+
+            result.AmountSats = amountBtc.HasValue ? (long)(amountBtc.Value * 100_000_000m) : 0L;
+            result.IsValid = true;
+            return result;
+        }
+        catch (Exception ex)
+        {
+            result.Error = $"LNURL resolution failed: {ex.Message}";
+            return result;
+        }
+    }
+
+    private static ArkParsedDestinationData MapParsedDestination(ParsedSendDestination parsed) =>
+        new()
+        {
+            RawDestination = parsed.RawDestination,
+            ResolvedAddress = parsed.ResolvedAddress,
+            Type = parsed.Type.ToString(),
+            AmountSats = parsed.AmountSats,
+            AmountBtc = parsed.AmountSats / 100_000_000m,
+            PayoutId = parsed.PayoutId,
+            IsValid = parsed.IsValid,
+            Error = parsed.Error,
+            IsBip21 = parsed.Type is Send2DestinationType.Bip21Ark or Send2DestinationType.Bip21Lightning
+                      || (parsed.RawDestination?.StartsWith("bitcoin:", StringComparison.OrdinalIgnoreCase) ?? false),
+            IsLightning = parsed.Type is Send2DestinationType.LightningInvoice
+                                       or Send2DestinationType.Bip21Lightning
+                                       or Send2DestinationType.Lnurl,
+            IsLnurl = parsed.Type == Send2DestinationType.Lnurl,
+            LnurlMinSats = parsed.LnurlMinSats,
+            LnurlMaxSats = parsed.LnurlMaxSats
+        };
 
     #endregion
 

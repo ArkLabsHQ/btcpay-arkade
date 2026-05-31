@@ -1,5 +1,6 @@
 using System.Globalization;
 using BTCPayServer;
+using BTCPayServer.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.Models;
 using BTCPayServer.Plugins.ArkPayServer.Models.Api;
 using NArk.Abstractions;
@@ -158,4 +159,148 @@ internal static class ArkSpendHelpers
             : null;
     }
 
+    /// <summary>
+    /// Synchronously parse and classify a destination string in the Send wizard's grammar:
+    /// bare Ark address, BOLT11 invoice (with optional <c>lightning:</c> prefix), BIP21 URI
+    /// (with <c>ark</c>/<c>lightning</c>/<c>amount</c>/<c>payout</c> query parameters), or
+    /// an LNURL / Lightning Address (returned as a placeholder requiring async resolution).
+    /// </summary>
+    public static ParsedSendDestination ParseSendDestination(
+        string rawDestination, decimal? amountBtc, Network network)
+    {
+        var result = new ParsedSendDestination { RawDestination = rawDestination ?? string.Empty };
+        var amountSats = amountBtc.HasValue ? (long)(amountBtc.Value * 100_000_000m) : 0L;
+
+        // Bare Ark address
+        if (ArkAddress.TryParse(rawDestination, out var arkAddress) && arkAddress is not null)
+        {
+            result.Type = Send2DestinationType.ArkAddress;
+            result.ResolvedAddress = rawDestination;
+            result.AmountSats = amountSats;
+            result.IsValid = true;
+            if (amountSats <= 0)
+                result.Error = "Amount is required for Ark address";
+            return result;
+        }
+
+        // BOLT11 (with or without lightning: prefix)
+        if (rawDestination.StartsWith("ln", StringComparison.OrdinalIgnoreCase) ||
+            rawDestination.StartsWith("lightning:", StringComparison.OrdinalIgnoreCase))
+        {
+            var invoiceStr = rawDestination.StartsWith("lightning:", StringComparison.OrdinalIgnoreCase)
+                ? rawDestination[10..]
+                : rawDestination;
+
+            try
+            {
+                var invoice = BOLT11PaymentRequest.Parse(invoiceStr, network);
+                result.Type = Send2DestinationType.LightningInvoice;
+                result.ResolvedAddress = invoiceStr;
+                result.AmountSats = amountSats > 0
+                    ? amountSats
+                    : (long)(invoice.MinimumAmount?.ToUnit(LightMoneyUnit.Satoshi) ?? 0);
+                result.IsValid = result.AmountSats > 0;
+                if (!result.IsValid)
+                    result.Error = "Invoice amount could not be determined";
+                return result;
+            }
+            catch
+            {
+                result.Error = "Invalid Lightning invoice";
+                return result;
+            }
+        }
+
+        // BIP21
+        if (Uri.TryCreate(rawDestination, UriKind.Absolute, out var uri) &&
+            uri.Scheme.Equals("bitcoin", StringComparison.OrdinalIgnoreCase))
+        {
+            var host = uri.AbsoluteUri[(uri.Scheme.Length + 1)..].Split('?')[0];
+            var qs = uri.ParseQueryString();
+            result.PayoutId = qs["payout"];
+
+            if (amountSats == 0 && qs["amount"] is { } amountStr &&
+                decimal.TryParse(amountStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var amountDec))
+            {
+                amountSats = (long)(amountDec * 100_000_000m);
+            }
+
+            if (qs["ark"] is { } arkQs && ArkAddress.TryParse(arkQs, out var qsArkAddress) && qsArkAddress is not null)
+            {
+                result.Type = Send2DestinationType.Bip21Ark;
+                result.ResolvedAddress = arkQs;
+                result.AmountSats = amountSats;
+                result.IsValid = true;
+                if (amountSats <= 0)
+                    result.Error = "Amount is required";
+                return result;
+            }
+
+            if (qs["lightning"] is { } lnQs)
+            {
+                try
+                {
+                    var invoice = BOLT11PaymentRequest.Parse(lnQs, network);
+                    result.Type = Send2DestinationType.Bip21Lightning;
+                    result.ResolvedAddress = lnQs;
+                    result.AmountSats = amountSats > 0
+                        ? amountSats
+                        : (long)(invoice.MinimumAmount?.ToUnit(LightMoneyUnit.Satoshi) ?? 0);
+                    result.IsValid = result.AmountSats > 0;
+                    if (!result.IsValid)
+                        result.Error = "Invoice amount could not be determined";
+                    return result;
+                }
+                catch
+                {
+                    // Fall through to host-as-ark tests
+                }
+            }
+
+            if (ArkAddress.TryParse(host, out var hostArkAddress) && hostArkAddress is not null)
+            {
+                result.Type = Send2DestinationType.Bip21Ark;
+                result.ResolvedAddress = host;
+                result.AmountSats = amountSats;
+                result.IsValid = true;
+                if (amountSats <= 0)
+                    result.Error = "Amount is required";
+                return result;
+            }
+
+            result.Error =
+                "BIP21 URI does not contain an Ark address or Lightning invoice. Send2 only supports offchain transfers.";
+            return result;
+        }
+
+        // LNURL / Lightning Address — needs async resolution; the caller decides whether to do it.
+        if (rawDestination.StartsWith("lnurl", StringComparison.OrdinalIgnoreCase) ||
+            rawDestination.IsValidEmail())
+        {
+            result.Type = Send2DestinationType.Lnurl;
+            result.Error = "LNURL/Lightning Address requires async resolution";
+            return result;
+        }
+
+        result.Error =
+            "Unrecognized destination format. Use an Ark address, Lightning invoice, or BIP21 URI with ark/lightning parameter.";
+        return result;
+    }
+}
+
+/// <summary>
+/// Plain result of <see cref="ArkSpendHelpers.ParseSendDestination"/>, deliberately view-model-agnostic
+/// so both MVC and Greenfield code can consume it.
+/// </summary>
+internal sealed class ParsedSendDestination
+{
+    public string RawDestination { get; set; } = string.Empty;
+    public Send2DestinationType Type { get; set; }
+    public string? ResolvedAddress { get; set; }
+    public long AmountSats { get; set; }
+    public string? PayoutId { get; set; }
+    public long LnurlMinSats { get; set; }
+    public long LnurlMaxSats { get; set; }
+    public bool IsValid { get; set; }
+    public string? Error { get; set; }
 }
