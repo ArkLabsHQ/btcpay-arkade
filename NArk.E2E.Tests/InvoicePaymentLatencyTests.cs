@@ -194,16 +194,16 @@ public class InvoicePaymentLatencyTests : PlaywrightBaseTest
             if (needsInit)
             {
                 // localhost:7070 = arkd gRPC inside its own container.
-                // chopsticks:3000 = the regtest esplora API endpoint reachable
-                // on the arkd container's docker network (NOT esplora:5000 —
-                // that's the web UI). Both match the values used by
-                // submodules/NNark/regtest/start-env.sh + DockerHelper.
+                // http://mempool_web/api = denigiri's Esplora-compatible REST
+                // API (mempool), reachable on the arkd container's docker
+                // network — the same endpoint denigiri's own `ark` client init
+                // and arkd's EsploraURL use (replaces nigiri's chopsticks:3000).
                 var initResult = await Cli.Wrap("docker")
                     .WithArguments(new[]
                     {
                         "exec", container, "ark", "init",
                         "--server-url", "http://localhost:7070",
-                        "--explorer", "http://chopsticks:3000",
+                        "--explorer", "http://mempool_web/api",
                         "--password", "secret"
                     })
                     .WithValidation(CommandResultValidation.None)
