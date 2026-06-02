@@ -38,35 +38,20 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Setup Go (for nigiri build)
-        uses: actions/setup-go@v5
+      - name: Setup Node (for denigiri regtest CLI)
+        uses: actions/setup-node@v4
         with:
-          go-version: '1.23'
+          node-version: '20'
 
-      - name: Cache nigiri binary
-        uses: actions/cache@v4
-        with:
-          path: submodules/NNark/regtest/_build
-          key: nigiri-${{ runner.os }}-${{ hashFiles('submodules/NNark/regtest/.env.defaults', 'submodules/NNark/.env.regtest') }}
-
-      - name: Start nigiri / Ark stack
+      - name: Start Ark regtest stack (denigiri)
         # Provides bitcoin (18443), nbxplorer (32838), arkd (7070), boltz,
-        # lnd, fulmine. BTCPay's test ServerTester is pointed at the
-        # bitcoin/nbxplorer endpoints via TESTS_BTCRPCCONNECTION and
-        # TESTS_BTCNBXPLORERURL below; the GHA postgres service container
-        # supplies BTCPay's DB.
-        run: |
-          chmod +x submodules/NNark/regtest/*.sh submodules/NNark/regtest/helpers/*.sh
-          ./submodules/NNark/regtest/start-env.sh
-          # Persist nigiri on PATH for subsequent steps. start-env.sh only
-          # `export PATH=…` in its own shell, but the binary lives in
-          # `_build/nigiri/build/` (not on the default runner PATH). Tests
-          # that fall through to the nigiri-funding path in
-          # EnsureArkdCliReadyAsync need it findable from the dotnet
-          # process. Whether the binary was cache-restored or freshly
-          # built, the path is the same.
-          echo "${GITHUB_WORKSPACE}/submodules/NNark/regtest/_build/nigiri/build" >> "$GITHUB_PATH"
-        timeout-minutes: 12
+        # lnd, fulmine via the NNark regtest submodule's denigiri Node
+        # orchestrator (replaces the old nigiri binary + shell scripts).
+        # BTCPay's test ServerTester is pointed at the bitcoin/nbxplorer
+        # endpoints via TESTS_BTCRPCCONNECTION and TESTS_BTCNBXPLORERURL
+        # below; the GHA postgres service container supplies BTCPay's DB.
+        run: node submodules/NNark/regtest/regtest.mjs start --profile boltz,delegate
+        timeout-minutes: 20
 
       - name: Resolve arkd container name
         # The arkd container's name depends on which regtest pin is active.
@@ -138,7 +123,7 @@ jobs:
         if: failure()
         run: |
           mkdir -p /tmp/e2e-logs
-          for c in bitcoin nbxplorer ark ark-wallet lnd boltz boltz-lnd boltz-fulmine; do
+          for c in bitcoin nbxplorer arkd arkd-wallet lnd boltz boltz-lnd boltz-fulmine; do
             docker logs "$c" > /tmp/e2e-logs/${c}.log 2>&1 || true
           done
 
@@ -149,8 +134,6 @@ jobs:
           name: e2e-logs
           path: /tmp/e2e-logs/
 
-      - name: Stop nigiri
+      - name: Stop Ark regtest stack (denigiri)
         if: always()
-        run: |
-          chmod +x submodules/NNark/regtest/*.sh submodules/NNark/regtest/helpers/*.sh 2>/dev/null
-          ./submodules/NNark/regtest/clean-env.sh || true
+        run: node submodules/NNark/regtest/regtest.mjs clean || true
