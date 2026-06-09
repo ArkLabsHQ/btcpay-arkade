@@ -53,23 +53,6 @@ jobs:
         run: node submodules/NNark/regtest/regtest.mjs start --profile boltz,delegate
         timeout-minutes: 20
 
-      - name: Expose NBXplorer Postgres on :39372 for BTCPay ServerTester
-        # BTCPay (NBXplorer 2.5+) connects directly to NBXplorer's Postgres DB
-        # (explorer.postgres, default 127.0.0.1:39372) — not just its HTTP API.
-        # denigiri runs nbxplorer against its internal `postgres` container,
-        # which is not published on the host (only nbxplorer's HTTP 32838 is).
-        # Forward host :39372 -> postgres:5432 on the regtest network so the
-        # in-process ServerTester can reach the shared nbxplorer DB (this is
-        # what nigiri used to expose directly).
-        run: |
-          net=$(docker inspect postgres --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
-          docker run -d --name nbx-pg-proxy --network "$net" -p 39372:5432 \
-            alpine/socat tcp-listen:5432,fork,reuseaddr tcp-connect:postgres:5432
-          for i in $(seq 1 15); do
-            docker exec nbx-pg-proxy sh -c 'nc -z localhost 5432' 2>/dev/null && break
-            sleep 1
-          done
-
       - name: Resolve arkd container name
         # The arkd container's name depends on which regtest pin is active.
         # Older pins hardcode `container_name: ark` in docker-compose.arkd-override.yml;
