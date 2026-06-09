@@ -1,5 +1,224 @@
 # Changelog
 
+## [2.2.1] - 2026-06-09
+
+### Features
+- **Wallet recovery on import + manual Rescan (#70).** Importing a wallet now starts background recovery via the SDK's unified `IWalletRecoveryService` — rediscovering contracts (including legacy deprecated-signer scripts), the derivation index, funds, and Boltz swaps, then syncing boarding UTXOs — instead of only polling pre-existing contracts. Adds a `POST stores/{id}/rescan` endpoint and a **Rescan** button on the store overview, with an in-memory `RecoveryStatusTracker` surfacing Running/Completed/Failed per wallet. When the SDK's recovery service isn't registered (no Boltz/swaps configured), recovery degrades to a boarding-only sync.
+
+### SDK (NNark)
+- **Bumped to `arkade-os/dotnet-sdk` master.** Picks up the Boltz swap-logic refactor (#123) and the regtest denigiri Postgres-port pin (#120). The refactor relocated the swap-status helpers (`IsActive`, `IsTerminalState`, `IsSuccess`, …) into `NArk.Swaps.Extensions`; the plugin's Razor views now import that namespace via `_ViewImports.cshtml` so `swap.Status.IsActive()` resolves.
+
+## [2.2.0] - 2026-05-28
+
+### Features
+- **Watch-only wallet mode + remote-signer DI seam (phase 1).** Merchants can now opt to import a wallet by **account descriptor** (Taproot `tr([fp/86'/0'/0']xpub.../0/*)` for HD style or `tr(pubkey)` for single-key style) instead of a seed phrase or `nsec`. The server stores no signing material — `WalletType.WatchOnly` wallets work read-only out of the box (receive, balance, invoice detection, contract listing). Signing-dependent actions (batch participation, unilateral exits, payouts) require a paired BTCPayApp device via the new `IBTCPayAppDeviceProxy : IRemoteSignerTransport` cross-plugin seam — the companion `BTCPayServer.Plugins.App` plugin implements the proxy and bridges signing calls to the device over its SignalR hub. When no companion plugin is registered, this plugin binds `IRemoteSignerTransport` to a `MissingDeviceProxyTransport` sentinel whose four signer methods each throw a descriptive "install the App companion plugin" `InvalidOperationException`. Because NArk's `DefaultWalletProvider` only wraps the transport in a `RemoteArkadeWalletSigner` for `WalletType.Remote` wallets, and only inside `GetSignerAsync`, the failure surfaces exactly when a Remote wallet tries to sign — pure WatchOnly wallets never touch the sentinel and the plugin loads cleanly on stores without the companion. The initial-setup wizard exposes the new option as **Pair a watch-only wallet** in the "I have a wallet" group; existing form posts that don't carry a `Mode` field default to `Auto` so all prior import paths are unchanged.
+
+### SDK (NNark)
+- **Bumped to `arkade-os/dotnet-sdk#107` (feat/watch-only-remote-signing) HEAD.** The SDK side of the watch-only feature: `WalletType.WatchOnly` and `WalletType.Remote`, `IRemoteSignerTransport`, `RemoteArkadeWalletSigner`, `WalletFactory.CreateWatchOnlyWallet(descriptor, ...)`, `DefaultWalletProvider` accepting an optional `IRemoteSignerTransport`, and a nullable `ArkWalletInfo.Secret` / `ArkWalletEntity.Wallet` (so no EF migration is needed on this plugin's side).
+
+## [2.1.18] - 2026-05-22
+
+### Bug Fixes
+- **Checkout no longer crashes (and disables the plugin) when the bitcoin payment method is unactivated.** With lazy payment methods, the BTC-CHAIN prompt exists on an invoice but stays unactivated (`Details`/`Destination` null) until the customer opens the bitcoin tab. The Arkade checkout's BIP-21 "harvest" step (which replays bitcoin-onchain-only plugins like PayJoin/Branta to preserve their params on the unified Arkade QR) only checked that the bitcoin prompt was non-null, then called `BitcoinPaymentLinkExtension.GetPaymentLink` → `ParsePaymentPromptDetails`, which `NullReferenceException`ed on the null `Details`. Because that threw out of `ICheckoutModelExtension.ModifyCheckoutModel`, BTCPay disabled the **entire** Arkade plugin whenever such a checkout was opened. Now the harvest requires an activated bitcoin prompt (nothing to harvest from an unactivated tab anyway), and the whole harvest is wrapped so any failure degrades to "no harvested params" instead of breaking checkout rendering.
+
+## [2.1.17] - 2026-05-22
+
+### SDK (NNark)
+- **Indexer script subscription updated in place instead of restarting.** `VtxoSynchronizationService` now keeps one arkd `GetSubscription` stream open and adds/removes scripts via Subscribe/Unsubscribe as contracts come and go, rather than tearing the stream down and resubscribing on every change. It reconnects on the same subscription id, recreates it only if arkd reports it gone (TTL after a disconnect), and tears it down when the active set is empty; the 5-second fresh-derive safety-net poll remains the backstop, so detection never depends on the stream surviving. Removes per-change stream churn and the teardown/recreate window where a pushed event could be missed (#103).
+
+## [2.1.16] - 2026-05-22
+
+### Bug Fixes
+- **Unconfirmed boarding payments no longer shown as Spendable/Settled.** An in-mempool boarding UTXO (its on-chain funding tx not yet confirmed) was rendered as Spendable + Settled + Unspent across the VTXO table, the store-overview VTXO list, and the invoice "Arkade Payments" row — but arkd rejects unconfirmed boarding inputs at settle time, so it is neither spendable nor settleable. Now an "Unconfirmed" badge is shown and the Spendable/Settled badges are suppressed until the funding tx confirms (`Vtxos.cshtml`, `_VtxoTable.cshtml`, `ArkPaymentData.cshtml`). (#66)
+
+### SDK (NNark)
+- **Unconfirmed boarding UTXOs excluded from spendable coins.** `SpendingService.GetAvailableCoins` now filters out on-chain (boarding) VTXOs whose funding tx has not confirmed (`ArkVtxo.IsUnconfirmedOnchain()`), so an in-mempool boarding UTXO is no longer offered as a coin — arkd rejects unconfirmed boarding inputs at settle time, so any spend built from one is doomed (#101).
+- **VTXO detection can't desync from active contracts.** `VtxoSynchronizationService`'s 5-second safety-net poll now derives the active-script set fresh from the providers every tick (provider-agnostic) and reconciles the subscription stream, instead of trusting a cached view that was only refreshed on contract-change events. A lost or aborted refresh (e.g. during the rapid contract creation of a swap) used to silently leave a freshly-derived receive contract unwatched, so a payment to it went undetected until a manual sync. Per-provider failures are now isolated, and `EfCoreVtxoStorage.GetActiveScripts` projects `DISTINCT script` to keep the per-tick derive cheap at scale (#102).
+
+## [2.1.15] - 2026-05-21
+
+### Features
+- **Per-wallet diagnostic log download.** Operators can pull a focused per-wallet log from the store overview instead of grep'ing the whole BTCPay log for the right wallet id. The download button sits next to the wallet identity on the overview tile.
+- **Boltz swap-creation tagged with the `btcpay-arkade` referral id.** Lets Boltz attribute volume back to btcpay-arkade for partner accounting; no behaviour change for the swap itself.
+- **Co-installs cleanly with the BTCPay Electrum plugin.** The Electrum plugin rip-and-replaces NBXplorer's DI registrations and leaves `ExplorerClient.RPCClient` null; `NBXplorerBlockchain` would NRE on every chain-time / fee / broadcast call. The Arkade plugin's `IBitcoinBlockchain` factory now detects an NBXplorer-incompatible explorer provider (type-name `Electrum` *or* `RPCClient == null`) and falls back to `EsploraBlockchain` against the network's default Esplora endpoint (`ArkNetworkConfig.EsploraUri`, populated per-network from the canonical ts-sdk defaults via NNark #96). Mainnet / Mutinynet / Signet / Regtest all carry a working default; operators with a custom `ark.json` can override via `esplora`. Inbound on-chain events under Electrum require the companion `NewOnChainTransactionEvent` republish (Kukks/BTCPayServerPlugins#132). (#64)
+
+### UX
+- **Receive page polish.** Title now reads "Receive Arkade" instead of "Receive ARK". Post-generation "New X" buttons stack vertically as quiet text links (one label per line, no `payment-box` padding inflating the row) so the action sits secondary to the QR/address panel above it; the unmet-state "Generate X" stays prominent as the real CTA. The unified BIP-21 payment URI now embeds the boarding address (`bitcoin:<boardingAddress>?ark=<arkAddress>`, same shape the checkout uses) and the Link tab is the default — so a single QR scan drives both Arkade-aware and onchain-only wallets.
+- **Brand: user-facing "Ark" → "Arkade" sweep.** 15 files / 46 strings across views (`InitialSetup`, `IntentBuilder`, `Contracts`, `ConfigurePayoutProcessor`, `StoreOverview`, `Send`, `Send2`, `Swaps`, `Vtxos`, `ListWallets`, `Intents`, `SpendOverview`, `LNPaymentMethodSetupTab`, `ArkadeMethodCheckout`) plus `ArkController` TempData / exception / error messages now consistently say "Arkade" in titles, headers, button text, help copy, and error messages. Code identifiers (`Ark` controller name, `ArkAddress`/`ArkVtxo` type names, the `?ark=` BIP-21 param, `BTC-CHAIN`) deliberately keep their shorthand.
+
+### Bug Fixes
+- **Send: "Max" no longer over-spends.** The Max amount wasn't subtracting the estimated fee, so build-intent then rejected the intent for missing fee headroom. The fee is now deducted from Max before the request.
+- **Send no longer crashes the plugin when Bitcoin Core RPC blips during fee estimation.** Transient RPC failures now degrade gracefully instead of throwing through the controller.
+- **Checkout: third-party BIP-21 params preserved on the Arkade tab.** Plugins like PayJoin (`pj=`) and Branta (`branta_*`) gate on `model.PaymentMethodId == "BTC-CHAIN"` and so were silently dropped from the Arkade BIP-21. The Arkade checkout extension now synthesises a bitcoin-tab pipeline, runs the other global extensions against it, and forwards their additions to the Arkade URI verbatim.
+- **Initial-setup wizard has a close (X) button.** Bailing out mid-import no longer requires hitting Back.
+- **Invoices listing page hung indefinitely once the checkout extension started harvesting upstream BIP-21 params.** `ArkadeCheckoutModelExtension` is itself registered as `IGlobalCheckoutModelExtension` (so it can hide LN/LNURL tabs when Arkade is shown) AND its constructor injected `IEnumerable<IGlobalCheckoutModelExtension>` (to replay other plugins' bitcoin-tab contributions on the Arkade tab). The enumerable resolution must build every implementation before our ctor returns — including ourselves — producing a DI cycle. `Microsoft.Extensions.DependencyInjection.ServiceLookup.StackGuard` papered over the recursion by re-running each layer on a fresh thread (`WaitHandle.WaitOne` on the caller); a single request to `/stores/{id}/invoices` stalled six threads on the same factory before the page failed to write a single response byte (TTFB never observed). Switched to `IServiceProvider` + lazy `GetServices<IGlobalCheckoutModelExtension>()` at enumeration time — the singleton is cached by the time we look, so the cycle never forms.
+- **Boarding payment's `payment.Destination` got persisted as the off-chain Ark address (root cause of the previous bullet).** `HandlePaymentData` was JObject-patching `Blob2["Destination"]` (capital D) after `Set(...)` initialised the top-level field from the prompt. BTCPay's default JSON serialiser is camelCase, so the on-disk property is `"destination"` — JObject is case-sensitive, so the patch added a sibling key the deserialiser ignored and the prompt's Ark address survived. Switched to the lowercase `"destination"` key and remove any stale capital-D sibling left by earlier runs. Existing rows already store the correct boarding address inside `details.destination`, so the view fallback now reads from there before falling back to the (incorrect) top-level field.
+- **Invoice "Arkade Payments" table mis-rendered boarding payments as VTXO payments.** A payment that arrived via the on-chain boarding address shared the invoice's prompt details with the off-chain Ark path, so the view pulled the prompt's Ark address + offchain Payment contract for the row even when the actual settlement was on-chain boarding. The outpoint (a real BTC txid) was linked through the Arkade explorer instead of the BTC chain explorer. Fix: persist `IsBoarding` on `ArkadePaymentData` and `BoardingContractString` on `ArkadePromptDetails`, render a "Boarding" / "VTXO" type badge per row, and route the address + outpoint links to `TransactionLinkProviders["BTC-CHAIN"]` when the row is on-chain. Old payment rows lacking the flag fall back to a destination-equality check against the prompt's known boarding address.
+- **Invoice settlement only deactivated the Payment contract; Boarding stayed Active forever.** `ConfigurePrompt` tags both the Payment contract (the offchain Arkade address) AND, when boarding is enabled, the Boarding contract with `Source = "invoice:{id}"`. The invoice listener's `ToggleArkadeContract` only toggled the contract whose script matched the prompt's `GetArkAddress()` — i.e. the Payment one — so the boarding entry kept being polled, kept showing up under "active contracts," and prevented the script subscription from unsubscribing. Now toggles every contract carrying `Source = "invoice:{id}"`. HTLC contracts (from Lightning checkout) use a `swap:{id}` Source tag and are still driven by `OnSwapChanged` based on swap state — out of scope for this fix.
+- **Cheat-mode "Pay Invoice" failed with `No such container: ark`.** The arkd v0.9 wallet split moved the daemon's container name from `ark` to `arkd` (the sidecar `ark-wallet` now owns the signer). Nigiri 0.5.14's `ark` subcommand still does `docker exec ark <args>` against the old name, so every cheat-mode call (send, receive, settle) failed at the docker daemon. Replaced the `nigiri ark …` calls with `docker exec arkd ark …` (container name overridable via `ARKADE_CHEAT_ARK_CONTAINER` env var). Nigiri's `rpc` and `faucet` paths — which talk to bitcoind, not the arkd container — are untouched. As a side effect, the recovery path's broken shell substitution (`$(nigiri ark receive | jq -r ...)` never expanded under `Process.Start`) is now a proper two-step call: parse JSON in C#, pass the address into `nigiri faucet`.
+
+### Refactor
+- **Manual receive/boarding contracts share a single `Source = "manual"` metadata value.** The boarding flow was tagging contracts with `"manual-boarding"` and the receive flow with `"manual"`, even though the `ContractType` (`"Boarding"` vs `"Payment"`) already discriminates the two. Both call sites now write `"manual"`; `FindManualReceiveAddress` adds a `contractTypes: [ArkPaymentContract.ContractType]` filter so it can't accidentally cross-match a boarding entry. `FindManualBoardingAddress` and the Contracts view's badge accept the legacy `"manual-boarding"` value, so existing wallets keep displaying their manual address without a data migration.
+- **Boarding minimum: default raised to 5000 sats, dust floor centralised.** The hard-coded `330` sprinkled across `ArkadePaymentMethodConfig`, `ArkController.save-boarding`, and `StoreOverview.cshtml` was both the seeded default and the P2TR dust floor — two concepts collapsed into one literal. Now: `ArkadePaymentMethodConfig.DefaultMinBoardingAmountSats = 5000L` (default for new stores) and `ArkadePaymentMethodConfig.P2trDustLimitSats = 330L` (floor; users still cannot configure below it). All callers reference the constants; the form `min` attribute and help text interpolate them. Existing stores keep whatever value they persisted — only new stores get the 5000-sat default.
+
+### SDK (NNark)
+- **VTXO sync responsiveness — one immediate poll per stream push, no exponential backoff schedule.** Stream pushes used to trigger a 750 ms / 3 s / 8 s retry ladder before giving up; on a healthy connection that was just three redundant polls. Now a single immediate poll per push, which is what every consumer (invoice listener, swap watcher, etc.) actually wants — perceived latency drops to one network round-trip without the spurious "still nothing" log churn (#99).
+- **Per-receive claim ~800× faster via cached `OutputDescriptor.Parse` + BIP-39 master ExtKey.** Hot-path `WalletFactory` work was re-parsing the same descriptor string and re-running BIP-39 KDF on every claim. Both are deterministic and per-wallet, so they're now memoised. Largest improvement on HD wallets where the KDF dominated cold claim cost (#100).
+- **`ImportContract` / `DeriveContract` info logs now include contract type + script.** Multi-derive flows (invoice payment + boarding co-derivation, swap restore) are diagnosable at INFO without dropping to DEBUG (#97).
+- **Per-network Esplora / Electrum endpoint defaults on `ArkNetworkConfig`.** New nullable `EsploraUri` / `ElectrumWsUri` / `ElectrumTcpUri` fields carrying the canonical ts-sdk defaults per network — apps that need an `IBitcoinBlockchain` without NBXplorer/bitcoind (e.g. the Arkade plugin's Electrum-fallback above) can pull the right endpoint straight off the preset. Electrum TCP endpoints are protocol-verified against the live public Fulcrum hosts (`server.version` → `{"result":["Fulcrum 2.1.0","1.4"]}`); 50001 plain TCP is the only port the public hosts actually expose, 50002 TLS is closed (use WSS at the host's port 443 via `ElectrumWsUri`). Regtest fills `electrs`'s `50000` binary-protocol port (NOT `30000`, which is electrs's HTTP REST — different protocol) (#96).
+- **Deterministic asset packet serialization + cross-SDK fixture parity.** `AssetPacketBuilder` now emits groups in a stable order (by asset id, then group index) regardless of input order, matching rust-sdk and ts-sdk so packets are reproducible and fixture-comparable across SDKs. Plus the 4 ts-sdk cross-SDK fixture files NNark lacked (`asset_ref` / `asset_input` / `asset_output` / `metadata`) imported with fixture-driven tests (393/393 green) (#94).
+- **Quieter VTXO sync at idle.** `VtxoSynchronizationService`'s 5-second safety-net poll no longer logs at `Info` on every empty tick — `Info` is kept only for productive polls (a VTXO landed) and the one-off cold-start catch-up. Stops 24 INFO lines/minute of pure noise from drowning the log on an idle wallet (#95).
+- **Boltz: `AddBoltzProvider` self-contained.** Direct-DI consumers (no `ArkApplicationBuilder`) now get `BoltzClient` registered as part of `AddBoltzProvider` instead of an opaque "Unable to resolve BoltzClient" error (#93).
+- **Unilateral exit support.** The non-cooperative path from a VTXO to an on-chain UTXO is now exposed by the SDK — recovery is possible without the Arkade operator's cooperation (#39).
+- **HD wallet gap-limit recovery via modular discovery providers.** Plugin can re-derive used addresses from a mnemonic without prior local state (#77).
+- **Per-wallet VTXO sync cursor in wallet metadata.** Cold-start catch-up window is "since last shutdown" instead of "all of history" — large wallets warm-start in seconds instead of re-fetching every VTXO (#78).
+- **Multi-provider swap architecture.** Boltz remains the concrete provider; the abstraction admits future swap providers without invasive changes (#79).
+- **Recovery: reconcile pending Arkade transactions stranded between Submit and Finalize.** Crash/timeout windows between submit and finalize now self-heal on next sync (#90).
+- **Swap + batch log entries scoped to `WalletId`.** Multi-wallet servers can grep logs cleanly per wallet (#84).
+- **Single persistent Boltz websocket** with subscribe/unsubscribe per swap (was one ws per swap; exhausted file handles on busy stores) (#83).
+- **Swaps marked Failed after 10 consecutive Boltz 404s** instead of hanging forever (#80).
+- **Blockchain: chain-time cached with fallback** on transient Bitcoin Core RPC failure (#85).
+- **EF Core: opt-in `DateTimeOffset → long ticks` mapping** so SQLite `ORDER BY` works correctly on persisted timestamps (#92).
+
+## [2.1.14] - 2026-04-24
+
+### Bug Fixes
+- **Faster detection when arkd's subscription push is ahead of its indexer.** v2.1.13 added a 30-second safety-net poll, but user's repro showed arkd's indexer sometimes takes ~28 seconds to make a VTXO queryable after the subscription event fires — invoice detection was still noticeably slow. Tightened to 5-second interval, and each stream push now fires three polls (750ms / 3s / 8s) instead of one to cover the full observed commit-lag range.
+- **Explorer links pointed to the arkd operator instead of arkade.space.** `ArkPlugin.LoadNetworkConfig` dropped `ExplorerUri` when merging `ark.json` with the preset; the Mainnet preset's `https://arkade.space` never reached the plugin views, so the helper fell through to the `ArkUri/v1/indexer/vtxos?...` fallback. Signet preset also didn't set `ExplorerUri`. Both fixed.
+
+### Performance
+- `_readyToPoll` channel moved from Bounded(5) to Unbounded so stream-event processing never back-pressures on a full queue when retry schedules + RoutinePoll coincide.
+
+## [2.1.13] - 2026-04-24
+
+### Bug Fixes
+- **Invoice stays pending after customer pays — arkd's script-subscription sometimes doesn't push VTXO events.** Reproduced: paid VTXO was visible via arkd's REST indexer but the plugin never received a stream push for the invoice's Receive script. Two related fixes:
+  1. **Routine safety-net poll every 30s.** `VtxoSynchronizationService` now re-queries all active scripts with a 2-minute `after` window. Cheap (recent changes only, no historical re-fetch) and catches any event arkd silently drops from the subscription stream.
+  2. **750ms delay between stream push and follow-up poll.** arkd can emit the event before its indexer query path has committed the VTXO; immediate polls returned the stale prior state and the stream never fired again. The brief delay lets the indexer catch up.
+
+### Performance
+- **Stream pushes no longer re-fetch full VTXO history per touched script.** Previously every arkd push re-queried the whole script's VTXO history (observed: 2849 VTXOs fetched for 2 scripts in 5s on every push, mostly unchanged). Stream-triggered polls now use a 5-minute `after` window; `UpdateScriptsView` only full-fetches the *newly-added* scripts instead of the whole subscribed set.
+
+## [2.1.12] - 2026-04-24
+
+### Observability
+- **Full stream→upsert chain now visible at Info level.** Previous logs showed "arkd pushed update" at Info but then went quiet until the swap detection path fired again. Promoted `StartQueryLogic` poll-entry and poll-result (with count and elapsed ms) to Info; `EfCoreVtxoStorage.UpsertVtxo` now logs inserted/updated at Info with outpoint, script, amount, and spent/settled flags. No-op writes stay at Debug. This is purely diagnostic — no behavioural changes.
+
+## [2.1.11] - 2026-04-24
+
+### Bug Fixes
+- **VTXO subscription pipeline could silently die**, which matches the "stream isn't working" symptom. Three leaks plugged in `VtxoSynchronizationService`:
+  1. **Graceful stream end** — if arkd closed `GetSubscription` without throwing, the loop exited, `_streamTask` completed successfully and nothing restarted. Now detected and restarted via `UpdateScriptsView`.
+  2. **`StartQueryLogic` had no error handling** — a single transport/storage exception killed the task permanently, and every subsequent stream event piled up in the `_readyToPoll` channel with no reader. Now each poll iteration is try/caught and the loop survives.
+  3. **No observability on stream events** — the subscribe was logged at Debug and nothing else. Now each arkd push logs the scripts at Info, plus poll-result counts at Debug.
+
+## [2.1.10] - 2026-04-24
+
+### Observability
+- **Verbose logging around swap state transitions.** After the recent detection fixes it was still hard to tell from the logs whether `OnVtxosChanged` had dispatched to a swap, whether `_scriptToSwapId` was populated on time, and what Boltz was actually reporting on each poll. Added info-level log lines for: VTXO-to-swap dispatch, script→swap map updates/evictions, every Boltz status probe, and how many VTXOs arkd returned during the per-swap contract-script refresh.
+
+## [2.1.9] - 2026-04-24
+
+### Bug Fixes
+- **Swap still stalls when arkd's subscription stream drops / misses the VTXO-arrival event.** v2.1.8 fixed the internal script→swap map, but that only helps if `OnVtxosChanged` fires — and it only fires if the VTXO actually reaches `VtxoStorage`. arkd's subscription doesn't retroactively replay, so a VTXO that arrives between "subscribe" and "first read of the stream" (or during a reconnect) is invisible to us. `SwapsManagementService.PollSwapState` now does a direct `GetVtxoByScriptsAsSnapshot` call for the swap's contract script on every non-terminal status probe — same pattern as the existing refund path — so we catch anything the stream missed.
+
+## [2.1.8] - 2026-04-24
+
+### Bug Fixes
+- **Invoice listener NRE on prompts with no details.** `ArkContractInvoiceListener.GetListenedArkadeInvoice` blindly passed `prompt.Details` through to `ArkadePaymentMethodHandler.ParsePaymentPromptDetails`, which `ToObject<>`s it and NREs when null. Now returns `null` if the prompt has no details.
+- **Swap stuck "pending" when VTXO arrived before first poll.** `SwapsManagementService._scriptToSwapId` was only populated inside `PollSwapState`, so VTXOs arriving on a swap contract before the first `RoutinePoll` (1-minute cadence) — or in the race window immediately after `InitiateReverseSwap` / `InitiateBtcToArkChainSwap` — fell through `OnVtxosChanged` and never triggered a swap-state refresh. Seeded at startup from storage and kept in sync with `SwapsChanged` synchronously.
+
+### SDK (NNark)
+- REST transport pagination off-by-one fix (mirrors the gRPC fix from v2.1.7).
+
+## [2.1.7] - 2026-04-24
+
+### Bug Fixes
+- **Wallet import was actually silently capping at exactly 11 × 1000 = 11000 VTXOs, not 121M-row stalling.** arkd's paginator is 1-based and clamps the response's `next` to `total` on the final page; the client's loop condition `Next != Total` therefore exited one page early, dropping the last page entirely. Switched to `Current < Total`. The previous 2.1.6 `ActiveScriptsChanged` fix is still correct — it removed the quadratic event cascade — but was insufficient by itself because the underlying pagination was dropping pages.
+
+## [2.1.6] - 2026-04-24
+
+### Bug Fixes / Performance
+- **VTXO import on wallets with deep history stopped around ~11k entries.** `UpsertVtxo` was firing `ActiveScriptsChanged` on every row, which ran `VtxoSynchronizationService.UpdateScriptsView` → `IVtxoStorage.GetActiveScripts` (whose default implementation scans every unspent VTXO). 11k upserts × a full VTXO scan each is ~121M row reads — the sync appears to stall. Fixed by not firing the event from VTXO upserts (VTXOs only ever arrive on scripts we already know about, so a new VTXO cannot introduce a new script).
+
+## [2.1.5] - 2026-04-24
+
+### Bug Fixes / Performance
+- **Time-window post-op VTXO polling.** After a spend, the plugin was asking arkd's indexer for *all* VTXOs on every active contract script, which scales with a wallet's whole history. Post-spend and post-batch catch-up now passes a 5-minute `after` filter so arkd only returns recently-changed VTXOs. Explicit user actions ("Sync wallet", "Import contract", etc.) still do a full poll.
+
+### SDK (NNark)
+- `VtxoSynchronizationService.PollScriptsForVtxos(scripts, after, ...)` — new overload that forwards the `after` filter to the arkd indexer via `GetVtxoByScriptsAsSnapshot`.
+- `PostSpendVtxoPollingHandler` and `PostBatchVtxoPollingHandler` now pass a 5-minute `after` window to the indexer.
+
+## [2.1.4] - 2026-04-24
+
+### Bug Fixes
+- **Initial-setup timeout when importing an nsec with a long history.** The handler was synchronously polling arkd once per known contract during import; wallets with hundreds of prior contracts blew past the HTTP timeout. The VTXO and boarding-UTXO catchup now runs on a background task so the user is redirected immediately; funds appear as the sync completes.
+
+## [2.1.3] - 2026-04-24
+
+### Bug Fixes
+- **Imported nsec wallet shows empty VTXOs / Contracts / Intents / Swaps pages.** `GetFromInputWallet` was returning `IsOwnedByStore=false` when the imported nsec matched a wallet already present in storage (e.g., re-importing after a failed attempt or importing the same key on a second store). Presenting the raw nsec is itself proof of ownership, so `IsOwnedByStore=true` now applies in that case too. The home-screen balance was unaffected since it doesn't gate on `GeneratedByStore`; the management pages were, which is why they silently rendered empty.
+
+## [2.1.2] - 2026-04-24
+
+### SDK (NNark)
+- Disable one-by-one VTXO script polling workaround (reverted now that arkd's multi-script query is fixed)
+
+## [2.1.1] - 2026-04-24
+
+### Breaking Changes
+- **Minimum BTCPay Server version raised to 2.3.8** (up from 2.3.7)
+
+### Bug Fixes
+- **Plugin no longer crashes BTCPay when arkd is unreachable on startup.** `SwapsManagementService` now defers the arkd readiness check to a background retry loop instead of blocking `StartAsync`; the host comes up cleanly and swap operations queue until arkd is available.
+- **Quieter logs while arkd warms up.** gRPC `FailedPrecondition` ("wallet is locked or syncing") from the batch event stream now logs a single-line warning with the retry cadence instead of a full `Error` stack trace every 5 seconds.
+- **DI validation fix:** `DelegationService` no longer fails to construct when the plugin doesn't opt into delegation (it was requiring `IDelegatorProvider` that is only registered by `AddArkDelegation`).
+
+### SDK (NNark)
+- **Vendored `NBitcoin.Scripting.OutputDescriptor`** into `NArk.Abstractions/Scripting/` — NBitcoin 10 removed the classic descriptor subsystem in favor of BIP388 Wallet Policies. NArk continues to use `OutputDescriptor` so 33-byte compressed keys with correct parity flow through the whole stack (arkd → SignerKey → contracts → MuSig2).
+- **Opt-in payment tracking:** `AddArkPaymentTracking()` + `ConfigureArkPaymentEntities()`. Consumers that don't need payment-request tracking carry no extra schema or services.
+- **Opt-in delegation:** `DelegationService` / `IDelegationTransformer` moved from `AddArkCoreServices` into `AddArkDelegation` so plugins without a Fulmine delegator aren't forced to register unreachable services.
+- **Regtest tooling:** `clean-env.sh` now chowns nigiri volumes via a throwaway root container before `nigiri stop --delete`, eliminating the "openfdat ... permission denied" postgres warning during teardown.
+- **Docs refresh:** articles updated to match current APIs (real SwapsManagementService / IAssetManager / ConfigureArkEntities / regtest path).
+
+## [2.1.0] - 2026-04-10
+
+### Breaking Changes
+- **Migrate to .NET 10**: target framework updated from `net8.0` to `net10.0`; requires BTCPay Server >= 2.3.7
+
+### Features
+- **DocFX documentation**: API reference docs with GitHub Pages deployment (`docs.yml` workflow)
+- **Wallet sample app**: Blazor WASM wallet with EF Core SQLite (BeSql), QR codes, Lightning receive, LNURL, settings, backup/restore, smart send, and contract display
+
+### Improvements
+- Package dependency updates (Microsoft.Extensions.* 10.0.4, NBitcoin 9.0.5, etc.)
+
+### SDK
+- NNark: dedicated list and detail pages, contract persistence fix
+- NNark: backup support, smart send, LNURL integration, server info display
+- NNark: wallet UI polish — QR styling, asset receive mode, VTXO-gated minting
+- NNark: wallet features — real QR codes, Lightning receive, settings page
+- NNark: fix wallet creation, mutinynet network name resolution, SPA 404 fallback
+- NNark: payment tracking repository for outbound payments and inbound requests
+- NNark: `UnknownArkContract` handling fix in spending and sweeper services
+- NNark: `BoardingAllowed` and vtxo/utxo amount bounds from server info
+- NNark: `GetVtxosByOutpoints` transport method + VTXO polling race fix
+
+## [2.0.5] - 2026-03-25
+
+### Bug Fixes
+- **Critical: fix plugin crash on SuggestCoins/ValidateSpend endpoints** — missing `[Authorize(Policy = CanModifyStoreSettings)]` attribute meant BTCPay's store-resolution filter never ran, causing `StoreData is not set` exception that disabled the entire plugin server-wide
+
+### Other
+- Add detailed README and MIT license (#41)
+
+### SDK
+- NNark: fix `ComputeExpiresAt` incorrect `IsRBF` guard (1292501)
+- NNark: CI permissions fix for publish job (9d06e8b)
+- NNark: cache nigiri binary to fix E2E infrastructure timeouts (3254221)
+- NNark: various test assertion and capture fixes
+
 ## [2.0.4] - 2026-03-20
 
 ### Features

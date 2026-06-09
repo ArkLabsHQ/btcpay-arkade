@@ -6,7 +6,7 @@
 @{
     Layout = "_Layout";
     var storeId = Context.GetStoreData().Id;
-    ViewData.SetActivePage(StoreNavPages.PayoutProcessors, "Ark Payout Processor", storeId);
+    ViewData.SetActivePage(StoreNavPages.PayoutProcessors, "Arkade Payout Processor", storeId);
 }
 
 <form method="post" permissioned="@Policies.CanModifyStoreSettings" data-testid="payout-processor-form">
@@ -25,7 +25,7 @@
     <partial name="_StatusMessage" />
     <div class="row">
         <div class="col-xl-8 col-xxl-constrain">
-            <p text-translate="true">Set a schedule for automated Ark Network Payouts.</p>
+            <p text-translate="true">Set a schedule for automated Arkade Network Payouts.</p>
             @if (!ViewContext.ModelState.IsValid)
             {
                 <div asp-validation-summary="All"></div>

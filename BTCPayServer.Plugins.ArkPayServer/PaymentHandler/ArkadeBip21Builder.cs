@@ -15,6 +15,14 @@ public class ArkadeBip21Builder
     private string? _lightningInvoice;
     private decimal? _amount;
     private readonly Dictionary<string, string> _customParameters = new();
+    /// <summary>
+    /// Raw <c>key=value</c> entries pulled from another extension's BIP21
+    /// query string (PayJoin's <c>pj=</c>, Branta's <c>branta_*</c>, etc.)
+    /// that we want to forward verbatim — preserving whatever URL-encoding
+    /// the upstream chose, so re-decoding/re-encoding can't mangle the
+    /// values. Populated by <see cref="WithExtraQuery"/>.
+    /// </summary>
+    private readonly List<string> _passthroughEntries = new();
 
     /// <summary>
     /// Sets the Bitcoin onchain address (optional).
@@ -62,8 +70,43 @@ public class ArkadeBip21Builder
     {
         if (string.IsNullOrWhiteSpace(key))
             throw new ArgumentException("Parameter key cannot be null or empty", nameof(key));
-        
+
         _customParameters[key] = value;
+        return this;
+    }
+
+    /// <summary>
+    /// Forwards every <c>key=value</c> entry from another BIP21's query
+    /// string, except keys this builder owns (<c>amount</c>, <c>ark</c>,
+    /// <c>lightning</c>). Used by <c>ArkadePaymentLinkExtension</c> to carry
+    /// PayJoin's <c>pj=</c>, Branta's <c>branta_id</c>/<c>branta_secret</c>,
+    /// and any other plugin's params from the upstream onchain BIP21 into
+    /// the unified Arkade QR.
+    /// </summary>
+    /// <param name="rawQuery">
+    /// The query portion of the upstream URI — with or without the leading
+    /// <c>?</c>. Entries are forwarded verbatim (no decode/re-encode), so
+    /// whatever URL-encoding the upstream chose round-trips byte-for-byte.
+    /// </param>
+    public ArkadeBip21Builder WithExtraQuery(string? rawQuery)
+    {
+        if (string.IsNullOrEmpty(rawQuery)) return this;
+        var trimmed = rawQuery.TrimStart('?');
+        if (trimmed.Length == 0) return this;
+
+        foreach (var pair in trimmed.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var eq = pair.IndexOf('=');
+            var key = eq < 0 ? pair : pair[..eq];
+            // Keys we set ourselves win — skip duplicates from upstream so
+            // the wallet doesn't see two `amount=`s or pick up someone else's
+            // ark/lightning value over the one we just computed.
+            if (string.Equals(key, "amount", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(key, "ark", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(key, "lightning", StringComparison.OrdinalIgnoreCase))
+                continue;
+            _passthroughEntries.Add(pair);
+        }
         return this;
     }
 
@@ -106,7 +149,11 @@ public class ArkadeBip21Builder
         {
             parameters.Add($"{HttpUtility.UrlEncode(key)}={HttpUtility.UrlEncode(value)}");
         }
-        
+
+        // Pass-through entries from upstream BIP21s (PayJoin / Branta / ...)
+        // appended verbatim, no re-encoding.
+        parameters.AddRange(_passthroughEntries);
+
         // Join all parameters
         sb.Append(string.Join("&", parameters));
         

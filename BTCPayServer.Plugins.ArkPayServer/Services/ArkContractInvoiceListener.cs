@@ -135,7 +135,7 @@ public class ArkContractInvoiceListener(
                 Script = vtxo.Script,
                 SeenAt = vtxo.CreatedAt
             };
-            await HandlePaymentData(vtxoEntity, inv, arkadePaymentMethodHandler, paymentDestination, isConfirmed);
+            await HandlePaymentData(vtxoEntity, inv, arkadePaymentMethodHandler, paymentDestination, isConfirmed, isBoarding);
         }
         catch (Exception ex)
         {
@@ -153,10 +153,10 @@ public class ArkContractInvoiceListener(
         return Task.CompletedTask;
     }
     
-    private async Task HandlePaymentData(VtxoEntity vtxo, InvoiceEntity invoice, ArkadePaymentMethodHandler handler, string? destination = null, bool isConfirmed = true)
+    private async Task HandlePaymentData(VtxoEntity vtxo, InvoiceEntity invoice, ArkadePaymentMethodHandler handler, string? destination = null, bool isConfirmed = true, bool isBoarding = false)
     {
         var pmi = ArkadePlugin.ArkadePaymentMethodId;
-        var details = new ArkadePaymentData($"{vtxo.TransactionId}:{vtxo.TransactionOutputIndex}", destination);
+        var details = new ArkadePaymentData($"{vtxo.TransactionId}:{vtxo.TransactionOutputIndex}", destination, isBoarding);
         var status = isConfirmed ? PaymentStatus.Settled : PaymentStatus.Processing;
 
         // Serialize payment registration to prevent duplicate inserts from concurrent VTXO events
@@ -178,10 +178,18 @@ public class ArkContractInvoiceListener(
             }.Set(freshInvoice, handler, details);
 
             // Override destination if payment came via boarding address (not the Ark contract address)
+            //
+            // The PaymentBlob is serialised through BTCPay's default camelCase resolver, so
+            // the on-disk JSON property is lowercase `destination` even though the C# field
+            // is `Destination`. JObject's indexer is case-sensitive — writing `blob["Destination"]`
+            // adds a sibling field instead of replacing the lowercase one, and the deserialiser
+            // then ignores our shadow value. Update the lowercase key (and remove any stale
+            // capital-D shadow left by earlier versions of this code).
             if (destination is not null)
             {
                 var blob = JObject.Parse(paymentData.Blob2);
-                blob["Destination"] = destination;
+                blob["destination"] = destination;
+                blob.Remove("Destination");
                 paymentData.Blob2 = blob.ToString(Newtonsoft.Json.Formatting.None);
             }
 
@@ -233,28 +241,34 @@ public class ArkContractInvoiceListener(
             return;
         }
 
-        // Get the script from the contract string - need to parse with network
-        var serverInfo = await clientTransport.GetServerInfoAsync();
-        var contract = listenedContract.Details.GetContract(serverInfo.Network);
-        if (contract is null)
+        // ConfigurePrompt tags BOTH the Payment contract (the offchain Arkade
+        // address) and, when boarding is enabled, the Boarding contract with
+        // Source = "invoice:{id}". The previous implementation only toggled
+        // the Payment one (derived from the prompt's details), so the
+        // boarding contract stayed Active forever after settlement. Find every
+        // contract carrying this invoice's source tag and toggle them all.
+        // HTLC contracts use a different "swap:{id}" Source tag and are
+        // driven by OnSwapChanged based on swap state, not invoice state.
+        var walletId = listenedContract.Details.WalletId;
+        var invoiceSource = $"invoice:{invoice.Id}";
+        var contracts = await contractStorage.GetContracts(
+            walletIds: [walletId],
+            cancellationToken: CancellationToken.None);
+        foreach (var c in contracts.Where(c => c.Metadata?.GetValueOrDefault("Source") == invoiceSource))
         {
-            return;
+            await contractStorage.UpdateContractActivityState(walletId, c.Script, activityState);
         }
-
-        var script = contract.GetArkAddress().ScriptPubKey.ToHex();
-        await contractStorage.UpdateContractActivityState(listenedContract.Details.WalletId, script, activityState);
     }
 
     private ArkadeListenedContract? GetListenedArkadeInvoice(InvoiceEntity invoice)
     {
         var prompt = invoice.GetPaymentPrompt(ArkadePlugin.ArkadePaymentMethodId);
-        return prompt is null
-            ? null
-            : new ArkadeListenedContract(
+        if (prompt?.Details is null)
+            return null;
 
-                arkadePaymentMethodHandler.ParsePaymentPromptDetails(prompt.Details),
-                invoice.Id
-            );
+        return new ArkadeListenedContract(
+            arkadePaymentMethodHandler.ParsePaymentPromptDetails(prompt.Details),
+            invoice.Id);
     }
 
     private static DateTimeOffset GetExpiration(InvoiceEntity invoice)

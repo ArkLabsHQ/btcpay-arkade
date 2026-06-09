@@ -1,0 +1,139 @@
+name: E2E
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: btcpay_e2e_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup Node (for denigiri regtest CLI)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Start Ark regtest stack (denigiri)
+        # Provides bitcoin (18443), nbxplorer (32838), arkd (7070), boltz,
+        # lnd, fulmine via the NNark regtest submodule's denigiri Node
+        # orchestrator (replaces the old nigiri binary + shell scripts).
+        # BTCPay's test ServerTester is pointed at the bitcoin/nbxplorer
+        # endpoints via TESTS_BTCRPCCONNECTION and TESTS_BTCNBXPLORERURL
+        # below; the GHA postgres service container supplies BTCPay's DB.
+        run: node submodules/NNark/regtest/regtest.mjs start --profile boltz,delegate
+        timeout-minutes: 20
+
+      - name: Resolve arkd container name
+        # The arkd container's name depends on which regtest pin is active.
+        # Older pins hardcode `container_name: ark` in docker-compose.arkd-override.yml;
+        # newer pins use `container_name: ${ARK_CONTAINER:-arkd}` (the v0.9-split
+        # convention, where ARK_CONTAINER auto-derives to "arkd" when ARKD_IMAGE is set).
+        # Probe both so cheat-mode `docker exec` targets whichever actually exists;
+        # mirrors the test's ResolveArkdContainerAsync which probes the same pair.
+        id: arkd-container
+        run: |
+          for c in arkd ark; do
+            if docker inspect -f '{{.Name}}' "$c" >/dev/null 2>&1; then
+              echo "name=$c" >> "$GITHUB_OUTPUT"
+              echo "Resolved arkd container: $c"
+              exit 0
+            fi
+          done
+          echo "ERROR: Could not find arkd container (tried 'arkd' and 'ark')" >&2
+          docker ps -a --format 'table {{.Names}}\t{{.Status}}'
+          exit 1
+
+      - name: Restore + Build solution and E2E test project
+        run: |
+          dotnet restore NArk.sln
+          dotnet build NArk.sln --no-restore -m:1
+          dotnet restore NArk.E2E.Tests/NArk.E2E.Tests.csproj
+          dotnet build NArk.E2E.Tests/NArk.E2E.Tests.csproj --no-restore
+        timeout-minutes: 12
+
+      - name: Run ConfigBuilder (writes appsettings.dev.json with plugin DLL path)
+        # BTCPay's Program.cs unconditionally loads
+        # submodules/btcpayserver/BTCPayServer/appsettings.dev.json under
+        # #if DEBUG. ConfigBuilder writes a DEBUG_PLUGINS entry there
+        # pointing at the Arkade plugin's bin output so ServerTester's
+        # in-process BTCPay picks it up at startup.
+        run: dotnet run --project ConfigBuilder/ConfigBuilder.csproj
+
+      - name: Install Playwright browsers
+        run: |
+          SCRIPT=$(find NArk.E2E.Tests/bin -name "playwright.ps1" -print -quit)
+          if [ -z "$SCRIPT" ]; then
+            echo "❌ playwright.ps1 not found in NArk.E2E.Tests/bin"
+            find NArk.E2E.Tests/bin -maxdepth 4 -type f | head -50
+            exit 1
+          fi
+          pwsh "$SCRIPT" install --with-deps chromium
+        timeout-minutes: 5
+
+      - name: Run E2E tests
+        env:
+          # Point BTCPay's ServerTester at nigiri-provided backing services.
+          # nigiri's bitcoind uses admin1/123 (see submodules/NNark/regtest
+          # base compose). Postgres is the GHA service container above.
+          TESTS_BTCRPCCONNECTION: "server=http://127.0.0.1:18443;admin1:123"
+          TESTS_BTCNBXPLORERURL: "http://127.0.0.1:32838/"
+          TESTS_POSTGRES: "Host=localhost;Port=5432;Database=btcpay_e2e_test;Username=postgres;Password=postgres"
+          TESTS_HOSTNAME: "127.0.0.1"
+          # ArkadeCheckoutCheatModeExtension shells out `docker exec
+          # $ARKADE_CHEAT_ARK_CONTAINER ark send`. Older regtest pins land on
+          # container name `ark` (nigiri base wins); newer pins apply the
+          # v0.9-split override that renames to `arkd`. Resolved dynamically
+          # by the previous step so cheat-mode targets whichever exists,
+          # rather than pinning to a name that goes stale across regtest bumps.
+          ARKADE_CHEAT_ARK_CONTAINER: ${{ steps.arkd-container.outputs.name }}
+        run: dotnet test NArk.E2E.Tests/NArk.E2E.Tests.csproj --no-build --verbosity normal --logger "console;verbosity=detailed"
+        timeout-minutes: 20
+
+      - name: Collect docker logs on failure
+        if: failure()
+        run: |
+          mkdir -p /tmp/e2e-logs
+          for c in bitcoin nbxplorer arkd arkd-wallet lnd boltz boltz-lnd boltz-fulmine; do
+            docker logs "$c" > /tmp/e2e-logs/${c}.log 2>&1 || true
+          done
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs
+          path: /tmp/e2e-logs/
+
+      - name: Stop Ark regtest stack (denigiri)
+        if: always()
+        run: node submodules/NNark/regtest/regtest.mjs clean || true

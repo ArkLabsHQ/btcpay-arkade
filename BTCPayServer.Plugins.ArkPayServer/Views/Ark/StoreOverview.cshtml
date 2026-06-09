@@ -1,6 +1,8 @@
 @using BTCPayServer.Abstractions.Contracts
 @using BTCPayServer.Abstractions.Extensions
 @using BTCPayServer.Plugins.ArkPayServer.Helpers
+@using BTCPayServer.Plugins.ArkPayServer.PaymentHandler
+@using BTCPayServer.Plugins.ArkPayServer.Services
 @using NArk.Abstractions.Wallets
 @using NArk.Abstractions.Intents
 @using NArk.Swaps.Models
@@ -15,6 +17,7 @@
 }
 
 <partial name="_StatusMessage" />
+<partial name="_ArkadeOperatorStatusBanner" />
 
 <!-- Top Row: Wallet Info + Service Status -->
 <div class="row g-4 mb-4">
@@ -129,7 +132,7 @@
                             <button type="submit" name="command" value="toggle-subdust"
                                     class="btn btn-sm badge text-primary btn-outline-secondary"
                                     @(Model.IsDestinationSweepEnabled && !Model.AllowSubDustAmounts ? "disabled" : "")
-                                    title="@(Model.IsDestinationSweepEnabled && !Model.AllowSubDustAmounts ? "Cannot enable while auto-sweep is active — sub-dust VTXOs cannot be swept on-chain" : "Accept payments below the on-chain dust threshold (~330 sats)")">
+                                    title="@(Model.IsDestinationSweepEnabled && !Model.AllowSubDustAmounts ? "Cannot enable while auto-sweep is active — sub-dust VTXOs cannot be swept on-chain" : $"Accept payments below the on-chain dust threshold (~{ArkadePaymentMethodConfig.P2trDustLimitSats} sats)")">
                                 @(Model.AllowSubDustAmounts ? "Enabled" : "Disabled")
                             </button>
                         </form>
@@ -145,6 +148,48 @@
                                 @(Model.BoardingEnabled ? "Enabled" : "Disabled")
                             </button>
                         </div>
+                    }
+
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span class="text-muted">Diagnostic Log</span>
+                        <a asp-action="DownloadWalletLog" asp-route-storeId="@storeId"
+                           class="btn btn-sm badge btn-outline-secondary text-primary"
+                           title="Download this wallet's diagnostic log to share with support"
+                           data-testid="download-wallet-log-btn">
+                            Download
+                        </a>
+                    </div>
+
+                    @if (Model.CanManagePrivateKeys)
+                    {
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="text-muted">Wallet Recovery</span>
+                            <form asp-action="Rescan" asp-route-storeId="@storeId" method="post" class="d-inline">
+                                <button type="submit"
+                                        class="btn btn-sm badge btn-outline-secondary text-primary"
+                                        title="Rescan the indexer + boltz to rebuild contracts, derivation index, funds and swaps for this wallet"
+                                        data-testid="rescan-wallet-btn">
+                                    Rescan
+                                </button>
+                            </form>
+                        </div>
+                        @if (Model.RecoveryStatus is { } rec)
+                        {
+                            <div class="small mb-2" data-testid="recovery-status">
+                                @if (rec.State == RecoveryState.Running)
+                                {
+                                    <span class="text-muted"><span class="spinner-border spinner-border-sm"></span> Recovery in progress…</span>
+                                }
+                                else if (rec.State == RecoveryState.Completed)
+                                {
+                                    <span class="text-muted">Last recovery: @rec.ContractsRecovered contracts, @rec.FundsSynced VTXOs, @rec.SwapsAudited swaps.</span>
+                                }
+                                else
+                                {
+                                    <span class="text-danger">Last recovery failed: @rec.Error</span>
+                                }
+                            </div>
+                        }
                     }
                 </div>
             </div>
@@ -390,7 +435,7 @@
                             <div class="mb-3">
                                 <label asp-for="Destination" class="form-label">Destination Address</label>
                                 <input asp-for="Destination" class="form-control font-monospace" placeholder="ark1..." />
-                                <div class="form-text">Enter an Ark address to receive swept funds.</div>
+                                <div class="form-text">Enter an Arkade address to receive swept funds.</div>
                             </div>
                         }
                     </div>
@@ -429,15 +474,15 @@
                     <div class="modal-body">
                         <p class="text-muted small mb-3">
                             Boarding allows customers to pay invoices using an on-chain Bitcoin transaction.
-                            The funds are moved into the Ark VTXO tree in the next batch round.
+                            The funds are moved into the Arkade VTXO tree in the next batch round.
                             Only available when the store has no on-chain BTC payment method configured.
                         </p>
 
                         <div class="mb-3">
                             <label asp-for="MinBoardingAmountSats" class="form-label">Minimum Amount (sats)</label>
-                            <input asp-for="MinBoardingAmountSats" class="form-control" type="number" min="330"
+                            <input asp-for="MinBoardingAmountSats" class="form-control" type="number" min="@ArkadePaymentMethodConfig.P2trDustLimitSats"
                                    value="@Model.MinBoardingAmountSats" />
-                            <div class="form-text">Invoices below this amount will not include a boarding address. Minimum: 330 sats (P2TR dust threshold).</div>
+                            <div class="form-text">Invoices below this amount will not include a boarding address. Minimum: @ArkadePaymentMethodConfig.P2trDustLimitSats sats (P2TR dust threshold).</div>
                         </div>
                     </div>
                     <div class="modal-footer">

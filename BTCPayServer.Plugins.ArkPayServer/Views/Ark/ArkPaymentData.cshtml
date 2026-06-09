@@ -1,5 +1,7 @@
 @using System.Globalization
 @using BTCPayServer.Abstractions.Extensions
+@using BTCPayServer.Data
+@using BTCPayServer.Payments
 @using BTCPayServer.Plugins.ArkPayServer.Helpers
 @using BTCPayServer.Plugins.ArkPayServer.Models
 @using BTCPayServer.Plugins.ArkPayServer.PaymentHandler
@@ -13,23 +15,48 @@
 
 
 @{
-	
-	
-	
+	var btcChainPmi = PaymentTypes.CHAIN.GetPaymentMethodId("BTC");
+
 	var payments = Model.Payments.Select(payment =>
 	{
 		if (!handlers.TryGetValue(payment.PaymentMethodId, out var h) || h is not ArkadePaymentMethodHandler handler)
 			return null;
 		var paymentData = handler.ParsePaymentDetails(payment.Details);
 		var promptDetails = handler.ParsePaymentPromptDetails(Model.Entity.GetPaymentPrompt(payment.PaymentMethodId)?.Details);
+
+		// Boarding payments come from an on-chain BTC tx funding the P2TR
+		// boarding address. They share the invoice prompt but use a different
+		// address, contract, and on-chain explorer than the VTXO path. Detect
+		// via the IsBoarding flag set by the listener, with two fallbacks for
+		// older payment rows that pre-date the flag:
+		//   1) prefer `paymentData.Destination` (always set correctly from
+		//      ArkadePaymentData), since older rows stored the wrong value at
+		//      the top-level Blob2.destination due to a case-sensitive JSON
+		//      key bug;
+		//   2) compare against the prompt's known boarding address.
+		var paymentDestination = paymentData.Destination ?? payment.Destination;
+		var isBoarding = paymentData.IsBoarding
+		                 || (!string.IsNullOrEmpty(promptDetails.BoardingAddress)
+		                     && string.Equals(paymentDestination, promptDetails.BoardingAddress, StringComparison.OrdinalIgnoreCase));
+
+		var address = isBoarding && !string.IsNullOrEmpty(promptDetails.BoardingAddress)
+			? promptDetails.BoardingAddress
+			: paymentDestination;
+		var contractString = isBoarding && !string.IsNullOrEmpty(promptDetails.BoardingContractString)
+			? promptDetails.BoardingContractString
+			: promptDetails.ContractString;
+
 		var vm = new ArkPaymentDataViewModel
 		{
-			Address = payment.Destination,
+			Address = address,
 			Amount = payment.Value.ToString(CultureInfo.InvariantCulture),
 			Outpoint = paymentData.Outpoint,
 			ReceivedTime = payment.ReceivedTime,
-			Contract = promptDetails.ContractString,
-			Currency = payment.Currency
+			Contract = contractString,
+			Currency = payment.Currency,
+			IsBoarding = isBoarding,
+			// Boarding payment stays Processing until its on-chain funding tx confirms.
+			IsUnconfirmed = isBoarding && payment.Status == PaymentStatus.Processing,
 		};
 		return vm;
 	}).Where(c => c != null).ToList();
@@ -42,29 +69,59 @@
         <table class="table table-hover">
             <thead>
             <tr>
+				<th text-translate="true">Type</th>
 				<th text-translate="true">Address</th>
 				<th text-translate="true">Outpoint</th>
 				<th text-translate="true">Received Time</th>
 				<th text-translate="true">Contract</th>
 				<th text-translate="true" class="text-end">Amount</th>
-	            
+
 	            </tr>
             </thead>
             <tbody>
             @foreach (var payment in payments)
             {
-	            var addrLink = ArkadeLinkHelper.GetAddressLink(ArkNetworkConfig, payment.Address);
-	            var outpointLink = ArkadeLinkHelper.GetOutpointLink(ArkNetworkConfig, payment.Outpoint);
+	            string addrLink;
+	            string? outpointLink;
+	            if (payment.IsBoarding)
+	            {
+		            // On-chain BTC tx: link the txid via the BTC-CHAIN payment-method
+		            // explorer (BTCPay's TransactionLinkProviders), and use a
+		            // standard mempool-style address page if the chain provider
+		            // accepts it — otherwise fall back to the address as plain text.
+		            var txid = payment.Outpoint.Split(':')[0];
+		            outpointLink = TransactionLinkProviders.GetTransactionLink(btcChainPmi, txid);
+		            addrLink = outpointLink ?? string.Empty;
+	            }
+	            else
+	            {
+		            addrLink = ArkadeLinkHelper.GetAddressLink(ArkNetworkConfig, payment.Address);
+		            outpointLink = ArkadeLinkHelper.GetOutpointLink(ArkNetworkConfig, payment.Outpoint);
+	            }
                 <tr >
+	                <td class="align-middle">
+		                @if (payment.IsBoarding)
+		                {
+			                <span class="badge text-bg-info" title="On-chain boarding payment to the P2TR boarding address">Boarding</span>
+			                @if (payment.IsUnconfirmed)
+			                {
+				                <span class="badge text-bg-warning" title="On-chain funding tx not yet confirmed — not spendable or settled yet">Unconfirmed</span>
+			                }
+		                }
+		                else
+		                {
+			                <span class="badge text-bg-success" title="Off-chain VTXO payment">VTXO</span>
+		                }
+	                </td>
 	                <td>
 		                <vc:truncate-center text="@payment.Address" link="@addrLink"  classes="truncate-center-id" />
-		                
+
 	                </td>
 	                <td><vc:truncate-center text="@payment.Outpoint" link="@outpointLink"  classes="truncate-center-id" /></td>
 	                <td>@payment.ReceivedTime.ToBrowserDate()</td>
 	                <td>  <vc:truncate-center text="@payment.Contract"  classes="truncate-center-id" /></td>
-	                
-                    
+
+
                     <td class="payment-value text-end text-nowrap">
                         <span data-sensitive class="text-success">@DisplayFormatter.Currency(payment.Amount, payment.Currency)</span>
                     </td>

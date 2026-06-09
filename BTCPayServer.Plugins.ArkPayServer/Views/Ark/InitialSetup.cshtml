@@ -1,19 +1,29 @@
 @using BTCPayServer.Abstractions.Contracts
 @using BTCPayServer.Abstractions.Extensions
+@using BTCPayServer.Plugins.ArkPayServer.Models
 @model BTCPayServer.Plugins.ArkPayServer.Models.InitialWalletSetupViewModel
 @inject IScopeProvider ScopeProvider
 
 @{
     Layout = "_LayoutWizard";
-    ViewData.SetActivePage(category: "Ark", activePage: "initialSetup", title: "Ark - Getting Started");
+    ViewData.SetActivePage(category: "Ark", activePage: "initialSetup", title: "Arkade - Getting Started");
     var storeId = ScopeProvider.GetCurrentStoreId();
     var hasValidationError = !ViewData.ModelState.IsValid;
     var hasWalletValue = !string.IsNullOrEmpty(Model.Wallet);
+    var watchOnlyValidationError = hasValidationError && Model.Mode == WalletSetupMode.WatchOnly;
+}
+
+@* Close X in the wizard navbar — mirrors BTCPay's own wallet-setup
+   wizard chrome so the merchant can bail out back to the dashboard. *@
+@section Navbar {
+    <a asp-controller="UIStores" asp-action="Dashboard" asp-route-storeId="@storeId" class="cancel">
+        <vc:icon symbol="cross" />
+    </a>
 }
 
 <header class="text-center">
-    <h1>Setup Your Ark Wallet</h1>
-    <p class="lead text-secondary mt-3">Choose how you want to configure your Ark wallet</p>
+    <h1>Setup Your Arkade Wallet</h1>
+    <p class="lead text-secondary mt-3">Choose how you want to configure your Arkade wallet</p>
 </header>
 
 <div class="mt-5">
@@ -25,16 +35,27 @@
             </div>
             <div class="content">
                 <h4>Use an existing wallet</h4>
-                <p class="mb-0 text-secondary">Import from private key, Ark address, or existing wallet ID</p>
+                <p class="mb-0 text-secondary">Import from private key, Arkade address, or existing wallet ID</p>
+            </div>
+            <vc:icon symbol="caret-right" />
+        </a>
+        <a href="#" class="list-group-item list-group-item-action" data-bs-toggle="collapse" data-bs-target="#importWatchOnly" data-testid="watch-only-wallet-option">
+            <div class="image">
+                <vc:icon symbol="wallet-existing"/>
+            </div>
+            <div class="content">
+                <h4>Pair a watch-only wallet</h4>
+                <p class="mb-0 text-secondary">Observe a wallet by account descriptor — signing happens on a paired BTCPayApp device</p>
             </div>
             <vc:icon symbol="caret-right" />
         </a>
     </div>
-    
-    <div id="importExisting" class="collapse mt-3 @(hasValidationError && hasWalletValue ? "show" : "")">
+
+    <div id="importExisting" class="collapse mt-3 @(hasValidationError && hasWalletValue && Model.Mode == WalletSetupMode.Auto ? "show" : "")">
         <div class="card">
             <div class="card-body">
                 <form asp-action="InitialSetup" method="post" asp-route-storeId="@storeId" id="importExistingForm">
+                    <input type="hidden" asp-for="Mode" value="@WalletSetupMode.Auto" />
                     <div class="form-group mb-3">
                         <label asp-for="Wallet" class="form-label">Wallet Configuration</label>
                         <input asp-for="Wallet" class="form-control" placeholder="seed phrase / nsec... / npub... / wallet-id" id="existingWalletInput" required data-testid="nsec-input"/>
@@ -44,12 +65,42 @@
                             <ul class="mb-0">
                                 <li><strong>BIP-39 seed phrase:</strong> Import an HD wallet from 12 or 24-word mnemonic (recommended)</li>
                                 <li><strong>nsec private key:</strong> Use a legacy Nostr-style private key as a hot wallet</li>
-                                <li><strong>Ark address (npub):</strong> Create a transitory wallet that auto-sweeps to this address</li>
+                                <li><strong>Arkade address (npub):</strong> Create a transitory wallet that auto-sweeps to this address</li>
                                 <li><strong>Wallet ID:</strong> Use an existing wallet from this BTCPay instance</li>
                             </ul>
                         </div>
                     </div>
                     <button name="command" type="submit" value="save" class="btn btn-primary" data-testid="import-wallet-btn">Continue</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div id="importWatchOnly" class="collapse mt-3 @(watchOnlyValidationError ? "show" : "")">
+        <div class="card">
+            <div class="card-body">
+                <form asp-action="InitialSetup" method="post" asp-route-storeId="@storeId" id="importWatchOnlyForm">
+                    <input type="hidden" asp-for="Mode" value="@WalletSetupMode.WatchOnly" />
+                    <div class="alert alert-info">
+                        <strong>Watch-only:</strong> the server stores no signing material.
+                        Signing-dependent actions (batch participation, unilateral exits) require
+                        a paired BTCPayApp device — install the <code>BTCPayServer.Plugins.App</code>
+                        companion plugin and pair a device to sign. Without it, this wallet is
+                        usable read-only.
+                    </div>
+                    <div class="form-group mb-3">
+                        <label asp-for="Wallet" class="form-label">Account Descriptor</label>
+                        <input asp-for="Wallet" class="form-control" placeholder="tr([fp/86'/0'/0']xpub.../0/*) or tr(pubkey)" id="watchOnlyDescriptorInput" required data-testid="watch-only-descriptor-input" />
+                        <span asp-validation-for="Wallet" class="text-danger"></span>
+                        <div class="form-text mt-2">
+                            <strong>Accepted formats:</strong>
+                            <ul class="mb-0">
+                                <li><strong>HD-style:</strong> <code>tr([fingerprint/86'/0'/0']xpub.../0/*)</code> — addresses derived per receive</li>
+                                <li><strong>Single-key style:</strong> <code>tr(pubkey)</code> — one reused address</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <button name="command" type="submit" value="save" class="btn btn-primary" data-testid="import-watch-only-btn">Continue</button>
                 </form>
             </div>
         </div>
@@ -79,7 +130,7 @@
                     <div class="alert alert-info">
                         <strong>Info:</strong> A new hot wallet will be generated automatically for you.
                     </div>
-                    <p>This will create a new Ark wallet that is stored on your BTCPay Server. Make sure to back up your wallet after creation.</p>
+                    <p>This will create a new Arkade wallet that is stored on your BTCPay Server. Make sure to back up your wallet after creation.</p>
                     <button name="command" type="submit" value="save" class="btn btn-primary" data-testid="create-wallet-btn">Create Wallet</button>
                 </form>
             </div>

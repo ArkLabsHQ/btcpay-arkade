@@ -10,8 +10,7 @@
 @inject PaymentMethodHandlerDictionary HandlerDictionary 
 @{
     var config =
-        Context
-        .GetStoreData()
+        Model.Store
         .GetPaymentMethodConfig<ArkadePaymentMethodConfig>(
             ArkadePlugin.ArkadePaymentMethodId,
             HandlerDictionary,

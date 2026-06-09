@@ -11,13 +11,15 @@ using BTCPayServer.Plugins.ArkPayServer.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
 using BTCPayServer.Plugins.ArkPayServer.Services;
+using BTCPayServer.Plugins.ArkPayServer.Services.WalletLogger;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using NArk.Abstractions.Blockchain;
 using NArk.Abstractions.Intents;
 using NArk.Abstractions.Safety;
-using NArk.Abstractions.Services;
-using NArk.Blockchain.NBXplorer;
+using NArk.Abstractions.Wallets;
+using NArk.Blockchain;
 using NArk.Hosting;
 using NArk.Core.Models.Options;
 using NArk.Core.Services;
@@ -43,7 +45,7 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
     public override IBTCPayServerPlugin.PluginDependency[] Dependencies { get; } =
     [
-        new() { Identifier = nameof(BTCPayServer), Condition = ">=2.3.4" }
+        new() { Identifier = nameof(BTCPayServer), Condition = ">=2.3.8" }
     ];
 
     public override void Execute(IServiceCollection services)
@@ -99,19 +101,9 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
     private static void RegisterDatabase(IServiceCollection services)
     {
+        
         services.AddSingleton<ArkPluginDbContextFactory>();
-
-        services.AddDbContext<ArkPluginDbContext>((provider, o) =>
-        {
-            var factory = provider.GetRequiredService<ArkPluginDbContextFactory>();
-            factory.ConfigureBuilder(o);
-        });
-
-        services.AddDbContextFactory<ArkPluginDbContext>((provider, o) =>
-        {
-            var factory = provider.GetRequiredService<ArkPluginDbContextFactory>();
-            factory.ConfigureBuilder(o);
-        });
+        services.AddSingleton<IDbContextFactory<ArkPluginDbContext>>(sp => sp.GetRequiredService<ArkPluginDbContextFactory>());
 
         services.AddStartupTask<ArkPluginMigrationRunner>();
     }
@@ -137,28 +129,107 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         // Safety service
         services.AddSingleton<ISafetyService, NArk.Safety.AsyncKeyedLock.AsyncSafetyService>();
 
-        // Chain time provider (needs NBXplorer)
-        services.AddSingleton<ChainTimeProvider>(provider =>
+        // Unified blockchain backend (chain time + boarding-UTXO lookup +
+        // broadcast + tx status + fee estimation).
+        //
+        // Default backend is NBXplorerBlockchain, which reaches into
+        // ExplorerClient.RPCClient.SendCommandAsync for chain time, fee
+        // estimation, etc.
+        //
+        // When the BTCPay Electrum plugin
+        // (Kukks/BTCPayServerPlugins/Plugins/BTCPayServer.Plugins.Electrum)
+        // is co-installed, it rip-and-replaces NBXplorer's DI registrations
+        // and substitutes its own ExplorerClient shim whose RPCClient is
+        // null — NBXplorerBlockchain would NRE on every chain-time / fee
+        // call. Detect that case by the registered ExplorerClientProvider's
+        // concrete type name and swap in EsploraBlockchain (REST against
+        // the network's default Esplora endpoint) instead.
+        //
+        // The inner provider's logger is passed so the cache-fallback
+        // warning (emitted when the chain-time call fails transiently
+        // and we serve the cached value) is visible in plugin logs
+        // rather than swallowed.
+        services.AddSingleton<IBitcoinBlockchain>(provider =>
         {
             var explorerClientProvider = provider.GetRequiredService<ExplorerClientProvider>();
-            return new ChainTimeProvider(explorerClientProvider.GetExplorerClient("BTC"));
+            var providerTypeName = explorerClientProvider.GetType().FullName ?? "";
+
+            // Two complementary signals because either alone is fragile:
+            //  - Type-name "Electrum" catches the documented Electrum plugin
+            //    even if it later wraps the provider in something whose
+            //    RPCClient happens to be non-null.
+            //  - RPCClient == null is the *actual* failure condition for
+            //    NBXplorerBlockchain (it dereferences .RPCClient on every
+            //    chain-time / fee / broadcast call). Any future shim that
+            //    nulls it out — Electrum or otherwise — gets caught here
+            //    rather than NRE'ing in production.
+            var btcExplorer = explorerClientProvider.GetExplorerClient("BTC");
+            var rpcClientNull = btcExplorer?.RPCClient is null;
+            var typeNameLooksElectrum = providerTypeName.Contains("Electrum", StringComparison.OrdinalIgnoreCase);
+            var useEsporaFallback = typeNameLooksElectrum || rpcClientNull;
+
+            var pluginLogger = provider.GetService<ILogger<ArkadePlugin>>();
+
+            if (useEsporaFallback)
+            {
+                var trigger = (typeNameLooksElectrum, rpcClientNull) switch
+                {
+                    (true, true) => "type-name match + RPCClient is null",
+                    (true, false) => "type-name match",
+                    (false, true) => "RPCClient is null on the registered ExplorerClient",
+                    _ => "unknown"
+                };
+
+                var network = provider.GetRequiredService<ArkNetworkConfig>();
+                var esploraUri = network.EsploraUri;
+                if (string.IsNullOrWhiteSpace(esploraUri))
+                {
+                    throw new InvalidOperationException(
+                        $"Detected an NBXplorer-incompatible ExplorerClientProvider ({providerTypeName}, trigger: {trigger}) " +
+                        "but ArkNetworkConfig.EsploraUri is null for this network. " +
+                        "NBXplorerBlockchain reaches into ExplorerClient.RPCClient which the shim does not expose; " +
+                        "the Arkade plugin needs an Esplora endpoint as a fallback. " +
+                        "Set 'esplora' in ark.json or pick a network preset (Mainnet/Mutinynet/Signet/Regtest) that includes it.");
+                }
+
+                var esploraLogger = provider.GetService<ILogger<EsploraBlockchain>>();
+                pluginLogger?.LogInformation(
+                    "NBXplorer-incompatible ExplorerClientProvider detected ({Provider}, trigger: {Trigger}); using EsploraBlockchain at {Uri} for chain time / UTXO lookup / broadcast / fee estimation",
+                    providerTypeName, trigger, esploraUri);
+                return new EsploraBlockchain(new Uri(esploraUri), esploraLogger);
+            }
+
+            var nbxLogger = provider.GetService<ILogger<NBXplorerBlockchain>>();
+            pluginLogger?.LogInformation(
+                "Using NBXplorerBlockchain for chain time / UTXO lookup / broadcast / fee estimation (ExplorerClientProvider: {Provider}, RPCClient: non-null)",
+                providerTypeName);
+            return new NBXplorerBlockchain(btcExplorer, nbxLogger);
         });
-        services.AddSingleton<IChainTimeProvider>(sp => sp.GetRequiredService<ChainTimeProvider>());
 
         // Intent scheduler
         services.Configure<SimpleIntentSchedulerOptions>(options =>
             options.Threshold = TimeSpan.FromDays(1));
         services.AddSingleton<IIntentScheduler, SimpleIntentScheduler>();
 
+        // Intent-generation cadence override. NArk's IntentGenerationService
+        // falls back to a 5-minute poll when PollInterval is unset; that
+        // default governs how quickly imported notes and near-expiry VTXOs
+        // turn into batch intents. Left unset here so production behaviour
+        // is unchanged — operators (and the e2e suite) can shorten it via
+        // BTCPAY_ARKINTENTPOLLSECONDS without a code change.
+        services.AddOptions<IntentGenerationServiceOptions>()
+            .Configure<IConfiguration>((options, configuration) =>
+            {
+                var seconds = configuration.GetValue<int?>("ARKINTENTPOLLSECONDS");
+                if (seconds is > 0)
+                    options.PollInterval = TimeSpan.FromSeconds(seconds.Value);
+            });
+
         // Wallet provider
         services.AddSingleton<NArk.Abstractions.Wallets.IWalletProvider, NArk.Core.Wallet.DefaultWalletProvider>();
 
-        // Boarding UTXO detection via NBXplorer
-        services.AddSingleton<IBoardingUtxoProvider>(provider =>
-        {
-            var explorerClient = provider.GetRequiredService<ExplorerClientProvider>().GetExplorerClient("BTC");
-            return new NBXplorerBoardingUtxoProvider(explorerClient);
-        });
+        // BoardingUtxoSyncService consumes IBitcoinBlockchain.GetUtxosAsync — the
+        // NBXplorer-backed registration above implements it for boarding lookup.
         services.AddSingleton<BoardingUtxoSyncService>();
 
         // Core services and network config (includes caching transport by default)
@@ -168,7 +239,59 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
     private static void RegisterPluginServices(IServiceCollection services)
     {
+        // Tracks the background wallet-recovery job per wallet (import-triggered + manual Rescan).
+        services.AddSingleton<RecoveryStatusTracker>();
+
+        // Per-wallet diagnostic log store. Captures NArk + plugin log
+        // entries that carry a `WalletId` (either via BeginScope or the
+        // structured-log args) into a rolling file per wallet so the
+        // merchant can download a wallet-scoped log when asking for
+        // support. See Services/WalletLogger/.
+        // This factory must NOT resolve an ILogger<>. The companion
+        // ILoggerProvider registration below means IWalletLogStore is built
+        // while the host LoggerFactory is itself being constructed — pulling
+        // an ILogger<T> through DI here re-enters that half-built factory
+        // and hangs plugin startup.
+        services.AddSingleton<IWalletLogStore>(sp =>
+        {
+            var configuration = sp.GetRequiredService<IConfiguration>();
+            var dataDir = new DataDirectories().Configure(configuration).DataDir;
+            var logDir = Path.Combine(dataDir, "Plugins", "ArkPayServer", "wallet-logs");
+            return new RollingFileWalletLogStore(logDir);
+        });
+        services.AddSingleton<ILoggerProvider>(sp =>
+            new WalletScopedLoggerProvider(sp.GetRequiredService<IWalletLogStore>()));
+
         services.AddSingleton<ArkadeSpendingService>();
+
+        // Remote-signer transport seam.
+        //
+        // NArk's DefaultWalletProvider takes IRemoteSignerTransport? as an
+        // optional ctor param. ASP.NET Core DI invokes the registered factory
+        // when the consumer is constructed regardless of the C# default-value
+        // sugar, so the factory MUST NOT throw — it would abort the whole
+        // host build the moment the plugin loaded, even on stores that have
+        // no Remote wallets to sign for. Instead:
+        //
+        //  - When the companion BTCPayServer.Plugins.App plugin is installed
+        //    it registers an IBTCPayAppDeviceProxy that bridges signing calls
+        //    to a connected BTCPayApp device over its SignalR hub; we forward
+        //    that as the IRemoteSignerTransport.
+        //  - When no companion plugin is installed, we hand back a
+        //    MissingDeviceProxyTransport sentinel whose KnowsWalletAsync returns
+        //    false for every wallet — so a wallet imported via the watch-only
+        //    flow falls through to genuine watch-only (DefaultWalletProvider
+        //    returns null from GetSignerAsync). The three signing methods still
+        //    throw a descriptive "install the App companion plugin" message as
+        //    defence-in-depth, but the happy path now matches user intent: pick
+        //    "watch-only" and you get watch-only, not a runtime nag.
+        services.AddSingleton<IRemoteSignerTransport>(sp =>
+            sp.GetService<IBTCPayAppDeviceProxy>()
+            ?? (IRemoteSignerTransport)new MissingDeviceProxyTransport());
+
+        // Tracks Arkade-operator reachability so plugin pages can show a friendly
+        // "operator unavailable" banner instead of leaking raw gRPC/HTTP errors.
+        services.AddSingleton<ArkOperatorHealthService>();
 
         services.AddSingleton<ISweepPolicy, DestinationSweepPolicy>();
 
@@ -207,6 +330,11 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
             services.AddHttpClient<BoltzClient>();
             services.AddHttpClient<CachedBoltzClient>();
             services.AddArkSwapServices();
+
+            // Tag every Boltz swap-creation request with the BTCPay-Arkade
+            // referral so Boltz can credit the integration. Mirrors the
+            // wallet-side `arkade-money` referral added in arkade-os/wallet#606.
+            services.Configure<NArk.Swaps.Boltz.Models.BoltzClientOptions>(o => o.ReferralId = "btcpay-arkade");
 
             services.AddUIExtension("ln-payment-method-setup-tabhead", "/Views/Ark/ArkLNSetupTabhead.cshtml");
 
@@ -250,7 +378,18 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         return new ArkNetworkConfig(
             ArkUri: !string.IsNullOrEmpty(fileConfig?.ArkUri) ? fileConfig.ArkUri : preset.ArkUri,
             ArkadeWalletUri: !string.IsNullOrEmpty(fileConfig?.ArkadeWalletUri) ? fileConfig.ArkadeWalletUri : preset.ArkadeWalletUri,
-            BoltzUri: !string.IsNullOrEmpty(fileConfig?.BoltzUri) ? fileConfig.BoltzUri : preset.BoltzUri
+            BoltzUri: !string.IsNullOrEmpty(fileConfig?.BoltzUri) ? fileConfig.BoltzUri : preset.BoltzUri,
+            ExplorerUri: !string.IsNullOrEmpty(fileConfig?.ExplorerUri) ? fileConfig.ExplorerUri : preset.ExplorerUri,
+            // EsploraUri / ElectrumWsUri / ElectrumTcpUri arrived in
+            // ArkNetworkConfig via NNark dotnet-sdk#96. They MUST be carried
+            // through here too — otherwise the merge silently nulls the
+            // preset's Esplora endpoint and operators with a custom ark.json
+            // hit the InvalidOperationException in the IBitcoinBlockchain
+            // factory the moment they co-install the Electrum plugin (same
+            // failure mode as v2.1.14's ExplorerUri-merge regression).
+            EsploraUri: !string.IsNullOrEmpty(fileConfig?.EsploraUri) ? fileConfig.EsploraUri : preset.EsploraUri,
+            ElectrumWsUri: !string.IsNullOrEmpty(fileConfig?.ElectrumWsUri) ? fileConfig.ElectrumWsUri : preset.ElectrumWsUri,
+            ElectrumTcpUri: !string.IsNullOrEmpty(fileConfig?.ElectrumTcpUri) ? fileConfig.ElectrumTcpUri : preset.ElectrumTcpUri
         );
     }
 
@@ -266,7 +405,15 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
             return new ArkNetworkConfig(
                 ArkUri: "https://signet.arkade.sh",
                 ArkadeWalletUri: "https://signet.arkade.money",
-                BoltzUri: null);
+                BoltzUri: null,
+                ExplorerUri: "https://explorer.signet.arkade.sh",
+                // Signet endpoints mirror the canonical ts-sdk defaults
+                // (https://github.com/arkade-os/ts-sdk/blob/main/src/providers/onchain.ts
+                // and electrum.ts). NNark only ships Mainnet/Mutinynet/Regtest
+                // presets so the plugin fills these per-network here.
+                EsploraUri: "https://mempool.signet.arkade.sh/api",
+                ElectrumWsUri: "wss://electrum.signet.arkade.sh",
+                ElectrumTcpUri: "tcp://electrum.signet.arkade.sh:50001");
 
         return null;
     }

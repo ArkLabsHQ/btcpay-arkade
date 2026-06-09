@@ -1,0 +1,15 @@
+@using BTCPayServer.Plugins.ArkPayServer.Services
+@inject ArkOperatorHealthService ArkOperatorHealth
+@{
+    // Cheap when the operator is up (server-info is cached); a short negative-cache TTL in
+    // the health service keeps a downed operator from costing every page a fresh timeout.
+    var arkStatus = await ArkOperatorHealth.GetStatusAsync(Context.RequestAborted);
+}
+@if (!arkStatus.Available)
+{
+    <div class="alert alert-warning alert-dismissible d-flex align-items-start gap-2 my-3" role="alert">
+        <vc:icon symbol="warning" />
+        <div class="flex-fill min-w-0">@(arkStatus.Error ?? ArkOperatorAvailability.UnavailableMessage)</div>
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+}

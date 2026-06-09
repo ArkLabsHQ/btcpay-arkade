@@ -6,7 +6,7 @@
 
 @{
     Layout = "_Layout";
-    var pageTitle = "Ark - Join Batch";
+    var pageTitle = "Arkade - Join Batch";
     ViewData.SetActivePage(category: "Ark", activePage: "IntentBuilder", title: pageTitle);
     var storeId = ScopeProvider.GetCurrentStoreId()!;
 }
@@ -30,9 +30,9 @@
 <div id="descriptor" class="collapse">
     <div class="d-flex px-4 py-4 mb-4 bg-tile rounded">
         <div class="flex-fill">
-            <p text-translate="true" class="mb-2">Join the next Ark batch to consolidate or transfer your VTXOs.</p>
+            <p text-translate="true" class="mb-2">Join the next Arkade batch to consolidate or transfer your VTXOs.</p>
             <p text-translate="true" class="mb-3">
-                Leave destination empty to consolidate to self, or specify an <strong>Ark address</strong> for offchain transfer,
+                Leave destination empty to consolidate to self, or specify an <strong>Arkade address</strong> for offchain transfer,
                 <strong>Bitcoin address</strong> for onchain output, or <strong>Lightning invoice</strong> for instant payment.
             </p>
         </div>
@@ -172,9 +172,9 @@
                                                    name="Outputs[@i].Destination"
                                                    value="@output.Destination"
                                                    class="form-control destination-input"
-                                                   placeholder="Ark address, BIP21 URI, or Lightning invoice (leave empty to consolidate to self)..." />
+                                                   placeholder="Arkade address, BIP21 URI, or Lightning invoice (leave empty to consolidate to self)..." />
                                             <div class="form-text">
-                                                <span text-translate="true">Ark address = offchain VTXO, Bitcoin address = onchain output, or BOLT11 invoice (single output only). Leave empty to consolidate selected VTXOs to self.</span>
+                                                <span text-translate="true">Arkade address = offchain VTXO, Bitcoin address = onchain output, or BOLT11 invoice (single output only). Leave empty to consolidate selected VTXOs to self.</span>
                                             </div>
                                             @if (!string.IsNullOrEmpty(output.Error))
                                             {
@@ -290,7 +290,7 @@
                                 <input type="text"
                                        name="Outputs[${outputIndex}].Destination"
                                        class="form-control destination-input"
-                                       placeholder="Ark address, BIP21 URI, or Lightning invoice..." />
+                                       placeholder="Arkade address, BIP21 URI, or Lightning invoice..." />
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label">Amount (BTC)</label>
@@ -435,7 +435,7 @@
 
                     // Display
                     feeAmount.textContent = `${feeBtc} BTC (${feeSats.toLocaleString()} sats)`;
-                    feeDescription.textContent = result.feeDescription || 'Ark service fee';
+                    feeDescription.textContent = result.feeDescription || 'Arkade service fee';
                     netAmount.textContent = `${netBtc} BTC`;
 
                     if (result.isLightning && result.feePercentage) {

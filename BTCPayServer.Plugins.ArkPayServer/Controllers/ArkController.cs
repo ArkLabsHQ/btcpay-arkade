@@ -17,12 +17,15 @@ using BTCPayServer.Plugins.ArkPayServer.Models.Api;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
 using BTCPayServer.Plugins.ArkPayServer.Services;
+using BTCPayServer.Plugins.ArkPayServer.Services.WalletLogger;
 using BTCPayServer.Security;
 using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Stores;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using NArk.Abstractions;
 using NArk.Abstractions.Fees;
 using NArk.Abstractions.Intents;
@@ -61,6 +64,7 @@ public class ArkController(
     StoreRepository storeRepository,
     PaymentMethodHandlerDictionary paymentMethodHandlerDictionary,
     IClientTransport clientTransport,
+    ArkOperatorHealthService arkOperatorHealth,
     ArkadeSpendingService arkadeSpendingService,
     ArkAutomatedPayoutSenderFactory payoutSenderFactory,
     PayoutProcessorService payoutProcessorService,
@@ -72,7 +76,7 @@ public class ArkController(
     ISpendingService arkadeSpender,
     IFeeEstimator feeEstimator,
     IContractService contractService,
-    IChainTimeProvider bitcoinTimeChainProvider,
+    IBitcoinBlockchain bitcoinTimeChainProvider,
     VtxoSynchronizationService vtxoSyncService,
     IContractStorage contractStorage,
     ISwapStorage swapStorage,
@@ -80,8 +84,18 @@ public class ArkController(
     IWalletStorage walletStorage,
     IDbContextFactory<ArkPluginDbContext> dbContextFactory,
     IHttpClientFactory httpClientFactory,
-    BoardingUtxoSyncService boardingUtxoSyncService) : Controller
+    BoardingUtxoSyncService boardingUtxoSyncService,
+    IWalletLogStore walletLogStore,
+    RecoveryStatusTracker recoveryStatusTracker,
+    IServiceProvider serviceProvider,
+    ILogger<ArkController> logger) : Controller
 {
+    // Post-operation VTXO refresh only needs to catch updates since the operation
+    // started. A 5-minute buffer absorbs clock skew and batch-round latency while
+    // keeping the arkd indexer query bounded for wallets with lots of history.
+    private static readonly TimeSpan PostOpVtxoPollBuffer = TimeSpan.FromMinutes(5);
+    private static DateTimeOffset PostOpVtxoPollSince() => DateTimeOffset.UtcNow - PostOpVtxoPollBuffer;
+
     [HttpGet("stores/{storeId}/initial-setup")]
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public IActionResult InitialSetup(string storeId)
@@ -110,56 +124,62 @@ public class ArkController(
 
         try
         {
-            var walletSettings = await GetFromInputWallet(model.Wallet);
+            var walletSettings = await GetFromInputWallet(model.Wallet, model.Mode);
 
             if (walletSettings.Wallet is not null)
             {
                 try
                 {
                     var serverInfo = await clientTransport.GetServerInfoAsync(HttpContext.RequestAborted);
-                    var wallet = await WalletFactory.CreateWallet(
-                        walletSettings.Wallet,
-                        walletSettings.Destination,
-                        serverInfo,
-                        HttpContext.RequestAborted);
+
+                    // Watch-only import: walletSettings.Wallet carries the
+                    // account descriptor verbatim. Hand it to NArk's
+                    // CreateWatchOnlyWallet helper (added in dotnet-sdk#107)
+                    // which leaves Secret null on the resulting ArkWalletInfo
+                    // so DefaultWalletProvider.GetSignerAsync returns null
+                    // unless an IRemoteSignerTransport claims the wallet.
+                    // The factory throws on an unparseable descriptor and the
+                    // outer try/catch surfaces that to the form below.
+                    var wallet = walletSettings.IsWatchOnlyDescriptor
+                        ? await WalletFactory.CreateWatchOnlyWallet(
+                            walletSettings.Wallet,
+                            destination: walletSettings.Destination,
+                            serverInfo,
+                            metadata: null,
+                            HttpContext.RequestAborted)
+                        : await WalletFactory.CreateWallet(
+                            walletSettings.Wallet,
+                            walletSettings.Destination,
+                            serverInfo,
+                            HttpContext.RequestAborted);
 
                     // Signer is automatically registered via WalletSaved event
                     await walletStorage.UpsertWallet(wallet, updateIfExists: true, HttpContext.RequestAborted);
-                    
+
                     if (wallet.WalletType == WalletType.SingleKey)
                     {
                        await  contractService.DeriveContract(
-                           wallet.Id, 
-                           NextContractPurpose.SendToSelf, 
-                           ContractActivityState.Active, 
+                           wallet.Id,
+                           NextContractPurpose.SendToSelf,
+                           ContractActivityState.Active,
                            metadata: new Dictionary<string, string> { ["Source"] = "Default" },
                            cancellationToken: HttpContext.RequestAborted);
                     }
-                    
+
                     walletSettings = walletSettings with { WalletId = wallet.Id };
                 }
                 catch (Exception ex)
                 {
-                    TempData[WellKnownTempData.ErrorMessage] = "Could not update wallet: " + ex.Message;
+                    TempData[WellKnownTempData.ErrorMessage] = DescribeArkError(ex, "Could not update wallet");
                     return View(model);
                 }
             }
 
-            // Sync all known contracts for this wallet to pick up any existing VTXOs
-            var contracts = await contractStorage.GetContracts(
-                walletIds: [walletSettings.WalletId!], cancellationToken: HttpContext.RequestAborted);
-            if (contracts.Count > 0)
-            {
-                var initBoardingContracts = contracts
-                    .Where(c => c.Type == ArkBoardingContract.ContractType).ToList();
-                var initNonBoardingScripts = contracts
-                    .Where(c => c.Type != ArkBoardingContract.ContractType)
-                    .Select(c => c.Script).ToHashSet();
-                if (initNonBoardingScripts.Count > 0)
-                    await vtxoSyncService.PollScriptsForVtxos(initNonBoardingScripts, HttpContext.RequestAborted);
-                if (initBoardingContracts.Count > 0)
-                    await boardingUtxoSyncService.SyncAsync(initBoardingContracts, HttpContext.RequestAborted);
-            }
+            // On import, recover the wallet in the background (off the request thread —
+            // a gap-limit scan polls arkd per index): discover contracts across derivation
+            // indices + server signers (incl. legacy/deprecated), restore swaps, finalize
+            // pending txs, resync funds, then sync boarding UTXOs.
+            StartBackgroundRecovery(walletSettings.WalletId!);
 
             var config = new ArkadePaymentMethodConfig(walletSettings.WalletId!, walletSettings.IsOwnedByStore);
             store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], config);
@@ -167,10 +187,14 @@ public class ArkController(
             // Set Arkade as the default payment method
             store.SetDefaultPaymentId(ArkadePlugin.ArkadePaymentMethodId);
 
-            // Enable Lightning by default if not already configured
+            // Enable Lightning by default if not already configured. Skip watch-only wallets:
+            // Arkade-backed Lightning needs batch participation (signing), and without a paired
+            // remote signer the wallet would accept LN invoices at checkout but fail at
+            // settlement after the customer has already committed to paying. The merchant can
+            // still flip it on manually once a companion signer is paired.
             var lightningPaymentMethodId = GetLightningPaymentMethod();
             var existingLnConfig = store.GetPaymentMethodConfig<LightningPaymentMethodConfig>(lightningPaymentMethodId, paymentMethodHandlerDictionary);
-            if (existingLnConfig == null)
+            if (existingLnConfig == null && !walletSettings.IsWatchOnlyDescriptor)
             {
                 var lnurlPaymentMethodId = PaymentTypes.LNURL.GetPaymentMethodId("BTC");
                 
@@ -207,7 +231,7 @@ public class ArkController(
                 });
             }
 
-            TempData[WellKnownTempData.SuccessMessage] = "Ark Payment method updated.";
+            TempData[WellKnownTempData.SuccessMessage] = "Arkade payment method updated.";
 
             return RedirectToAction(nameof(StoreOverview), new { storeId });
         }
@@ -216,6 +240,68 @@ public class ArkController(
             ModelState.AddModelError(nameof(model.Wallet), ex.Message);
             return View(model);
         }
+    }
+
+    /// <summary>
+    /// Starts unified wallet recovery for <paramref name="walletId"/> on a background
+    /// thread (a gap-limit scan polls arkd per index), tracking status for the overview.
+    /// Discovers contracts (incl. legacy deprecated-signer scripts) + the derivation
+    /// index, restores swaps, finalizes pending txs and resyncs offchain funds, then
+    /// syncs boarding (on-chain) UTXOs. <c>IWalletRecoveryService</c> is only registered
+    /// when swaps (Boltz) are configured; without it this degrades to a boarding-only sync.
+    /// </summary>
+    private void StartBackgroundRecovery(string walletId)
+    {
+        var recoveryService = serviceProvider.GetService<NArk.Swaps.Recovery.IWalletRecoveryService>();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                recoveryStatusTracker.SetRunning(walletId);
+
+                var contractsRecovered = 0;
+                var swapsAudited = 0;
+                var fundsSynced = 0;
+                if (recoveryService is not null)
+                {
+                    var report = await recoveryService.RecoverAsync(walletId, cancellationToken: CancellationToken.None);
+                    contractsRecovered = report.ContractsRecovered;
+                    swapsAudited = report.SwapAudit.Count;
+                    fundsSynced = report.FundsScriptsSynced;
+                }
+
+                // Boarding (on-chain) UTXOs aren't covered by offchain recovery.
+                var boardingContracts = (await contractStorage.GetContracts(
+                        walletIds: [walletId], cancellationToken: CancellationToken.None))
+                    .Where(c => c.Type == ArkBoardingContract.ContractType).ToList();
+                if (boardingContracts.Count > 0)
+                    await boardingUtxoSyncService.SyncAsync(boardingContracts, CancellationToken.None);
+
+                recoveryStatusTracker.SetCompleted(walletId,
+                    recoveryService is not null ? contractsRecovered : boardingContracts.Count,
+                    swapsAudited, fundsSynced);
+            }
+            catch (Exception ex)
+            {
+                recoveryStatusTracker.SetFailed(walletId, ex.Message);
+                logger.LogWarning(ex, "Background wallet recovery failed for wallet {WalletId}", walletId);
+            }
+        });
+    }
+
+    [HttpPost("stores/{storeId}/rescan")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> Rescan(string storeId)
+    {
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
+        if (errorResult != null) return errorResult;
+        if (!config!.GeneratedByStore || string.IsNullOrEmpty(config.WalletId))
+            return RedirectWithError(nameof(StoreOverview),
+                "Rescan requires a store-managed wallet.", new { storeId });
+
+        StartBackgroundRecovery(config.WalletId);
+        return RedirectWithSuccess(nameof(StoreOverview),
+            "Wallet rescan started — contracts, funds and swaps will refresh shortly.", new { storeId });
     }
 
     [HttpGet("stores/{storeId}/overview")]
@@ -236,7 +322,7 @@ public class ArkController(
         }
         catch (Exception ex)
         {
-            TempData[WellKnownTempData.ErrorMessage] = $"Unable to fetch balances: {ex.Message}";
+            TempData[WellKnownTempData.ErrorMessage] = DescribeArkError(ex, "Unable to fetch balances");
         }
 
         var signerAvailable = await walletProvider.GetAddressProviderAsync(config.WalletId!, cancellationToken) != null;
@@ -341,9 +427,10 @@ public class ArkController(
             Wallet = wallet?.Secret,
             WalletType = wallet?.WalletType ?? WalletType.SingleKey,
             CanManagePrivateKeys = canManagePrivateKeys,
+            RecoveryStatus = config.WalletId is { } recoveryWalletId ? recoveryStatusTracker.Get(recoveryWalletId) : null,
             ArkOperatorUrl = arkNetworkConfig.ArkUri,
             ArkOperatorConnected = arkOperatorConnected,
-            ArkOperatorError = arkOperatorError,
+            ArkOperatorError = ArkOperatorAvailability.DescribeMessage(arkOperatorError),
             BoltzUrl = arkNetworkConfig.BoltzUri,
             BoltzConnected = boltzConnected,
             BoltzError = boltzError,
@@ -362,6 +449,27 @@ public class ArkController(
             RecentIntents = recentIntents,
             RecentSwaps = recentSwaps
         });
+    }
+
+    [HttpGet("stores/{storeId}/wallet-log")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> DownloadWalletLog(string storeId)
+    {
+        var (_, config, errorResult) = await ValidateStoreAndConfig();
+        if (errorResult != null) return errorResult;
+
+        var walletId = config!.WalletId!;
+        var stream = walletLogStore.OpenForRead(walletId);
+        if (stream is null)
+        {
+            TempData[WellKnownTempData.SuccessMessage] =
+                "No diagnostic log entries have been recorded for this wallet yet. " +
+                "Use the wallet (send / receive / sync) and try again.";
+            return RedirectToAction(nameof(StoreOverview), new { storeId });
+        }
+
+        var filename = $"arkade-wallet-{walletId}-{DateTime.UtcNow:yyyyMMddTHHmmssZ}.log";
+        return File(stream, "text/plain; charset=utf-8", filename);
     }
 
     [HttpPost("stores/{storeId}/show-private-key")]
@@ -409,7 +517,7 @@ public class ArkController(
         }
         catch (Exception ex)
         {
-            TempData[WellKnownTempData.ErrorMessage] = $"Failed to check receive address: {ex.Message}";
+            TempData[WellKnownTempData.ErrorMessage] = DescribeArkError(ex, "Failed to check receive address");
         }
 
         return View(model);
@@ -433,7 +541,7 @@ public class ArkController(
                     config!.WalletId!,
                     NextContractPurpose.Boarding,
                     ContractActivityState.AwaitingFundsBeforeDeactivate,
-                    metadata: new Dictionary<string, string> { ["Source"] = "manual-boarding" },
+                    metadata: new Dictionary<string, string> { ["Source"] = "manual" },
                     cancellationToken: cancellationToken);
                 model.BoardingAddress = boardingContract.GetOnchainAddress(terms.Network).ToString();
 
@@ -460,7 +568,7 @@ public class ArkController(
         }
         catch (Exception ex)
         {
-            TempData[WellKnownTempData.ErrorMessage] = $"Failed to generate address: {ex.Message}";
+            TempData[WellKnownTempData.ErrorMessage] = DescribeArkError(ex, "Failed to generate address");
         }
 
         return RedirectToAction(nameof(Receive), new { storeId });
@@ -471,6 +579,7 @@ public class ArkController(
         var existingContracts = await contractStorage.GetContracts(
             walletIds: [walletId],
             isActive: true,
+            contractTypes: [ArkPaymentContract.ContractType],
             cancellationToken: cancellationToken);
 
         var manualContract = existingContracts
@@ -498,7 +607,7 @@ public class ArkController(
         var boardingEntity = existingContracts
             .FirstOrDefault(c =>
                 c.ActivityState == ContractActivityState.AwaitingFundsBeforeDeactivate &&
-                c.Metadata?.GetValueOrDefault("Source") == "manual-boarding");
+                c.Metadata?.GetValueOrDefault("Source") is "manual" or "manual-boarding");
 
         if (boardingEntity == null) return null;
 
@@ -639,7 +748,7 @@ public class ArkController(
         }
         catch (ArkadePaymentFailedException e)
         {
-            TempData[WellKnownTempData.ErrorMessage] = $"Payment failed: reason: {e.Message}";
+            TempData[WellKnownTempData.ErrorMessage] = DescribeArkError(e, "Payment failed: reason");
             return RedirectToAction(nameof(SpendOverview),
                 new {storeId = store.Id, destinations = model.PrefilledDestination});
         }
@@ -753,7 +862,7 @@ public class ArkController(
 
             // Poll for VTXO updates
             var activeContracts = await contractStorage.GetContracts(walletIds: [config.WalletId!], isActive: true, cancellationToken: token);
-            await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), token);
+            await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), PostOpVtxoPollSince(), token);
 
             TempData[WellKnownTempData.SuccessMessage] = $"Successfully joined batch. Your VTXOs will be updated in the next round. Transaction ID: {txId}";
 
@@ -989,7 +1098,7 @@ public class ArkController(
             {
                 var estimatedFee = await feeEstimator.EstimateFeeAsync(coins.ToArray(), outputs.ToArray(), token);
                 response.EstimatedFeeSats = estimatedFee;
-                response.FeeDescription = hasOnchain ? "Batch transaction fee" : "Ark service fee";
+                response.FeeDescription = hasOnchain ? "Batch transaction fee" : "Arkade service fee";
             }
 
             return Json(response);
@@ -1050,6 +1159,7 @@ public class ArkController(
     /// Suggests optimal coin selection based on destination type and amount.
     /// </summary>
     [HttpPost("stores/{storeId}/suggest-coins")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> SuggestCoins(
         string storeId,
         [FromBody] SuggestCoinsRequest request,
@@ -1151,6 +1261,7 @@ public class ArkController(
     /// Pre-flight validation before executing spend.
     /// </summary>
     [HttpPost("stores/{storeId}/validate-spend")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> ValidateSpend(
         string storeId,
         [FromBody] ValidateSpendRequest request,
@@ -1566,7 +1677,7 @@ public class ArkController(
 
                 // Poll for VTXO updates
                 var activeContracts = await contractStorage.GetContracts(walletIds: [config.WalletId!], isActive: true, cancellationToken: token);
-                await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), token);
+                await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), PostOpVtxoPollSince(), token);
 
                 return RedirectWithSuccess(nameof(StoreOverview), $"Coins consolidated successfully! TxId: {txId}", new { storeId });
             }
@@ -1758,7 +1869,7 @@ public class ArkController(
 
                 // Poll for VTXO updates
                 var activeContracts = await contractStorage.GetContracts(walletIds: [config.WalletId!], isActive: true, cancellationToken: token);
-                await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), token);
+                await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), PostOpVtxoPollSince(), token);
 
                 // Mark payouts as paid if any outputs fulfill payouts
                 foreach (var output in validOutputs.Where(o => !string.IsNullOrEmpty(o.PayoutId)))
@@ -1856,9 +1967,11 @@ public class ArkController(
 
         if (command == "save-boarding")
         {
-            var minAmount = model.MinBoardingAmountSats > 0 ? model.MinBoardingAmountSats : 330L;
-            if (minAmount < 330)
-                return RedirectWithError(nameof(StoreOverview), "Boarding minimum cannot be below the P2TR dust threshold (330 sats).", new { storeId });
+            var minAmount = model.MinBoardingAmountSats > 0
+                ? model.MinBoardingAmountSats
+                : ArkadePaymentMethodConfig.DefaultMinBoardingAmountSats;
+            if (minAmount < ArkadePaymentMethodConfig.P2trDustLimitSats)
+                return RedirectWithError(nameof(StoreOverview), $"Boarding minimum cannot be below the P2TR dust threshold ({ArkadePaymentMethodConfig.P2trDustLimitSats} sats).", new { storeId });
 
             var newConfig = config! with { BoardingEnabled = true, MinBoardingAmountSats = minAmount };
             store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], newConfig);
@@ -2333,7 +2446,7 @@ public class ArkController(
             await walletStorage.DeleteWallet(walletId, HttpContext.RequestAborted);
         }
 
-        return RedirectWithSuccess(nameof(InitialSetup), "Ark wallet configuration cleared.", new { storeId });
+        return RedirectWithSuccess(nameof(InitialSetup), "Arkade wallet configuration cleared.", new { storeId });
     }
 
     [HttpPost("stores/{storeId}/force-refresh")]
@@ -2384,7 +2497,7 @@ public class ArkController(
         }
         catch (Exception ex)
         {
-            TempData[WellKnownTempData.ErrorMessage] = $"Failed to create refresh intent: {ex.Message}";
+            TempData[WellKnownTempData.ErrorMessage] = DescribeArkError(ex, "Failed to create refresh intent");
         }
 
         return RedirectToAction(nameof(StoreOverview), new { storeId });
@@ -2573,21 +2686,44 @@ public class ArkController(
         return lnEnabled;
     }
 
-    private async Task<TemporaryWalletSettings> GetFromInputWallet(string? wallet)
+    private async Task<TemporaryWalletSettings> GetFromInputWallet(string? wallet, WalletSetupMode mode = WalletSetupMode.Auto)
     {
+        // Watch-only path: the input is an account descriptor — a bare
+        // tr(pubkey) for single-key style or a tr([fp/path]xpub/0/*) for
+        // hierarchical-deterministic style. The merchant does NOT own the
+        // signing material (it's on a paired BTCPayApp device or elsewhere),
+        // so IsOwnedByStore is false. If the descriptor matches an existing
+        // wallet id we reuse it; otherwise we hand the descriptor back to
+        // the POST handler with IsWatchOnlyDescriptor=true so it routes to
+        // WalletFactory.CreateWatchOnlyWallet rather than CreateWallet.
+        if (mode == WalletSetupMode.WatchOnly)
+        {
+            if (string.IsNullOrWhiteSpace(wallet))
+                throw new Exception("Account descriptor is required for watch-only import.");
+
+            var trimmed = wallet.Trim();
+            var existingWatchOnly = await walletStorage.GetWalletById(trimmed, HttpContext.RequestAborted);
+            if (existingWatchOnly is not null)
+                return new TemporaryWalletSettings(null, trimmed, null, false, false);
+
+            return new TemporaryWalletSettings(trimmed, null, null, false, false, IsWatchOnlyDescriptor: true);
+        }
+
         if (string.IsNullOrWhiteSpace(wallet))
             return new TemporaryWalletSettings(GenerateWallet(), null, null, true, true);
 
         if (wallet.StartsWith("nsec", StringComparison.InvariantCultureIgnoreCase))
         {
-            // Check all possible wallet ID formats: tr(compressed), raw compressed, raw xonly, tr(xonly)
+            // Check all possible wallet ID formats: tr(compressed), raw compressed, raw xonly, tr(xonly).
+            // If we find a match, the user is re-importing a wallet that already exists in storage —
+            // IsOwnedByStore is still true because they proved ownership by presenting the nsec.
             var candidateIds = new[] { WalletFactory.GetOutputDescriptorFromNsec(wallet) }
                 .Concat(WalletFactory.GetAlternateWalletIdsFromNsec(wallet));
             foreach (var candidateId in candidateIds)
             {
                 var existing = await walletStorage.GetWalletById(candidateId, HttpContext.RequestAborted);
                 if (existing is not null)
-                    return new TemporaryWalletSettings(null, candidateId, null, false, false);
+                    return new TemporaryWalletSettings(null, candidateId, null, true, false);
             }
             return new TemporaryWalletSettings(wallet, null, null, true, false);
         }
@@ -2616,7 +2752,7 @@ public class ArkController(
             return !serverKey.ToBytes().SequenceEqual(addr!.ServerKey.ToBytes()) ? throw new Exception("Invalid destination address") : new TemporaryWalletSettings(GenerateWallet(), null, wallet, true, true);
         }
         var existingWallet = await walletStorage.GetWalletById(wallet, HttpContext.RequestAborted);
-        return existingWallet == null ? throw new Exception("Unsupported value. Enter a BIP-39 seed phrase (12 or 24 words), nsec private key, Ark address, or wallet ID.") : new TemporaryWalletSettings(null, wallet, null, false, false);
+        return existingWallet == null ? throw new Exception("Unsupported value. Enter a BIP-39 seed phrase (12 or 24 words), nsec private key, Arkade address, or wallet ID.") : new TemporaryWalletSettings(null, wallet, null, false, false);
     }
     private static string GenerateWallet()
     {
@@ -2632,7 +2768,7 @@ public class ArkController(
         return store.GetPaymentMethodConfig<T>(paymentMethodId, paymentMethodHandlerDictionary);
     }
 
-    private record TemporaryWalletSettings(string? Wallet, string? WalletId, string? Destination, bool IsOwnedByStore, bool IsNewlyGeneratedWallet);
+    private record TemporaryWalletSettings(string? Wallet, string? WalletId, string? Destination, bool IsOwnedByStore, bool IsNewlyGeneratedWallet, bool IsWatchOnlyDescriptor = false);
 
     [HttpGet("~/stores/{storeId}/payout-processors/ark-automated")]
     [Authorize(AuthenticationSchemes = AuthenticationSchemes.Cookie)]
@@ -2828,7 +2964,7 @@ public class ArkController(
             DefaultAddress = defaultAddress,
             ArkOperatorUrl = arkNetworkConfig.ArkUri,
             ArkOperatorConnected = arkOperatorConnected,
-            ArkOperatorError = arkOperatorError,
+            ArkOperatorError = ArkOperatorAvailability.DescribeMessage(arkOperatorError),
             BoltzUrl = arkNetworkConfig.BoltzUri,
             BoltzConnected = boltzConnected,
             BoltzError = boltzError
@@ -2950,6 +3086,18 @@ public class ArkController(
     }
 
     /// <summary>
+    /// Maps an exception to a user-facing message. When the Arkade operator is unreachable
+    /// it returns the friendly <see cref="ArkOperatorAvailability.UnavailableMessage"/> and
+    /// flips the status banner immediately (so the next page already reflects the outage);
+    /// otherwise it returns the original error prefixed with <paramref name="context"/>.
+    /// </summary>
+    private string DescribeArkError(Exception ex, string context)
+    {
+        arkOperatorHealth.ReportFailure(ex); // no-op unless ex looks like operator-unreachable
+        return ArkOperatorAvailability.Describe(ex, context);
+    }
+
+    /// <summary>
     /// Checks service connection and returns connection status.
     /// </summary>
     private async Task<(bool connected, string? error)> CheckServiceConnectionAsync<T>(
@@ -3001,7 +3149,7 @@ public class ArkController(
         try
         {
             var limits = await boltzLimitsValidator.GetAllLimitsAsync(cancellationToken);
-            return (limits != null, limits == null ? "Boltz instance does not support Ark" : null, limits);
+            return (limits != null, limits == null ? "Boltz instance does not support Arkade" : null, limits);
         }
         catch (Exception ex)
         {
@@ -3310,25 +3458,39 @@ public class ArkController(
         // Parse and add new destination
         if (!string.IsNullOrWhiteSpace(model.NewDestination))
         {
-            var serverInfo = await clientTransport.GetServerInfoAsync(token);
-            var parsed = ParseSend2Destination(model.NewDestination.Trim(), model.NewAmountBtc, serverInfo.Network);
-
-            if (!parsed.IsValid)
+            try
             {
-                newModel.Errors.Add(parsed.Error ?? "Invalid destination");
+                var serverInfo = await clientTransport.GetServerInfoAsync(token);
+                var parsed = await ParseSend2DestinationAsync(model.NewDestination.Trim(), model.NewAmountBtc, serverInfo.Network, token);
+
+                if (!parsed.IsValid)
+                {
+                    newModel.Errors.Add(parsed.Error ?? "Invalid destination");
+                }
+                else
+                {
+                    parsed.Index = newModel.Destinations.Count;
+                    newModel.Destinations.Add(parsed);
+
+                    // Estimate fees for all destinations
+                    await EstimateSend2Fees(newModel, config.WalletId!, token);
+                }
             }
-            else
+            catch (Exception ex)
             {
-                parsed.Index = newModel.Destinations.Count;
-                newModel.Destinations.Add(parsed);
-
-                // Estimate fees for all destinations
-                await EstimateSend2Fees(newModel, config.WalletId!, token);
+                newModel.Errors.Add($"Failed to parse destination: {ex.Message}");
             }
         }
         else
         {
             newModel.Errors.Add("Please enter a destination");
+        }
+
+        // Preserve user input on errors so the form re-renders with what they typed
+        if (newModel.Errors.Any())
+        {
+            newModel.NewDestination = model.NewDestination;
+            newModel.NewAmountBtc = model.NewAmountBtc;
         }
 
         // Serialize state for next round-trip
@@ -3475,7 +3637,7 @@ public class ArkController(
 
                 // Poll for VTXO updates
                 var activeContracts = await contractStorage.GetContracts(walletIds: [config.WalletId!], isActive: true, cancellationToken: token);
-                await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), token);
+                await vtxoSyncService.PollScriptsForVtxos(activeContracts.Select(c => c.Script).ToHashSet(), PostOpVtxoPollSince(), token);
 
                 // Mark payouts as paid if this was initiated from payout handler
                 foreach (var dest in newModel.Destinations.Where(d => !string.IsNullOrEmpty(d.PayoutId)))
@@ -3677,7 +3839,7 @@ public class ArkController(
                     {
                         var fee = await feeEstimator.EstimateFeeAsync(spendableCoins, outputs, token);
                         dest.FeeSats = fee;
-                        dest.FeeDescription = "Ark service fee";
+                        dest.FeeDescription = "Arkade service fee";
                     }
                 }
                 else if (dest.Type is Send2DestinationType.LightningInvoice or Send2DestinationType.Bip21Lightning or Send2DestinationType.Lnurl)

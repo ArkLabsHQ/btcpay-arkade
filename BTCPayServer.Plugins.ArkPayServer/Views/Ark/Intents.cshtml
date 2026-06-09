@@ -12,7 +12,7 @@
 @inject ArkNetworkConfig ArkNetworkConfig
 
 @{
-    ViewData.SetActivePage(category: "Ark", activePage: "Intents", title: "Ark - Intents");
+    ViewData.SetActivePage(category: "Ark", activePage: "Intents", title: "Arkade - Intents");
     var storeId = ScopeProvider.GetCurrentStoreId();
     var stateFilterCount = GetFilterCount(Model.Search, "state");
 }
@@ -34,7 +34,7 @@
 <div id="descriptor" class="collapse">
     <div class="d-flex px-4 py-4 mb-4 bg-tile rounded">
         <div class="flex-fill">
-            <p text-translate="true" class="mb-2">Intents represent pending VTXO spending operations waiting to be batched by the Ark operator.</p>
+            <p text-translate="true" class="mb-2">Intents represent pending VTXO spending operations waiting to be batched by the Arkade operator.</p>
             <p text-translate="true" class="mb-3">Track your payment intents and their batch status here.</p>
         </div>
         <button type="button" class="btn-close ms-auto" data-bs-toggle="collapse" data-bs-target="#descriptor" aria-expanded="false" aria-label="Close">

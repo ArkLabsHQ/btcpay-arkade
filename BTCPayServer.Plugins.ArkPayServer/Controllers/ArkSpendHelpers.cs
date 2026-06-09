@@ -179,7 +179,7 @@ internal static class ArkSpendHelpers
             result.AmountSats = amountSats;
             result.IsValid = true;
             if (amountSats <= 0)
-                result.Error = "Amount is required for Ark address";
+                result.Error = "Amount is required for Arkade address";
             return result;
         }
 
@@ -269,7 +269,7 @@ internal static class ArkSpendHelpers
             }
 
             result.Error =
-                "BIP21 URI does not contain an Ark address or Lightning invoice. Send2 only supports offchain transfers.";
+                "BIP21 URI does not contain an Arkade address or Lightning invoice. Send2 only supports offchain transfers.";
             return result;
         }
 
@@ -283,7 +283,7 @@ internal static class ArkSpendHelpers
         }
 
         result.Error =
-            "Unrecognized destination format. Use an Ark address, Lightning invoice, or BIP21 URI with ark/lightning parameter.";
+            "Unrecognized destination format. Use an Arkade address, Lightning invoice, or BIP21 URI with ark/lightning parameter.";
         return result;
     }
 }

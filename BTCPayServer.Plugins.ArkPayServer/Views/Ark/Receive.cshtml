@@ -1,13 +1,14 @@
 @using BTCPayServer.Abstractions.Contracts
 @using BTCPayServer.Abstractions.Extensions
 @using BTCPayServer.Components.QRCode
+@using BTCPayServer.Plugins.ArkPayServer.PaymentHandler
 @inject IScopeProvider ScopeProvider
 @model BTCPayServer.Plugins.ArkPayServer.Models.ArkReceiveViewModel
 @{
     var storeId = ScopeProvider.GetCurrentStoreId();
     var returnUrl = Url.Action("StoreOverview", "Ark", new { storeId });
     Layout = "_LayoutWizard";
-    ViewData.SetTitle("Receive ARK");
+    ViewData.SetTitle("Receive Arkade");
     var hasAddress = !string.IsNullOrEmpty(Model.Address);
     var hasBoarding = !string.IsNullOrEmpty(Model.BoardingAddress);
     var hasAny = hasAddress || hasBoarding;
@@ -28,6 +29,8 @@
     <h1 class="mb-4">@ViewData["Title"]</h1>
 </header>
 
+<partial name="_ArkadeOperatorStatusBanner" />
+
 <form method="post" asp-action="Receive" asp-route-storeId="@storeId">
     @if (!hasAny)
     {
@@ -40,12 +43,23 @@
             <button class="btn btn-outline-primary w-100" type="submit" name="command" value="generate-boarding-address">
                 Generate boarding address
             </button>
-            <p class="text-muted small text-center mt-2 mb-0">Onchain Bitcoin deposit into Ark</p>
+            <p class="text-muted small text-center mt-2 mb-0">Onchain Bitcoin deposit into Arkade</p>
         </div>
     }
     else
     {
-        var paymentLink = hasAddress ? $"bitcoin:?ark={Model.Address}" : null;
+        // Single source of truth for BIP-21 — same shape the checkout uses
+        // (bitcoin:<boarding>?ark=<arkAddress>): wallets that only speak
+        // standard BIP-21 see the boarding address as the payable target;
+        // Arkade-aware wallets pick up the ark= param too.
+        string? paymentLink = null;
+        if (hasAddress)
+        {
+            paymentLink = ArkadeBip21Builder.Create()
+                .WithArkAddress(Model.Address!)
+                .WithOnchainAddress(hasBoarding ? Model.BoardingAddress : null)
+                .Build();
+        }
         <noscript>
             @if (hasAddress)
             {
@@ -63,8 +77,8 @@
         <div class="nav flex-wrap align-items-center justify-content-center gap-2 mb-4">
             @if (hasAddress)
             {
-                <a class="btcpay-pill active" data-bs-toggle="tab" href="#address-tab">Address</a>
-                <a class="btcpay-pill" data-bs-toggle="tab" href="#link-tab">Link</a>
+                <a class="btcpay-pill" data-bs-toggle="tab" href="#address-tab">Address</a>
+                <a class="btcpay-pill active" data-bs-toggle="tab" href="#link-tab">Link</a>
             }
             @if (hasBoarding)
             {
@@ -75,18 +89,18 @@
             <div class="tab-content text-center">
                 @if (hasAddress)
                 {
-                    <div class="tab-pane payment-box show active" id="address-tab" role="tabpanel">
+                    <div class="tab-pane payment-box" id="address-tab" role="tabpanel">
                         <div class="qr-container" data-clipboard="@Model.Address">
                             <vc:qr-code data="@Model.Address" />
                         </div>
                         <div class="input-group mt-3">
                             <div class="form-floating">
                                 <vc:truncate-center text="@Model.Address" padding="15" elastic="true" classes="form-control-plaintext" id="Address" />
-                                <label for="Address">Ark Address</label>
+                                <label for="Address">Arkade Address</label>
                             </div>
                         </div>
                     </div>
-                    <div class="tab-pane payment-box" id="link-tab" role="tabpanel">
+                    <div class="tab-pane payment-box show active" id="link-tab" role="tabpanel">
                         <div class="qr-container" data-clipboard="@paymentLink">
                             <vc:qr-code data="@paymentLink" />
                         </div>
@@ -110,20 +124,24 @@
                                 <label for="BoardingAddress">Boarding Address (Onchain)</label>
                             </div>
                         </div>
-                        <p class="text-muted small mt-2 mb-0">Send onchain BTC to board into Ark. Requires 1 confirmation + batch round.</p>
+                        <p class="text-muted small mt-2 mb-0">Send onchain BTC to board into Arkade. Requires 1 confirmation + batch round.</p>
                     </div>
                 }
             </div>
         </div>
-        <div class="payment-box">
-            <div class="mt-4 d-flex gap-2">
-                <button type="submit" name="command" value="generate-address" class="btn btn-primary flex-grow-1">
-                    @(hasAddress ? "New Ark address" : "Generate Ark address")
-                </button>
-                <button type="submit" name="command" value="generate-boarding-address" class="btn btn-outline-primary flex-grow-1">
-                    @(hasBoarding ? "New boarding address" : "Generate boarding address")
-                </button>
-            </div>
+        <div class="mt-2 d-flex flex-column align-items-center">
+            @* "New X" is a refresh action once the address already exists, so a
+               quiet text button is the right visual weight; "Generate X" stays
+               a prominent CTA when that address is still missing. Stacked
+               vertically with minimal padding so each label fits on one line. *@
+            <button type="submit" name="command" value="generate-address"
+                    class="btn @(hasAddress ? "btn-link py-1" : "btn-primary")">
+                @(hasAddress ? "New Arkade address" : "Generate Arkade address")
+            </button>
+            <button type="submit" name="command" value="generate-boarding-address"
+                    class="btn @(hasBoarding ? "btn-link py-1" : "btn-outline-primary")">
+                @(hasBoarding ? "New boarding address" : "Generate boarding address")
+            </button>
         </div>
         <p class="text-muted small text-center mt-3 mb-0">Addresses auto-deactivate once funds arrive</p>
     }
