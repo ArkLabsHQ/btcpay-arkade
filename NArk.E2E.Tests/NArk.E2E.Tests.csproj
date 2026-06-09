@@ -25,15 +25,6 @@
     </PackageReference>
   </ItemGroup>
 
-  <ItemGroup>
-    <!-- Linked compile of NNark's tested docker-exec helper layer. A submodule
-         bump propagates fixes for free; if NNark renames a method our build
-         breaks until we update callers. Acceptable cost since these helpers
-         are stable and the alternative is duplicating ~200 lines. -->
-    <Compile Include="..\submodules\NNark\NArk.Tests.End2End\Common\DockerHelper.cs"
-             Link="Common\DockerHelper.cs" />
-  </ItemGroup>
-
   <ItemDefinitionGroup>
     <ProjectReference>
       <Properties>StaticWebAssetsEnabled=false</Properties>

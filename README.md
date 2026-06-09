@@ -132,6 +132,26 @@ The setup script will:
 - Boarding addresses not supported
 - Suitable for lightweight deployments
 
+### Watch-Only Wallet (Account Descriptor)
+- No signing material stored on the server — the merchant pastes a
+  Taproot account descriptor (e.g. `tr([fingerprint/86'/0'/0']xpub.../0/*)`
+  for HD style, or `tr(pubkey)` for single-key style) and the plugin
+  observes the wallet by deriving addresses and watching VTXOs.
+- Read-only operations work out of the box: receive, balance display,
+  invoice payment detection, contract listing.
+- **Signing-dependent operations** (batch participation, unilateral
+  exits, payouts) require a remote signer. Install the companion
+  `BTCPayServer.Plugins.App` plugin and pair a BTCPayApp device — the
+  device holds the private key and signs over a SignalR bridge. Without
+  a paired device the wallet is still useful for monitoring; signing
+  calls fail with a descriptive `"install the App companion plugin"`
+  error scoped to the operation, not to startup.
+- Setup: in the initial-setup wizard, pick **Pair a watch-only wallet**
+  under *I have a wallet* and paste the descriptor. Example:
+  ```
+  tr([abcd1234/86'/0'/0']xpub6CUGRUonZSQ4TWtTMmzXdrXDtypWKiKrhko4egpiMZbpiaQL2jkwSB1icqYh2cfDfVxdx4df189oLKnC5fSwqPfgyP3hooxujYzAu3fDVmz/0/*)
+  ```
+
 ---
 
 ## Features

@@ -22,12 +22,17 @@ namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler
 
         public bool Handle(PaymentMethodId paymentMethodId) => paymentMethodId == ArkadePlugin.ArkadePaymentMethodId;
 
-        public async Task<string> Execute(string nigiriCommand)
+        // denigiri replaced the nigiri binary: its `bitcoin` container runs the
+        // btcpayserver image (BITCOIN_NETWORK=regtest, rpcuser=admin1/rpcpassword=123,
+        // single loaded wallet), so cheat-mode faucet/mine drive bitcoin-cli directly
+        // — same `docker exec` shape as ExecuteArk, decoupled from any nigiri binary.
+        private async Task<string> BitcoinCli(string bitcoinCliArgs)
         {
+            var dockerArgs = $"exec bitcoin bitcoin-cli -regtest -rpcuser=admin1 -rpcpassword=123 {bitcoinCliArgs}";
             var (fileName, arguments) = IsWindows
-                ? ("wsl", $"nigiri {nigiriCommand}")
-                : ("nigiri", nigiriCommand);
-            return await RunProcess(fileName, arguments, $"nigiri {nigiriCommand}");
+                ? ("wsl", $"docker {dockerArgs}")
+                : ("docker", dockerArgs);
+            return await RunProcess(fileName, arguments, $"docker {dockerArgs}");
         }
 
         private async Task<string> ExecuteArk(string arkSubcommand)
@@ -67,7 +72,7 @@ namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler
         public async Task<ICheckoutCheatModeExtension.MineBlockResult> MineBlock(
             ICheckoutCheatModeExtension.MineBlockContext mineBlockContext)
         {
-            await Execute($"rpc --generate {mineBlockContext.BlockCount}");
+            await BitcoinCli($"-generate {mineBlockContext.BlockCount}");
             return new ICheckoutCheatModeExtension.MineBlockResult();
         }
 
@@ -97,12 +102,12 @@ namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler
                 // settle fails with "fees (0) exceed total amount (0)".
                 var boardingAddr = JObject.Parse(receiveJson).GetValue("boarding_address")?.Value<string>()
                     ?? throw new Exception("ark receive returned no boarding_address");
-                await Execute($"faucet {boardingAddr} 2");
+                await BitcoinCli($"sendtoaddress {boardingAddr} 2");
                 // arkd's validateBoardingInput requires a CONFIRMED boarding UTXO. Without
                 // mining here, the wallet sees an unconfirmed input and settle aborts
                 // with the same "fees exceed total" message. Six blocks matches the
                 // regtest helper's pattern.
-                await Execute("rpc --generate 6");
+                await BitcoinCli("-generate 6");
                 await ExecuteArk("settle --password secret");
                 return await PayInvoice(payInvoiceContext);
             }

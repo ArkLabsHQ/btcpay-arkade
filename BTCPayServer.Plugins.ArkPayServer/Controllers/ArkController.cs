@@ -25,6 +25,7 @@ using BTCPayServer.Services.Stores;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NArk.Abstractions;
 using NArk.Abstractions.Fees;
@@ -64,6 +65,7 @@ public class ArkController(
     StoreRepository storeRepository,
     PaymentMethodHandlerDictionary paymentMethodHandlerDictionary,
     IClientTransport clientTransport,
+    ArkOperatorHealthService arkOperatorHealth,
     ArkadeSpendingService arkadeSpendingService,
     ArkAutomatedPayoutSenderFactory payoutSenderFactory,
     PayoutProcessorService payoutProcessorService,
@@ -87,6 +89,8 @@ public class ArkController(
     IHttpClientFactory httpClientFactory,
     BoardingUtxoSyncService boardingUtxoSyncService,
     IWalletLogStore walletLogStore,
+    RecoveryStatusTracker recoveryStatusTracker,
+    IServiceProvider serviceProvider,
     ILogger<ArkController> logger) : Controller
 {
     // Post-operation VTXO refresh only needs to catch updates since the operation
@@ -123,70 +127,62 @@ public class ArkController(
 
         try
         {
-            var walletSettings = await GetFromInputWallet(model.Wallet);
+            var walletSettings = await GetFromInputWallet(model.Wallet, model.Mode);
 
             if (walletSettings.Wallet is not null)
             {
                 try
                 {
                     var serverInfo = await clientTransport.GetServerInfoAsync(HttpContext.RequestAborted);
-                    var wallet = await WalletFactory.CreateWallet(
-                        walletSettings.Wallet,
-                        walletSettings.Destination,
-                        serverInfo,
-                        HttpContext.RequestAborted);
+
+                    // Watch-only import: walletSettings.Wallet carries the
+                    // account descriptor verbatim. Hand it to NArk's
+                    // CreateWatchOnlyWallet helper (added in dotnet-sdk#107)
+                    // which leaves Secret null on the resulting ArkWalletInfo
+                    // so DefaultWalletProvider.GetSignerAsync returns null
+                    // unless an IRemoteSignerTransport claims the wallet.
+                    // The factory throws on an unparseable descriptor and the
+                    // outer try/catch surfaces that to the form below.
+                    var wallet = walletSettings.IsWatchOnlyDescriptor
+                        ? await WalletFactory.CreateWatchOnlyWallet(
+                            walletSettings.Wallet,
+                            destination: walletSettings.Destination,
+                            serverInfo,
+                            metadata: null,
+                            HttpContext.RequestAborted)
+                        : await WalletFactory.CreateWallet(
+                            walletSettings.Wallet,
+                            walletSettings.Destination,
+                            serverInfo,
+                            HttpContext.RequestAborted);
 
                     // Signer is automatically registered via WalletSaved event
                     await walletStorage.UpsertWallet(wallet, updateIfExists: true, HttpContext.RequestAborted);
-                    
+
                     if (wallet.WalletType == WalletType.SingleKey)
                     {
                        await  contractService.DeriveContract(
-                           wallet.Id, 
-                           NextContractPurpose.SendToSelf, 
-                           ContractActivityState.Active, 
+                           wallet.Id,
+                           NextContractPurpose.SendToSelf,
+                           ContractActivityState.Active,
                            metadata: new Dictionary<string, string> { ["Source"] = "Default" },
                            cancellationToken: HttpContext.RequestAborted);
                     }
-                    
+
                     walletSettings = walletSettings with { WalletId = wallet.Id };
                 }
                 catch (Exception ex)
                 {
-                    TempData[WellKnownTempData.ErrorMessage] = "Could not update wallet: " + ex.Message;
+                    TempData[WellKnownTempData.ErrorMessage] = DescribeArkError(ex, "Could not update wallet");
                     return View(model);
                 }
             }
 
-            // Sync all known contracts for this wallet to pick up any existing VTXOs.
-            // For wallets with a long history this can poll arkd once per contract (the
-            // indexer currently requires one-by-one script queries), so do it in the
-            // background instead of blocking the HTTP request and timing out.
-            var contracts = await contractStorage.GetContracts(
-                walletIds: [walletSettings.WalletId!], cancellationToken: HttpContext.RequestAborted);
-            if (contracts.Count > 0)
-            {
-                var initBoardingContracts = contracts
-                    .Where(c => c.Type == ArkBoardingContract.ContractType).ToList();
-                var initNonBoardingScripts = contracts
-                    .Where(c => c.Type != ArkBoardingContract.ContractType)
-                    .Select(c => c.Script).ToHashSet();
-                var importedWalletId = walletSettings.WalletId!;
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        if (initNonBoardingScripts.Count > 0)
-                            await vtxoSyncService.PollScriptsForVtxos(initNonBoardingScripts, CancellationToken.None);
-                        if (initBoardingContracts.Count > 0)
-                            await boardingUtxoSyncService.SyncAsync(initBoardingContracts, CancellationToken.None);
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogWarning(ex, "Background import sync failed for wallet {WalletId}", importedWalletId);
-                    }
-                });
-            }
+            // On import, recover the wallet in the background (off the request thread —
+            // a gap-limit scan polls arkd per index): discover contracts across derivation
+            // indices + server signers (incl. legacy/deprecated), restore swaps, finalize
+            // pending txs, resync funds, then sync boarding UTXOs.
+            StartBackgroundRecovery(walletSettings.WalletId!);
 
             var config = new ArkadePaymentMethodConfig(walletSettings.WalletId!, walletSettings.IsOwnedByStore);
             store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], config);
@@ -194,10 +190,14 @@ public class ArkController(
             // Set Arkade as the default payment method
             store.SetDefaultPaymentId(ArkadePlugin.ArkadePaymentMethodId);
 
-            // Enable Lightning by default if not already configured
+            // Enable Lightning by default if not already configured. Skip watch-only wallets:
+            // Arkade-backed Lightning needs batch participation (signing), and without a paired
+            // remote signer the wallet would accept LN invoices at checkout but fail at
+            // settlement after the customer has already committed to paying. The merchant can
+            // still flip it on manually once a companion signer is paired.
             var lightningPaymentMethodId = GetLightningPaymentMethod();
             var existingLnConfig = store.GetPaymentMethodConfig<LightningPaymentMethodConfig>(lightningPaymentMethodId, paymentMethodHandlerDictionary);
-            if (existingLnConfig == null)
+            if (existingLnConfig == null && !walletSettings.IsWatchOnlyDescriptor)
             {
                 var lnurlPaymentMethodId = PaymentTypes.LNURL.GetPaymentMethodId("BTC");
                 
@@ -245,6 +245,68 @@ public class ArkController(
         }
     }
 
+    /// <summary>
+    /// Starts unified wallet recovery for <paramref name="walletId"/> on a background
+    /// thread (a gap-limit scan polls arkd per index), tracking status for the overview.
+    /// Discovers contracts (incl. legacy deprecated-signer scripts) + the derivation
+    /// index, restores swaps, finalizes pending txs and resyncs offchain funds, then
+    /// syncs boarding (on-chain) UTXOs. <c>IWalletRecoveryService</c> is only registered
+    /// when swaps (Boltz) are configured; without it this degrades to a boarding-only sync.
+    /// </summary>
+    private void StartBackgroundRecovery(string walletId)
+    {
+        var recoveryService = serviceProvider.GetService<NArk.Swaps.Recovery.IWalletRecoveryService>();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                recoveryStatusTracker.SetRunning(walletId);
+
+                var contractsRecovered = 0;
+                var swapsAudited = 0;
+                var fundsSynced = 0;
+                if (recoveryService is not null)
+                {
+                    var report = await recoveryService.RecoverAsync(walletId, cancellationToken: CancellationToken.None);
+                    contractsRecovered = report.ContractsRecovered;
+                    swapsAudited = report.SwapAudit.Count;
+                    fundsSynced = report.FundsScriptsSynced;
+                }
+
+                // Boarding (on-chain) UTXOs aren't covered by offchain recovery.
+                var boardingContracts = (await contractStorage.GetContracts(
+                        walletIds: [walletId], cancellationToken: CancellationToken.None))
+                    .Where(c => c.Type == ArkBoardingContract.ContractType).ToList();
+                if (boardingContracts.Count > 0)
+                    await boardingUtxoSyncService.SyncAsync(boardingContracts, CancellationToken.None);
+
+                recoveryStatusTracker.SetCompleted(walletId,
+                    recoveryService is not null ? contractsRecovered : boardingContracts.Count,
+                    swapsAudited, fundsSynced);
+            }
+            catch (Exception ex)
+            {
+                recoveryStatusTracker.SetFailed(walletId, ex.Message);
+                logger.LogWarning(ex, "Background wallet recovery failed for wallet {WalletId}", walletId);
+            }
+        });
+    }
+
+    [HttpPost("stores/{storeId}/rescan")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> Rescan(string storeId)
+    {
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
+        if (errorResult != null) return errorResult;
+        if (!config!.GeneratedByStore || string.IsNullOrEmpty(config.WalletId))
+            return RedirectWithError(nameof(StoreOverview),
+                "Rescan requires a store-managed wallet.", new { storeId });
+
+        StartBackgroundRecovery(config.WalletId);
+        return RedirectWithSuccess(nameof(StoreOverview),
+            "Wallet rescan started — contracts, funds and swaps will refresh shortly.", new { storeId });
+    }
+
     [HttpGet("stores/{storeId}/overview")]
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> StoreOverview(CancellationToken cancellationToken)
@@ -263,7 +325,7 @@ public class ArkController(
         }
         catch (Exception ex)
         {
-            TempData[WellKnownTempData.ErrorMessage] = $"Unable to fetch balances: {ex.Message}";
+            TempData[WellKnownTempData.ErrorMessage] = DescribeArkError(ex, "Unable to fetch balances");
         }
 
         var signerAvailable = await walletProvider.GetAddressProviderAsync(config.WalletId!, cancellationToken) != null;
@@ -382,9 +444,10 @@ public class ArkController(
             Wallet = wallet?.Secret,
             WalletType = wallet?.WalletType ?? WalletType.SingleKey,
             CanManagePrivateKeys = canManagePrivateKeys,
+            RecoveryStatus = config.WalletId is { } recoveryWalletId ? recoveryStatusTracker.Get(recoveryWalletId) : null,
             ArkOperatorUrl = arkNetworkConfig.ArkUri,
             ArkOperatorConnected = arkOperatorConnected,
-            ArkOperatorError = arkOperatorError,
+            ArkOperatorError = ArkOperatorAvailability.DescribeMessage(arkOperatorError),
             BoltzUrl = arkNetworkConfig.BoltzUri,
             BoltzConnected = boltzConnected,
             BoltzError = boltzError,
@@ -471,7 +534,7 @@ public class ArkController(
         }
         catch (Exception ex)
         {
-            TempData[WellKnownTempData.ErrorMessage] = $"Failed to check receive address: {ex.Message}";
+            TempData[WellKnownTempData.ErrorMessage] = DescribeArkError(ex, "Failed to check receive address");
         }
 
         return View(model);
@@ -522,7 +585,7 @@ public class ArkController(
         }
         catch (Exception ex)
         {
-            TempData[WellKnownTempData.ErrorMessage] = $"Failed to generate address: {ex.Message}";
+            TempData[WellKnownTempData.ErrorMessage] = DescribeArkError(ex, "Failed to generate address");
         }
 
         return RedirectToAction(nameof(Receive), new { storeId });
@@ -702,7 +765,7 @@ public class ArkController(
         }
         catch (ArkadePaymentFailedException e)
         {
-            TempData[WellKnownTempData.ErrorMessage] = $"Payment failed: reason: {e.Message}";
+            TempData[WellKnownTempData.ErrorMessage] = DescribeArkError(e, "Payment failed: reason");
             return RedirectToAction(nameof(SpendOverview),
                 new {storeId = store.Id, destinations = model.PrefilledDestination});
         }
@@ -2668,7 +2731,7 @@ public class ArkController(
         }
         catch (Exception ex)
         {
-            TempData[WellKnownTempData.ErrorMessage] = $"Failed to create refresh intent: {ex.Message}";
+            TempData[WellKnownTempData.ErrorMessage] = DescribeArkError(ex, "Failed to create refresh intent");
         }
 
         return RedirectToAction(nameof(StoreOverview), new { storeId });
@@ -2857,8 +2920,29 @@ public class ArkController(
         return lnEnabled;
     }
 
-    private async Task<TemporaryWalletSettings> GetFromInputWallet(string? wallet)
+    private async Task<TemporaryWalletSettings> GetFromInputWallet(string? wallet, WalletSetupMode mode = WalletSetupMode.Auto)
     {
+        // Watch-only path: the input is an account descriptor — a bare
+        // tr(pubkey) for single-key style or a tr([fp/path]xpub/0/*) for
+        // hierarchical-deterministic style. The merchant does NOT own the
+        // signing material (it's on a paired BTCPayApp device or elsewhere),
+        // so IsOwnedByStore is false. If the descriptor matches an existing
+        // wallet id we reuse it; otherwise we hand the descriptor back to
+        // the POST handler with IsWatchOnlyDescriptor=true so it routes to
+        // WalletFactory.CreateWatchOnlyWallet rather than CreateWallet.
+        if (mode == WalletSetupMode.WatchOnly)
+        {
+            if (string.IsNullOrWhiteSpace(wallet))
+                throw new Exception("Account descriptor is required for watch-only import.");
+
+            var trimmed = wallet.Trim();
+            var existingWatchOnly = await walletStorage.GetWalletById(trimmed, HttpContext.RequestAborted);
+            if (existingWatchOnly is not null)
+                return new TemporaryWalletSettings(null, trimmed, null, false, false);
+
+            return new TemporaryWalletSettings(trimmed, null, null, false, false, IsWatchOnlyDescriptor: true);
+        }
+
         if (string.IsNullOrWhiteSpace(wallet))
             return new TemporaryWalletSettings(GenerateWallet(), null, null, true, true);
 
@@ -2918,7 +3002,7 @@ public class ArkController(
         return store.GetPaymentMethodConfig<T>(paymentMethodId, paymentMethodHandlerDictionary);
     }
 
-    private record TemporaryWalletSettings(string? Wallet, string? WalletId, string? Destination, bool IsOwnedByStore, bool IsNewlyGeneratedWallet);
+    private record TemporaryWalletSettings(string? Wallet, string? WalletId, string? Destination, bool IsOwnedByStore, bool IsNewlyGeneratedWallet, bool IsWatchOnlyDescriptor = false);
 
     [HttpGet("~/stores/{storeId}/payout-processors/ark-automated")]
     [Authorize(AuthenticationSchemes = AuthenticationSchemes.Cookie)]
@@ -3142,7 +3226,7 @@ public class ArkController(
             DefaultAddress = defaultAddress,
             ArkOperatorUrl = arkNetworkConfig.ArkUri,
             ArkOperatorConnected = arkOperatorConnected,
-            ArkOperatorError = arkOperatorError,
+            ArkOperatorError = ArkOperatorAvailability.DescribeMessage(arkOperatorError),
             BoltzUrl = arkNetworkConfig.BoltzUri,
             BoltzConnected = boltzConnected,
             BoltzError = boltzError
@@ -3261,6 +3345,18 @@ public class ArkController(
     {
         TempData[WellKnownTempData.ErrorMessage] = message;
         return RedirectToAction(action, routeValues);
+    }
+
+    /// <summary>
+    /// Maps an exception to a user-facing message. When the Arkade operator is unreachable
+    /// it returns the friendly <see cref="ArkOperatorAvailability.UnavailableMessage"/> and
+    /// flips the status banner immediately (so the next page already reflects the outage);
+    /// otherwise it returns the original error prefixed with <paramref name="context"/>.
+    /// </summary>
+    private string DescribeArkError(Exception ex, string context)
+    {
+        arkOperatorHealth.ReportFailure(ex); // no-op unless ex looks like operator-unreachable
+        return ArkOperatorAvailability.Describe(ex, context);
     }
 
     /// <summary>

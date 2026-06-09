@@ -29,6 +29,8 @@
     <h1 class="mb-4">@ViewData["Title"]</h1>
 </header>
 
+<partial name="_ArkadeOperatorStatusBanner" />
+
 <form method="post" asp-action="Receive" asp-route-storeId="@storeId">
     @if (!hasAny)
     {

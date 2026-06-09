@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.2.1] - 2026-06-09
+
+### Features
+- **Wallet recovery on import + manual Rescan (#70).** Importing a wallet now starts background recovery via the SDK's unified `IWalletRecoveryService` — rediscovering contracts (including legacy deprecated-signer scripts), the derivation index, funds, and Boltz swaps, then syncing boarding UTXOs — instead of only polling pre-existing contracts. Adds a `POST stores/{id}/rescan` endpoint and a **Rescan** button on the store overview, with an in-memory `RecoveryStatusTracker` surfacing Running/Completed/Failed per wallet. When the SDK's recovery service isn't registered (no Boltz/swaps configured), recovery degrades to a boarding-only sync.
+
+### SDK (NNark)
+- **Bumped to `arkade-os/dotnet-sdk` master.** Picks up the Boltz swap-logic refactor (#123) and the regtest denigiri Postgres-port pin (#120). The refactor relocated the swap-status helpers (`IsActive`, `IsTerminalState`, `IsSuccess`, …) into `NArk.Swaps.Extensions`; the plugin's Razor views now import that namespace via `_ViewImports.cshtml` so `swap.Status.IsActive()` resolves.
+
+## [2.2.0] - 2026-05-28
+
+### Features
+- **Watch-only wallet mode + remote-signer DI seam (phase 1).** Merchants can now opt to import a wallet by **account descriptor** (Taproot `tr([fp/86'/0'/0']xpub.../0/*)` for HD style or `tr(pubkey)` for single-key style) instead of a seed phrase or `nsec`. The server stores no signing material — `WalletType.WatchOnly` wallets work read-only out of the box (receive, balance, invoice detection, contract listing). Signing-dependent actions (batch participation, unilateral exits, payouts) require a paired BTCPayApp device via the new `IBTCPayAppDeviceProxy : IRemoteSignerTransport` cross-plugin seam — the companion `BTCPayServer.Plugins.App` plugin implements the proxy and bridges signing calls to the device over its SignalR hub. When no companion plugin is registered, this plugin binds `IRemoteSignerTransport` to a `MissingDeviceProxyTransport` sentinel whose four signer methods each throw a descriptive "install the App companion plugin" `InvalidOperationException`. Because NArk's `DefaultWalletProvider` only wraps the transport in a `RemoteArkadeWalletSigner` for `WalletType.Remote` wallets, and only inside `GetSignerAsync`, the failure surfaces exactly when a Remote wallet tries to sign — pure WatchOnly wallets never touch the sentinel and the plugin loads cleanly on stores without the companion. The initial-setup wizard exposes the new option as **Pair a watch-only wallet** in the "I have a wallet" group; existing form posts that don't carry a `Mode` field default to `Auto` so all prior import paths are unchanged.
+
+### SDK (NNark)
+- **Bumped to `arkade-os/dotnet-sdk#107` (feat/watch-only-remote-signing) HEAD.** The SDK side of the watch-only feature: `WalletType.WatchOnly` and `WalletType.Remote`, `IRemoteSignerTransport`, `RemoteArkadeWalletSigner`, `WalletFactory.CreateWatchOnlyWallet(descriptor, ...)`, `DefaultWalletProvider` accepting an optional `IRemoteSignerTransport`, and a nullable `ArkWalletInfo.Secret` / `ArkWalletEntity.Wallet` (so no EF migration is needed on this plugin's side).
+
 ## [2.1.18] - 2026-05-22
 
 ### Bug Fixes

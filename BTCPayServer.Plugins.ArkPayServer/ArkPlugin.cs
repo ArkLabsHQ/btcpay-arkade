@@ -19,6 +19,7 @@ using Microsoft.Extensions.Logging;
 using NArk.Abstractions.Blockchain;
 using NArk.Abstractions.Intents;
 using NArk.Abstractions.Safety;
+using NArk.Abstractions.Wallets;
 using NArk.Blockchain;
 using NArk.Hosting;
 using NArk.Core.Models.Options;
@@ -250,6 +251,9 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
     private static void RegisterPluginServices(IServiceCollection services)
     {
+        // Tracks the background wallet-recovery job per wallet (import-triggered + manual Rescan).
+        services.AddSingleton<RecoveryStatusTracker>();
+
         // Per-wallet diagnostic log store. Captures NArk + plugin log
         // entries that carry a `WalletId` (either via BeginScope or the
         // structured-log args) into a rolling file per wallet so the
@@ -285,6 +289,35 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         // refreshes the currency table after a tracked-asset CRUD op.
         services.AddSingleton<CurrencyDataProvider, ArkadeAssetCurrencyDataProvider>();
         services.AddSingleton<AssetCurrencyRegistrar>();
+
+        // Remote-signer transport seam.
+        //
+        // NArk's DefaultWalletProvider takes IRemoteSignerTransport? as an
+        // optional ctor param. ASP.NET Core DI invokes the registered factory
+        // when the consumer is constructed regardless of the C# default-value
+        // sugar, so the factory MUST NOT throw — it would abort the whole
+        // host build the moment the plugin loaded, even on stores that have
+        // no Remote wallets to sign for. Instead:
+        //
+        //  - When the companion BTCPayServer.Plugins.App plugin is installed
+        //    it registers an IBTCPayAppDeviceProxy that bridges signing calls
+        //    to a connected BTCPayApp device over its SignalR hub; we forward
+        //    that as the IRemoteSignerTransport.
+        //  - When no companion plugin is installed, we hand back a
+        //    MissingDeviceProxyTransport sentinel whose KnowsWalletAsync returns
+        //    false for every wallet — so a wallet imported via the watch-only
+        //    flow falls through to genuine watch-only (DefaultWalletProvider
+        //    returns null from GetSignerAsync). The three signing methods still
+        //    throw a descriptive "install the App companion plugin" message as
+        //    defence-in-depth, but the happy path now matches user intent: pick
+        //    "watch-only" and you get watch-only, not a runtime nag.
+        services.AddSingleton<IRemoteSignerTransport>(sp =>
+            sp.GetService<IBTCPayAppDeviceProxy>()
+            ?? (IRemoteSignerTransport)new MissingDeviceProxyTransport());
+
+        // Tracks Arkade-operator reachability so plugin pages can show a friendly
+        // "operator unavailable" banner instead of leaking raw gRPC/HTTP errors.
+        services.AddSingleton<ArkOperatorHealthService>();
 
         services.AddSingleton<ISweepPolicy, DestinationSweepPolicy>();
 
