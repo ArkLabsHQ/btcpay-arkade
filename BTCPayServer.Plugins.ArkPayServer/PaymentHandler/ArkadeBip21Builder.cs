@@ -14,6 +14,7 @@ public class ArkadeBip21Builder
     private string? _arkAddress;
     private string? _lightningInvoice;
     private decimal? _amount;
+    private string? _assetId;
     private readonly Dictionary<string, string> _customParameters = new();
     /// <summary>
     /// Raw <c>key=value</c> entries pulled from another extension's BIP21
@@ -60,6 +61,24 @@ public class ArkadeBip21Builder
     public ArkadeBip21Builder WithAmount(decimal? amount)
     {
         _amount = amount;
+        return this;
+    }
+
+    /// <summary>
+    /// Marks this URI as an Arkade-asset payment: adds <c>asset=&lt;assetId&gt;</c>
+    /// and sets the <c>amount</c> parameter to the asset amount due expressed in
+    /// the asset's own display units (per the Arkade BIP-321 convention, when an
+    /// <c>asset</c> is present <c>amount</c> denominates that asset, not BTC).
+    /// Asset options are asset-only, so callers omit <see cref="WithAmount"/>,
+    /// <see cref="WithOnchainAddress"/> and <see cref="WithLightning"/>.
+    /// </summary>
+    public ArkadeBip21Builder WithAsset(string assetId, decimal amountDisplayUnits)
+    {
+        if (string.IsNullOrWhiteSpace(assetId))
+            throw new ArgumentException("Asset id cannot be null or empty", nameof(assetId));
+
+        _assetId = assetId;
+        _amount = amountDisplayUnits;
         return this;
     }
 
@@ -137,7 +156,13 @@ public class ArkadeBip21Builder
         
         // Add Ark address (always included) — no URL-encoding needed, bech32m is URL-safe
         parameters.Add($"ark={_arkAddress}");
-        
+
+        // Add asset id if this is an asset payment (amount above already denominates the asset)
+        if (!string.IsNullOrWhiteSpace(_assetId))
+        {
+            parameters.Add($"asset={HttpUtility.UrlEncode(_assetId)}");
+        }
+
         // Add lightning if provided
         if (!string.IsNullOrWhiteSpace(_lightningInvoice))
         {

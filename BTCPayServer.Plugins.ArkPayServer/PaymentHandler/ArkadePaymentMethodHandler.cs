@@ -1,5 +1,6 @@
 using BTCPayServer.Data;
 using BTCPayServer.Payments;
+using BTCPayServer.Plugins.ArkPayServer.Services;
 using BTCPayServer.Services;
 using NArk.Core;
 using NArk.Abstractions.Wallets;

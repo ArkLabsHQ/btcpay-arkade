@@ -18,6 +18,7 @@ using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
 using BTCPayServer.Plugins.ArkPayServer.Services;
 using BTCPayServer.Plugins.ArkPayServer.Services.WalletLogger;
+using BTCPayServer.Rating;
 using BTCPayServer.Security;
 using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Stores;
@@ -74,6 +75,8 @@ public class ArkController(
     IIntentStorage intentStorage,
     IWalletProvider walletProvider,
     ISpendingService arkadeSpender,
+    AssetMetadataService assetMetadataService,
+    AssetCurrencyRegistrar assetCurrencyRegistrar,
     IFeeEstimator feeEstimator,
     IContractService contractService,
     IBitcoinBlockchain bitcoinTimeChainProvider,
@@ -411,6 +414,19 @@ public class ArkController(
             // Silently ignore - swaps section will show empty
         }
 
+        // Tracked assets (managed list) — Ticker/Name/Decimals are cached on
+        // the config, so the list renders without indexer round-trips.
+        var trackedAssetRows = config.Assets.Select(a => new TrackedAssetRow
+        {
+            AssetId = a.AssetId,
+            CurrencyCode = a.CurrencyCode,
+            Ticker = a.Ticker,
+            Name = a.Name,
+            Decimals = a.Decimals,
+            RateScript = a.RateScript,
+            Enabled = a.Enabled,
+        }).ToList();
+
         return View(new StoreOverviewViewModel
         {
             StoreId = store!.Id,
@@ -424,6 +440,7 @@ public class ArkController(
             AllowSubDustAmounts = config.AllowSubDustAmounts,
             BoardingEnabled = config.BoardingEnabled,
             MinBoardingAmountSats = config.MinBoardingAmountSats,
+            TrackedAssets = trackedAssetRows,
             Wallet = wallet?.Secret,
             WalletType = wallet?.WalletType ?? WalletType.SingleKey,
             CanManagePrivateKeys = canManagePrivateKeys,
@@ -2094,7 +2111,116 @@ public class ArkController(
             return RedirectWithSuccess(nameof(StoreOverview), "Boarding disabled.", new { storeId });
         }
 
+        if (command is "add-asset" or "edit-asset")
+        {
+            var row = model.AssetForm;
+            var asset = new TrackedArkadeAsset(
+                row.AssetId?.Trim() ?? "",
+                row.CurrencyCode?.Trim().ToUpperInvariant() ?? "",
+                string.IsNullOrWhiteSpace(row.Ticker) ? null : row.Ticker.Trim(),
+                string.IsNullOrWhiteSpace(row.Name) ? null : row.Name.Trim(),
+                row.Decimals,
+                row.RateScript?.Trim() ?? "",
+                row.Enabled);
+
+            if (!asset.IsValid(out var validationError))
+                return RedirectWithError(nameof(StoreOverview), validationError!, new { storeId });
+            if (!RateRules.TryParse(asset.RateScript, out _, out var scriptErrors))
+                return RedirectWithError(nameof(StoreOverview),
+                    $"Rate script does not compile: {string.Join("; ", scriptErrors)}", new { storeId });
+
+            var assets = config!.Assets.ToList();
+            var existingIdx = assets.FindIndex(a => a.AssetId.Equals(asset.AssetId, StringComparison.OrdinalIgnoreCase));
+
+            // Currency code must be unique within the store (it registers as a BTCPay currency).
+            if (assets.Any(a => !a.AssetId.Equals(asset.AssetId, StringComparison.OrdinalIgnoreCase)
+                                && a.CurrencyCode.Equals(asset.CurrencyCode, StringComparison.OrdinalIgnoreCase)))
+                return RedirectWithError(nameof(StoreOverview),
+                    $"Currency code {asset.CurrencyCode} is already used by another tracked asset.", new { storeId });
+
+            if (command == "add-asset")
+            {
+                if (existingIdx >= 0)
+                    return RedirectWithError(nameof(StoreOverview), $"Asset {asset.AssetId} is already tracked.", new { storeId });
+                // Confirm the asset exists on the indexer before tracking it.
+                if (await assetMetadataService.GetAssetDetailsAsync(asset.AssetId, cancellationToken) is null)
+                    return RedirectWithError(nameof(StoreOverview),
+                        $"Asset '{asset.AssetId}' was not found on the Arkade indexer. Check the asset id.", new { storeId });
+                assets.Add(asset);
+            }
+            else // edit-asset
+            {
+                if (existingIdx < 0)
+                    return RedirectWithError(nameof(StoreOverview), $"Asset {asset.AssetId} is not tracked.", new { storeId });
+                assets[existingIdx] = asset;
+            }
+
+            var newConfig = config with { TrackedAssets = assets };
+            store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], newConfig);
+            SyncAssetPaymentMethod(store, newConfig);
+            await storeRepository.UpdateStore(store);
+            await assetCurrencyRegistrar.RefreshAsync(cancellationToken);
+            return RedirectWithSuccess(nameof(StoreOverview),
+                $"{(command == "add-asset" ? "Added" : "Updated")} tracked asset {asset.CurrencyCode}.", new { storeId });
+        }
+
+        if (command == "remove-asset")
+        {
+            var assetId = model.AssetForm.AssetId?.Trim() ?? "";
+            var assets = config!.Assets.Where(a => !a.AssetId.Equals(assetId, StringComparison.OrdinalIgnoreCase)).ToList();
+            var newConfig = config with { TrackedAssets = assets };
+            store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], newConfig);
+            SyncAssetPaymentMethod(store, newConfig);
+            await storeRepository.UpdateStore(store);
+            await assetCurrencyRegistrar.RefreshAsync(cancellationToken);
+            return RedirectWithSuccess(nameof(StoreOverview), "Removed tracked asset.", new { storeId });
+        }
+
         return RedirectToAction(nameof(StoreOverview), new { storeId });
+    }
+
+    /// <summary>
+    /// Looks up an Arkade asset's metadata on the arkd indexer so the add-asset
+    /// form can prefill ticker/name/decimals from just the asset id.
+    /// </summary>
+    [HttpGet("stores/{storeId}/asset-metadata")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> FetchAssetMetadata(string storeId, string? assetId, CancellationToken cancellationToken)
+    {
+        assetId = assetId?.Trim() ?? "";
+        if (string.IsNullOrEmpty(assetId))
+            return Json(new AssetMetadataResult { Found = false });
+
+        var details = await assetMetadataService.GetAssetDetailsAsync(assetId, cancellationToken);
+        if (details is null)
+            return Json(new AssetMetadataResult { Found = false, AssetId = assetId });
+
+        return Json(new AssetMetadataResult
+        {
+            Found = true,
+            AssetId = assetId,
+            Ticker = assetMetadataService.GetTicker(details),
+            Name = assetMetadataService.GetName(details),
+            Decimals = assetMetadataService.GetDecimals(details),
+        });
+    }
+
+    /// <summary>
+    /// Enables the dedicated ARKADE-ASSET payment method exactly when the store
+    /// has at least one enabled tracked asset; clears it otherwise. The asset
+    /// method's config is thin (just the wallet id) — the asset list lives on
+    /// the <see cref="ArkadePaymentMethodConfig"/> it reads at prompt time.
+    /// Mutates <paramref name="store"/> in place; the caller persists via
+    /// <c>UpdateStore</c>.
+    /// </summary>
+    private void SyncAssetPaymentMethod(StoreData store, ArkadePaymentMethodConfig arkadeConfig)
+    {
+        var assetPmi = ArkadePlugin.ArkadeAssetPaymentMethodId;
+        if (arkadeConfig.WalletId is { } walletId && arkadeConfig.Assets.Any(a => a.Enabled))
+            store.SetPaymentMethodConfig(
+                paymentMethodHandlerDictionary[assetPmi], new ArkadeAssetPaymentMethodConfig(walletId));
+        else
+            store.SetPaymentMethodConfig(assetPmi, null);
     }
 
     [HttpGet("stores/{storeId}/contracts")]
@@ -2541,6 +2667,7 @@ public class ArkController(
         var lnEnabled = lnConfig?.ConnectionString?.StartsWith("type=arkade", StringComparison.InvariantCultureIgnoreCase) is true;
 
         store.SetPaymentMethodConfig(ArkadePlugin.ArkadePaymentMethodId, null);
+        store.SetPaymentMethodConfig(ArkadePlugin.ArkadeAssetPaymentMethodId, null);
         if (lnEnabled)
             store.SetPaymentMethodConfig(GetLightningPaymentMethod(), null);
 
@@ -2993,6 +3120,31 @@ public class ArkController(
             .Where(coin => !coin.Unrolled && lockedSet.Contains(coin.Outpoint))
             .Sum(coin => coin.Amount.Satoshi);
 
+        // Aggregate Arkade asset holdings across spendable (non-recoverable,
+        // non-boarding) coins. Asset data rides on VTXOs via the SDK
+        // (ArkCoin.Assets); enrich each with cached indexer metadata.
+        var assetTotals = new Dictionary<string, ulong>();
+        foreach (var coin in coinsByRecoverableStatus[false].Where(c => !c.Unrolled))
+        {
+            if (coin.Assets is not { Count: > 0 } assets) continue;
+            foreach (var a in assets)
+                assetTotals[a.AssetId] = assetTotals.GetValueOrDefault(a.AssetId) + a.Amount;
+        }
+
+        var assetBalances = await Task.WhenAll(assetTotals.Select(async kv =>
+        {
+            var details = await assetMetadataService.GetAssetDetailsAsync(kv.Key, cancellationToken);
+            return new AssetBalanceViewModel
+            {
+                AssetId = kv.Key,
+                Name = assetMetadataService.GetName(details),
+                Ticker = assetMetadataService.GetTicker(details),
+                Decimals = assetMetadataService.GetDecimals(details),
+                Amount = kv.Value,
+                FormattedAmount = assetMetadataService.FormatAmount(kv.Value, details),
+            };
+        }));
+
         return new ArkBalancesViewModel
         {
             AvailableBalance = availableBalance - lockedBalance,
@@ -3000,6 +3152,9 @@ public class ArkController(
             RecoverableBalance = recoverableBalance,
             UnspendableBalance = unspendableBalance,
             BoardingBalance = boardingBalance,
+            AssetBalances = assetBalances
+                .OrderBy(a => a.Ticker ?? a.AssetId, StringComparer.OrdinalIgnoreCase)
+                .ToList(),
         };
     }
 

@@ -93,7 +93,8 @@ public class ArkadeCheckoutModelExtension: ICheckoutModelExtension, IGlobalCheck
         // case-sensitive payloads (PayJoin's onion URLs, Branta's base64 secrets, etc.).
         context.Model.InvoiceBitcoinUrlQR = AppendQuery(UpperCaseQrUri(paymentLink), extraForQr);
 
-        // Pass boarding flag to checkout component
+        // Pass the boarding flag to the checkout component. Asset acceptance now
+        // lives on the dedicated ARKADE-ASSET method, not on this BTC-VTXO prompt.
         if (context.Prompt.Details is not null)
         {
             var details = _handler.ParsePaymentPromptDetails(context.Prompt.Details);

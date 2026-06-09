@@ -12,6 +12,7 @@ using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
 using BTCPayServer.Plugins.ArkPayServer.Services;
 using BTCPayServer.Plugins.ArkPayServer.Services.WalletLogger;
+using BTCPayServer.Services.Rates;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -39,8 +40,10 @@ namespace BTCPayServer.Plugins.ArkPayServer;
 public class ArkadePlugin : BaseBTCPayServerPlugin
 {
     internal const string CheckoutBodyComponentName = "arkadeCheckoutBody";
+    internal const string AssetCheckoutBodyComponentName = "arkadeAssetCheckoutBody";
 
     internal static readonly PaymentMethodId ArkadePaymentMethodId = new("ARKADE");
+    internal static readonly PaymentMethodId ArkadeAssetPaymentMethodId = new("ARKADE-ASSET");
     internal static readonly PayoutMethodId ArkadePayoutMethodId = PayoutMethodId.Parse("ARKADE");
 
     public override IBTCPayServerPlugin.PluginDependency[] Dependencies { get; } =
@@ -90,6 +93,14 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         services.AddSingleton<ArkadePaymentLinkExtension>();
         services.AddSingleton<IPaymentLinkExtension>(sp => sp.GetRequiredService<ArkadePaymentLinkExtension>());
 
+        // Dedicated Arkade Asset payment method (payer picks an asset at checkout).
+        services.AddSingleton<ArkadeAssetPaymentMethodHandler>();
+        services.AddSingleton<IPaymentMethodHandler>(sp => sp.GetRequiredService<ArkadeAssetPaymentMethodHandler>());
+        services.AddSingleton<ArkadeAssetPaymentLinkExtension>();
+        services.AddSingleton<IPaymentLinkExtension>(sp => sp.GetRequiredService<ArkadeAssetPaymentLinkExtension>());
+        services.AddSingleton<ArkadeAssetCheckoutModelExtension>();
+        services.AddSingleton<ICheckoutModelExtension>(sp => sp.GetRequiredService<ArkadeAssetCheckoutModelExtension>());
+
         services.AddSingleton<ArkPayoutHandler>();
         services.AddSingleton<IPayoutHandler>(sp => sp.GetRequiredService<ArkPayoutHandler>());
 
@@ -97,6 +108,7 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         services.AddSingleton<IPayoutProcessorFactory>(sp => sp.GetRequiredService<ArkAutomatedPayoutSenderFactory>());
 
         services.AddDefaultPrettyName(ArkadePaymentMethodId, "Arkade");
+        services.AddDefaultPrettyName(ArkadeAssetPaymentMethodId, "Arkade Asset");
     }
 
     private static void RegisterDatabase(IServiceCollection services)
@@ -264,6 +276,20 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
         services.AddSingleton<ArkadeSpendingService>();
 
+        // Caches Arkade asset metadata (name/ticker/decimals) from the
+        // indexer for balance display and checkout.
+        services.AddSingleton<AssetMetadataService>();
+
+        // Prices a merchant-accepted Arkade asset against an invoice's BTC
+        // amount due, routing the reference-currency leg through BTCPay's
+        // own rate pipeline.
+        services.AddSingleton<AssetRateResolver>();
+
+        // Surfaces each store's tracked-asset codes as BTCPay currencies, and
+        // refreshes the currency table after a tracked-asset CRUD op.
+        services.AddSingleton<CurrencyDataProvider, ArkadeAssetCurrencyDataProvider>();
+        services.AddSingleton<AssetCurrencyRegistrar>();
+
         // Remote-signer transport seam.
         //
         // NArk's DefaultWalletProvider takes IRemoteSignerTransport? as an
@@ -315,6 +341,7 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
     private static void RegisterUIExtensions(IServiceCollection services)
     {
         services.AddUIExtension("checkout-end", "Arkade/ArkadeMethodCheckout");
+        services.AddUIExtension("checkout-end", "Arkade/ArkadeAssetMethodCheckout");
         services.AddUIExtension("dashboard-setup-guide-payment", "/Views/Ark/DashboardSetupGuidePayment.cshtml");
         services.AddUIExtension("store-invoices-payments", "/Views/Ark/ArkPaymentData.cshtml");
         services.AddUIExtension("store-wallets-nav", "/Views/Ark/ArkWalletNav.cshtml");

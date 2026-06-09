@@ -1,4 +1,5 @@
 using BTCPayServer.Plugins.ArkPayServer.Data;
+using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Services;
 using NArk.Abstractions.Contracts;
 using NArk.Abstractions.VTXOs;
@@ -21,6 +22,14 @@ public class StoreOverviewViewModel
     public bool AllowSubDustAmounts { get; set; }
     public bool BoardingEnabled { get; set; }
     public long MinBoardingAmountSats { get; set; }
+
+    // --- Tracked Arkade assets (managed list; accepted for payment via the
+    // dedicated "Arkade Asset" payment method, priced by a per-asset rate
+    // script). Empty = BTC-VTXO only.
+    public List<TrackedAssetRow> TrackedAssets { get; set; } = [];
+
+    /// <summary>Bound form for the add/edit-asset modal.</summary>
+    public TrackedAssetRow AssetForm { get; set; } = new();
 
     /// <summary>
     /// The type of wallet (SingleKey/legacy or HD/mnemonic).

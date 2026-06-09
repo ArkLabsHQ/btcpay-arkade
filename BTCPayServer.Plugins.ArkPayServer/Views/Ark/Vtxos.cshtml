@@ -15,6 +15,7 @@
 @inject IBitcoinBlockchain ChainTimeProvider
 @inject IClientTransport ClientTransport
 @inject TransactionLinkProviders TransactionLinkProviders
+@inject BTCPayServer.Plugins.ArkPayServer.Services.AssetMetadataService AssetMetadata
 
 @{
     ViewData.SetActivePage(category: "Ark", activePage: "VTXOs", title: "Arkade - VTXOs");
@@ -186,7 +187,21 @@
                                 <vc:truncate-center link="@addressLink" text="@addressStr"
                                                     classes="truncate-center-id"/>
                             </td>
-                            <td class="align-middle">@Money.Satoshis((long)vtxo.Amount).ToDecimal(MoneyUnit.BTC) BTC</td>
+                            <td class="align-middle">
+                                @Money.Satoshis((long)vtxo.Amount).ToDecimal(MoneyUnit.BTC) BTC
+                                @if (vtxo.Assets is { Count: > 0 })
+                                {
+                                    foreach (var asset in vtxo.Assets)
+                                    {
+                                        var assetDetails = await AssetMetadata.GetAssetDetailsAsync(asset.AssetId);
+                                        var label = AssetMetadata.GetTicker(assetDetails) ?? (asset.AssetId.Length > 10 ? asset.AssetId[..10] + "…" : asset.AssetId);
+                                        <br />
+                                        <span class="badge text-bg-success" style="font-size:.7rem;" data-sensitive>
+                                            @AssetMetadata.FormatAmount(asset.Amount, assetDetails) @label
+                                        </span>
+                                    }
+                                }
+                            </td>
                             <td class="align-middle">
                                 @if (vtxo.ExpiresAt.HasValue)
                                 {

@@ -50,6 +50,15 @@
                     <span class="fw-semibold" style="color: var(--btcpay-body-text-muted)" data-testid="boarding-balance" data-sensitive>@FormatBtc(Model.BoardingBalance)</span>
                 </div>
             }
+            @foreach (var asset in Model.AssetBalances)
+            {
+                <div class="d-flex align-items-center gap-2">
+                    <span class="text-muted small">@(asset.Ticker ?? asset.Name ?? "Asset"):</span>
+                    <span class="fw-semibold text-success" data-testid="asset-balance" data-sensitive>
+                        @asset.FormattedAmount@(string.IsNullOrEmpty(asset.Ticker) ? "" : " " + asset.Ticker)
+                    </span>
+                </div>
+            }
         </div>
     }
     else
@@ -155,6 +164,29 @@
                         <div class="progress-bar" role="progressbar"
                              style="width: @((Model.BoardingBalance * 100m / totalBalance).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))%; background-color: var(--btcpay-body-text-muted);"
                              title="Boarding"></div>
+                    }
+                </div>
+            }
+            @if (Model.AssetBalances.Count > 0)
+            {
+                <div class="py-2 border-top mt-1" data-testid="asset-balances">
+                    <div class="text-muted small mb-1">Arkade assets</div>
+                    @foreach (var asset in Model.AssetBalances)
+                    {
+                        <div class="d-flex justify-content-between align-items-center py-1">
+                            <div class="d-flex align-items-center gap-2">
+                                <span class="badge rounded-pill bg-success" style="width: 10px; height: 10px; padding: 0;"></span>
+                                <span>@(asset.Name ?? asset.Ticker ?? "Asset")</span>
+                                @if (!string.IsNullOrEmpty(asset.Ticker) && asset.Name != null)
+                                {
+                                    <small class="text-muted">@asset.Ticker</small>
+                                }
+                                <small class="text-muted font-monospace">@(asset.AssetId.Length > 12 ? asset.AssetId[..12] + "…" : asset.AssetId)</small>
+                            </div>
+                            <span class="fw-semibold" data-testid="asset-balance" data-sensitive>
+                                @asset.FormattedAmount@(string.IsNullOrEmpty(asset.Ticker) ? "" : " " + asset.Ticker)
+                            </span>
+                        </div>
                     }
                 </div>
             }
