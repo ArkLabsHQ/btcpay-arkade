@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.2.2] - 2026-06-09
+
+### Features
+- **Greenfield REST API for Arkade wallet operations (#42).** Adds store-scoped, API-key-authenticated `~/api/v1/stores/{storeId}/arkade/*` endpoints covering wallet info / setup / settings, balance, VTXOs, contracts, intents, swaps, send, fee estimation, destination parsing, Boltz limits, and Arkade server info. Reads require `CanViewStoreSettings`; mutations (setup/settings/send) require `CanModifyStoreSettings`. Swap-metadata responses are filtered to a non-sensitive allow-list so chain/reverse-swap secrets (ephemeral key, preimage, Boltz lockup response) are never exposed.
+
+### SDK (NNark)
+- **Bumped to `arkade-os/dotnet-sdk` master — deterministic Boltz preimages (#116).** Reverse and chain swap preimages are now derived deterministically from the wallet's signing key (`SHA-256(BIP-340-sign(key, SHA-256("Arkade-Boltz-Preimage-v1" || xonly_pubkey || u32le(index))))`) instead of random bytes, so a wallet restored from seed/nsec can re-derive the preimage and claim outstanding VHTLCs it rediscovers via Boltz `/v2/swap/restore`. Watch-only/no-signer wallets fall back to a random preimage.
+
 ## [2.2.1] - 2026-06-09
 
 ### Features
