@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.2.1] - 2026-06-09
+
+### Features
+- **Wallet recovery on import + manual Rescan (#70).** Importing a wallet now starts background recovery via the SDK's unified `IWalletRecoveryService` — rediscovering contracts (including legacy deprecated-signer scripts), the derivation index, funds, and Boltz swaps, then syncing boarding UTXOs — instead of only polling pre-existing contracts. Adds a `POST stores/{id}/rescan` endpoint and a **Rescan** button on the store overview, with an in-memory `RecoveryStatusTracker` surfacing Running/Completed/Failed per wallet. When the SDK's recovery service isn't registered (no Boltz/swaps configured), recovery degrades to a boarding-only sync.
+
+### SDK (NNark)
+- **Bumped to `arkade-os/dotnet-sdk` master.** Picks up the Boltz swap-logic refactor (#123) and the regtest denigiri Postgres-port pin (#120). The refactor relocated the swap-status helpers (`IsActive`, `IsTerminalState`, `IsSuccess`, …) into `NArk.Swaps.Extensions`; the plugin's Razor views now import that namespace via `_ViewImports.cshtml` so `swap.Status.IsActive()` resolves.
+
 ## [2.2.0] - 2026-05-28
 
 ### Features
