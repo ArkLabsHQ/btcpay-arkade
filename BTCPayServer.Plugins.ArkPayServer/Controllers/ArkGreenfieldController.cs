@@ -1034,11 +1034,39 @@ public class ArkGreenfieldController(
             Status = s.Status.ToString(),
             AmountSats = s.ExpectedAmount,
             CreatedAt = s.CreatedAt,
-            Metadata = s.Metadata
+            Metadata = FilterPublicSwapMetadata(s.Metadata)
         }).ToList();
 
         return Ok(result);
     }
+
+    // Swap metadata is an internal bookkeeping dictionary that, for chain/reverse
+    // swaps, holds spend-capable secrets — the ephemeral refund private key
+    // (ephemeralKey), the claim preimage, and the full Boltz lockup response
+    // (boltzResponse). Those must never leave the server, so the API exposes only
+    // an explicit allow-list of non-sensitive keys (default-deny: any key not
+    // listed — including any added in future — is dropped). Keys mirror
+    // NArk.Swaps.Models.SwapMetadata; string literals keep this filter independent
+    // of the bundled SDK version.
+    private static readonly HashSet<string> PublicSwapMetadataKeys = new(StringComparer.Ordinal)
+    {
+        "btcAddress",
+        "crossSigned",
+        "refundDestination",
+        "providerId",
+        "route.source.network",
+        "route.source.assetId",
+        "route.destination.network",
+        "route.destination.assetId",
+    };
+
+    private static Dictionary<string, string>? FilterPublicSwapMetadata(
+        IReadOnlyDictionary<string, string>? metadata)
+        => metadata is null
+            ? null
+            : metadata
+                .Where(kv => PublicSwapMetadataKeys.Contains(kv.Key))
+                .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal);
 
     #endregion
 
