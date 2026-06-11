@@ -26,6 +26,12 @@ and publishes the plugin (NNark dependencies included). Use
 `./add-migration.sh <Name>` to add EF Core migrations, and `start-test-env.cmd`
 to bring up the local regtest/Arkade test environment.
 
+To run the app locally (regtest stack + BTCPay with the plugin + smoke
+checks), follow the verified recipe in
+[`.claude/skills/running-locally/SKILL.md`](.claude/skills/running-locally/SKILL.md)
+— plain markdown usable by any agent; Claude Code also auto-discovers it
+as a skill.
+
 ## Agent Guidance
 - Follow standard .NET naming conventions.
 - Ensure the solution builds successfully before committing.
