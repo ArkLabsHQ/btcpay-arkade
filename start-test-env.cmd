@@ -1,5 +1,11 @@
 @echo off
 setlocal
-set "SCRIPT_DIR=%~dp0submodules\NNark\regtest"
-set "OVERRIDE_ENV=%~dp0submodules\NNark\.env.regtest"
-wsl -e bash -c "cd \"$(wslpath '%SCRIPT_DIR%')\" && if [ -f \"$(wslpath '%OVERRIDE_ENV%')\" ]; then sed -i 's/\r$//' \"$(wslpath '%OVERRIDE_ENV%')\"; fi && sed 's/\r$//' start-env.sh | bash -s -- --clean"
+rem Wrapper around the NNark regtest CLI (cross-platform Node orchestrator,
+rem no WSL required). No arguments starts the full BTCPay-relevant stack;
+rem any arguments are passed through (e.g. `start-test-env stop`,
+rem `start-test-env clean`, `start-test-env mine 5`).
+if "%~1"=="" (
+    node "%~dp0submodules\NNark\regtest\regtest.mjs" start --profile boltz,delegate
+) else (
+    node "%~dp0submodules\NNark\regtest\regtest.mjs" %*
+)

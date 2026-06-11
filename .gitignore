@@ -8,4 +8,6 @@ nigiri/
 nul
 .superpowers
 .playwright-mcp
-.claude/
+.claude/*
+!.claude/skills/
+btcpay-run*.log

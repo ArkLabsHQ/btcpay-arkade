@@ -204,12 +204,12 @@ The setup script will:
 
 ### Running Tests
 
-After running `setup.sh`, start the local regtest environment (Bitcoin + arkd + Boltz/Fulmine):
+After running `setup.sh`, start the local regtest environment (Bitcoin + arkd + Boltz/Fulmine) — a cross-platform Node CLI, no WSL required:
 ```bash
-./submodules/NNark/regtest/start-env.sh
+node submodules/NNark/regtest/regtest.mjs start --profile boltz,delegate
 ```
 
-On Windows (wraps the same script via WSL):
+On Windows (wraps the same CLI; extra arguments pass through, e.g. `start-test-env stop`):
 ```cmd
 start-test-env.cmd
 ```
