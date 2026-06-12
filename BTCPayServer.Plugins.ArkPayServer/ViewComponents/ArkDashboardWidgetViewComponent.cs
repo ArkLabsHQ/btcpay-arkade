@@ -86,6 +86,8 @@ public class ArkDashboardWidgetViewComponent(
 
                         if (terms != null)
                         {
+                            // Recomputed from the CURRENT signer, which matches the persisted
+                            // Default maintained by the SDK ContractReconciliationService.
                             var descriptor = OutputDescriptor.Parse(wallet.AccountDescriptor, terms.Network);
                             var defaultContract = new ArkPaymentContract(terms.SignerKey, terms.UnilateralExit, descriptor);
                             model.DefaultAddress = defaultContract.GetArkAddress()

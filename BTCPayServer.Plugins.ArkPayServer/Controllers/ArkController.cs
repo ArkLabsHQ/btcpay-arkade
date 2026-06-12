@@ -76,6 +76,7 @@ public class ArkController(
     ISpendingService arkadeSpender,
     IFeeEstimator feeEstimator,
     IContractService contractService,
+    NArk.Core.Recovery.ISingleKeyDefaultEnsurer singleKeyDefaultEnsurer,
     IBitcoinBlockchain bitcoinTimeChainProvider,
     VtxoSynchronizationService vtxoSyncService,
     IContractStorage contractStorage,
@@ -158,12 +159,11 @@ public class ArkController(
 
                     if (wallet.WalletType == WalletType.SingleKey)
                     {
-                       await  contractService.DeriveContract(
-                           wallet.Id,
-                           NextContractPurpose.SendToSelf,
-                           ContractActivityState.Active,
-                           metadata: new Dictionary<string, string> { ["Source"] = "Default" },
-                           cancellationToken: HttpContext.RequestAborted);
+                        // Synchronous default-contract creation at setup (no regression vs. the
+                        // prior inline DeriveContract), but the "how" now lives in the SDK. The
+                        // persisted Default is thereafter maintained across signer rotation by
+                        // the SDK's ContractReconciliationService (started via ArkHostedLifecycle).
+                        await singleKeyDefaultEnsurer.EnsureDefaultAsync(wallet.Id, HttpContext.RequestAborted);
                     }
 
                     walletSettings = walletSettings with { WalletId = wallet.Id };
@@ -331,7 +331,9 @@ public class ArkController(
         string? defaultAddress = null;
         if (wallet?.WalletType == WalletType.SingleKey)
         {
-            // SingleKey: compute the deterministic default address directly from the wallet key
+            // SingleKey: compute the deterministic default address directly from the wallet key.
+            // This is recomputed from the CURRENT signer, which matches the persisted Default
+            // maintained by the SDK ContractReconciliationService — so display == watched holds.
             var terms = await clientTransport.GetServerInfoAsync(cancellationToken);
             var descriptor = OutputDescriptor.Parse(wallet.AccountDescriptor, terms.Network);
             var defaultContract = new ArkPaymentContract(terms.SignerKey, terms.UnilateralExit, descriptor);

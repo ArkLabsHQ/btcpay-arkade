@@ -56,6 +56,7 @@ public class ArkGreenfieldController(
     ISpendingService arkadeSpender,
     IFeeEstimator feeEstimator,
     IContractService contractService,
+    NArk.Core.Recovery.ISingleKeyDefaultEnsurer singleKeyDefaultEnsurer,
     IBitcoinBlockchain bitcoinTimeChainProvider,
     VtxoSynchronizationService vtxoSyncService,
     IContractStorage contractStorage,
@@ -143,12 +144,10 @@ public class ArkGreenfieldController(
 
                 if (walletInfo.WalletType == WalletType.SingleKey)
                 {
-                    await contractService.DeriveContract(
-                        walletInfo.Id,
-                        NextContractPurpose.SendToSelf,
-                        ContractActivityState.Active,
-                        metadata: new Dictionary<string, string> { ["Source"] = "Default" },
-                        cancellationToken: cancellationToken);
+                    // Delegate to the SDK's ensurer (destination-insensitive, unlike the
+                    // SendToSelf path); the SDK ContractReconciliationService also maintains
+                    // this default across signer rotation.
+                    await singleKeyDefaultEnsurer.EnsureDefaultAsync(walletInfo.Id, cancellationToken);
                 }
 
                 walletId = walletInfo.Id;
