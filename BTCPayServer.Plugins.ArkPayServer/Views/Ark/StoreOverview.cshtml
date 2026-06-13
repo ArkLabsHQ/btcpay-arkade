@@ -30,10 +30,13 @@
         <form asp-action="UpdateDestination" method="post" asp-route-storeId="@storeId" class="d-flex flex-wrap gap-2 align-items-center">
             <input type="text" name="destination" class="form-control form-control-sm font-monospace flex-grow-1"
                    placeholder="ark1…" style="max-width: 480px;"
-                   value="@Model.Destination"
                    required />
             <button type="submit" class="btn btn-sm btn-warning">Re-confirm destination</button>
         </form>
+        @if (!string.IsNullOrEmpty(Model.Destination))
+        {
+            <small class="text-muted d-block mt-2">Disabled destination: <span class="font-monospace">@Model.Destination</span> — enter a destination keyed to the current signer.</small>
+        }
     </div>
 }
 

@@ -26,6 +26,10 @@ public class DestinationDisabledNotifierBridge(
 {
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        // Safe against the reconciliation service's own startup pass: that pass only enqueues a job, and
+        // the DestinationDisabled event fires later from a background worker (after a GetServerInfoAsync
+        // round-trip), so this synchronous subscription is always in place first. The pending-confirmation
+        // flag also persists in wallet Metadata, so the overview banner surfaces the state regardless.
         notifier.DestinationDisabled += OnDisabled;
         return Task.CompletedTask;
     }
