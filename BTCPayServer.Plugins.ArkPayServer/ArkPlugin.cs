@@ -8,10 +8,12 @@ using BTCPayServer.PayoutProcessors;
 using BTCPayServer.Payouts;
 using BTCPayServer.Plugins.ArkPayServer.Data;
 using BTCPayServer.Plugins.ArkPayServer.Lightning;
+using BTCPayServer.Plugins.ArkPayServer.Notifications;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
 using BTCPayServer.Plugins.ArkPayServer.Services;
 using BTCPayServer.Plugins.ArkPayServer.Services.WalletLogger;
+using BTCPayServer.Services.Notifications;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -97,6 +99,8 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         services.AddSingleton<IPayoutProcessorFactory>(sp => sp.GetRequiredService<ArkAutomatedPayoutSenderFactory>());
 
         services.AddDefaultPrettyName(ArkadePaymentMethodId, "Arkade");
+
+        services.AddSingleton<INotificationHandler, ArkadeDestinationDisabledNotification.Handler>();
     }
 
     private static void RegisterDatabase(IServiceCollection services)
@@ -310,6 +314,8 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
         services.AddSingleton<BoardingUtxoPollService>();
         services.AddHostedService(sp => sp.GetRequiredService<BoardingUtxoPollService>());
+
+        services.AddHostedService<DestinationDisabledNotifierBridge>();
     }
 
     private static void RegisterUIExtensions(IServiceCollection services)
