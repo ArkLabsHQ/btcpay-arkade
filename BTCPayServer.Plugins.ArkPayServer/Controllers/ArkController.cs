@@ -429,6 +429,7 @@ public class ArkController(
             Wallet = wallet?.Secret,
             WalletType = wallet?.WalletType ?? WalletType.SingleKey,
             CanManagePrivateKeys = canManagePrivateKeys,
+            DestinationPendingConfirmation = wallet?.Metadata?.ContainsKey(NArk.Core.Services.DestinationSafety.PendingConfirmationMetadataKey) == true,
             RecoveryStatus = config.WalletId is { } recoveryWalletId ? recoveryStatusTracker.Get(recoveryWalletId) : null,
             ArkOperatorUrl = arkNetworkConfig.ArkUri,
             ArkOperatorConnected = arkOperatorConnected,
@@ -1990,6 +1991,40 @@ public class ArkController(
         }
 
         return RedirectToAction(nameof(StoreOverview), new { storeId });
+    }
+
+    [HttpPost("stores/{storeId}/destination")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> UpdateDestination(string storeId, string destination, CancellationToken ct)
+    {
+        var (_, config, errorResult) = await ValidateStoreAndConfig();
+        if (errorResult != null) return errorResult;
+
+        destination = destination?.Trim() ?? string.Empty;
+        if (!NArk.Abstractions.ArkAddress.TryParse(destination, out var parsed) || parsed is null)
+            return RedirectWithError(nameof(StoreOverview), "Invalid Arkade address. Please enter a valid ark1… address.", new { storeId });
+
+        NArk.Core.ArkServerInfo serverInfo;
+        try
+        {
+            serverInfo = await clientTransport.GetServerInfoAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            return RedirectWithError(nameof(StoreOverview), DescribeArkError(ex, "Could not reach the Arkade server"), new { storeId });
+        }
+
+        if (NArk.Core.Services.DestinationSafety.IsStale(parsed, serverInfo))
+            return RedirectWithError(nameof(StoreOverview),
+                "That address is still on a deprecated signer; use a current Arkade address.", new { storeId });
+
+        var wallet = await walletStorage.GetWalletById(config!.WalletId!, ct);
+        if (wallet is null)
+            return RedirectWithError(nameof(StoreOverview), "Wallet not found.", new { storeId });
+
+        await walletStorage.UpsertWallet(wallet with { Destination = destination }, updateIfExists: true, ct);
+
+        return RedirectWithSuccess(nameof(StoreOverview), "Sweep destination re-confirmed.", new { storeId });
     }
 
     [HttpGet("stores/{storeId}/contracts")]

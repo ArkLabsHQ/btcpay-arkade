@@ -33,6 +33,13 @@ public class StoreOverviewViewModel
     /// </summary>
     public bool CanManagePrivateKeys { get; set; }
 
+    /// <summary>
+    /// True when the wallet's sweep destination was disabled because a signer rotation
+    /// made it stale. The SDK sets <c>destination:pendingConfirmation</c> in wallet
+    /// metadata and pauses sweeping until the merchant re-confirms a current-signer address.
+    /// </summary>
+    public bool DestinationPendingConfirmation { get; set; }
+
     /// <summary>Status of the most recent background wallet-recovery run (import or Rescan), if any.</summary>
     public RecoveryStatus? RecoveryStatus { get; set; }
 
