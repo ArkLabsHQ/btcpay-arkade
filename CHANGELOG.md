@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.0] - 2026-06-13
+
+### Features
+- **Sweep-destination safety on signer rotation.** When the Arkade operator rotates its signer, a configured sweep destination keyed to the now-deprecated signer is automatically disabled — sweeping pauses (funds stay on the current signer) and the merchant is alerted two ways: a BTCPay **notification** (bell, linking to the store's Arkade overview) and a **warning banner** on the store overview. Re-confirm a current-signer destination from the banner to resume sweeping. Detection and enforcement are SDK-owned, so the plugin never sweeps to a stale address regardless of whether the merchant has reacted yet.
+
+### SDK (NNark)
+- **Bumped to the `arkade-os/dotnet-sdk` commit carrying destination signer-change safety.** Adds `DestinationSafety.IsStale`, the `IDestinationSafetyNotifier.DestinationDisabled` event, the `destination:pendingConfirmation` wallet-`Metadata` flag set/cleared by `ContractReconciliationService`, and the `DefaultWalletProvider` self-output fallback while a destination is flagged.
+
 ## [2.3.0] - 2026-06-13
 
 ### Features
