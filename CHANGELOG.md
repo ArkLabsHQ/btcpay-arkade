@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.3.0] - 2026-06-13
+
+### Features
+- **arkd signer-key rotation support (#78).** When an Arkade operator rotates its signing key, a wallet's existing contracts and Arkade addresses (derived from the *server* signer key) go stale. The plugin now keeps the SingleKey **"Default"** receive contract aligned with the operator's current signer automatically: store setup and Greenfield wallet creation delegate to the SDK's `EnsureDefaultAsync`, and the store overview reads the SDK's reconciled Default directly instead of re-deriving it. The rotation mechanism itself is SDK-owned (see below), so the plugin stays a thin BTCPay adapter — no plugin-side polling or migration code; funds under a superseded signer are swept, held, or re-enrolled by the SDK's hosted services.
+
+### SDK (NNark)
+- **Bumped to `arkade-os/dotnet-sdk` master @ `309885d` (#132)** — brings in the full signer-rotation mechanism and supporting work.
+- **Reconciliation & discovery.** `ContractReconciliationService` realigns each SingleKey wallet's Default to the current signer on startup, `WalletSaved`, and rotation; `SingleKeyVtxoRecoveryService` rediscovers VTXOs across the `{current ∪ deprecated}` signer set so funds stranded under a rotated key are recovered.
+- **Detection.** Rotation is detected through the `ServerInfoChanged` event — both mid-request (`DIGEST_MISMATCH`) and on the 5-minute server-info TTL refresh — rather than polling.
+- **Three fund regimes.** Before the cutoff, deprecated-signer VTXOs are collaboratively swept onto the current signer (`ServerKeyRotationSweepPolicy`); after the cutoff a coin can no longer be spent offchain nor selected into a batch while it still needs a forfeit (it would brick the whole intent); after expiry it re-enrolls forfeit-free under the current signer.
+- **Transport hardening (#134).** `DIGEST_MISMATCH` / `BUILD_VERSION_TOO_OLD` are now translated mid-stream on server-streaming and duplex RPCs (`GuardedStreamReader`), `ServerInfoChanged` dispatch is deferred past the lock to avoid a re-entrant deadlock, and the caching transport is registered as a concrete singleton aliased to both `IClientTransport` and `IServerInfoCacheInvalidation` (no unsafe cast).
+- **Headers & E2E baseline.** Every gRPC/REST request carries `X-Build-Version` and `X-Digest`; the E2E stack moved to arkd **v0.9.9-rc.1** with a deprecated signer pre-configured so the rotation sweeper runs in CI.
+- Plus master changes since the last bump: a 50-VTXO-per-intent cap (#125), `ECXOnlyPubKeyComparer` (#127), and E2E stabilization (#129, #130).
+
 ## [2.2.1] - 2026-06-09
 
 ### Features
