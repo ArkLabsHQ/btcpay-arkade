@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.4.1] - 2026-06-14
+
+### SDK (NNark)
+- **Bumped to `arkade-os/dotnet-sdk` master @ `29d92af` (#137).** Raises the `X-Build-Version` the SDK reports to arkd from `0.9.7` to `0.9.9` (matching arkd `v0.9.9`). Also adds real-rotation end-to-end test coverage on the SDK side (destination-disable, within-cutoff sweep migration, past-cutoff held-back, driven by arkade-regtest's `rotate-signer`) — test-only, no plugin-runtime change.
+
 ## [2.4.0] - 2026-06-13
 
 ### Features
