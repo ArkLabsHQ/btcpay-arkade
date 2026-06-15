@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.4.2] - 2026-06-15
+
+### SDK (NNark)
+- **Bumped to `arkade-os/dotnet-sdk` master @ `0b8d299` (#139).** Every gRPC and REST request now also carries an `X-SDK-VERSION` header reporting the SDK's own version as a `dotnet-sdk/{version}` product token (e.g. `dotnet-sdk/1.0.327-beta`), alongside the existing `X-Build-Version` (the arkd build the SDK targets). The version comes from Nerdbank.GitVersioning with the `+commit` build-metadata stripped; it lets arkd distinguish the .NET SDK from other SDKs and log the calling version for diagnostics. SDK-only, no plugin-runtime change.
+
 ## [2.4.1] - 2026-06-14
 
 ### SDK (NNark)
