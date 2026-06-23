@@ -6,6 +6,11 @@ namespace BTCPayServer.Plugins.ArkPayServer.Lightning;
 
 public class ArkLightningConnectionStringHandler(IServiceProvider serviceProvider) : ILightningConnectionStringHandler
 {
+    public static string Build(string walletId, string? storeId) =>
+        string.IsNullOrEmpty(storeId)
+            ? $"type=arkade;wallet-id={walletId}"
+            : $"type=arkade;wallet-id={walletId};store-id={storeId}";
+
     public ILightningClient? Create(string connectionString, Network network, out string? error)
     {
         var kv = LightningConnectionStringHelper.ExtractValues(connectionString, out var type);
@@ -21,8 +26,10 @@ public class ArkLightningConnectionStringHandler(IServiceProvider serviceProvide
             return null;
         }
 
+        var storeId = kv.TryGetValue("store-id", out var sid) ? sid : "";
+
         error = null;
-        return ActivatorUtilities.CreateInstance<ArkLightningClient>(serviceProvider, network, walletId);
+        return ActivatorUtilities.CreateInstance<ArkLightningClient>(serviceProvider, network, walletId, storeId);
     }
 }
 

@@ -23,6 +23,11 @@ public class StoreOverviewViewModel
     public long MinBoardingAmountSats { get; set; }
 
     /// <summary>
+    /// Absorbs the Boltz reverse-swap fee on Lightning receives.
+    /// </summary>
+    public ReverseSwapFeePayer ReverseSwapFeePayer { get; set; }
+
+    /// <summary>
     /// The type of wallet (SingleKey/legacy or HD/mnemonic).
     /// </summary>
     public WalletType WalletType { get; set; }

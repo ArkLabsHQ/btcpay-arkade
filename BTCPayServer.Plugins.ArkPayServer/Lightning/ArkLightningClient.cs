@@ -1,6 +1,10 @@
 using System.ComponentModel.DataAnnotations;
+using BTCPayServer.Data;
 using BTCPayServer.Lightning;
 using BTCPayServer.Payments.Lightning;
+using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
+using BTCPayServer.Services.Invoices;
+using BTCPayServer.Services.Stores;
 using Microsoft.Extensions.Logging;
 using NArk.Abstractions.Blockchain;
 using NArk.Abstractions.Contracts;
@@ -20,14 +24,28 @@ public class ArkLightningClient(
     IClientTransport clientTransport,
     Network network,
     string walletId,
+    string storeId,
     SwapsManagementService swapsManagementService,
     BoltzLimitsValidator boltzLimitsValidator,
     ISwapStorage swapStorage,
     IContractStorage contractStorage,
     ISpendingService spendingService,
     IBitcoinBlockchain chainTimeProvider,
+    StoreRepository storeRepository,
+    PaymentMethodHandlerDictionary paymentMethodHandlerDictionary,
     ILogger<ArkLightningInvoiceListener> logger) : IExtendedLightningClient
 {
+    private async Task<ReverseSwapFeePayer> ResolveReverseSwapFeePayer()
+    {
+        if (string.IsNullOrEmpty(storeId))
+            return ReverseSwapFeePayer.Recipient;
+
+        var store = await storeRepository.FindStore(storeId);
+        var config = store?.GetPaymentMethodConfig<ArkadePaymentMethodConfig>(
+            ArkadePlugin.ArkadePaymentMethodId, paymentMethodHandlerDictionary);
+        return config?.WalletId == walletId ? config.ReverseSwapFeePayer : ReverseSwapFeePayer.Recipient;
+    }
+
     /// <summary>
     /// Gets swaps with their contracts by fetching swaps first, then contracts separately.
     /// </summary>
@@ -245,7 +263,9 @@ public class ArkLightningClient(
         }
 
         // Create reverse swap via NNark's SwapsManagementService
-        var invoice = await swapsManagementService.InitiateReverseSwap(walletId, createInvoiceRequest, cancellation);
+        var feePayer = await ResolveReverseSwapFeePayer();
+        var invoice = await swapsManagementService.InitiateReverseSwap(
+            walletId, createInvoiceRequest, feePayer, cancellation);
 
         // Fetch the created swap from DB to return proper LightningInvoice
         var swapsWithContracts = await GetSwapsWithContractsAsync(

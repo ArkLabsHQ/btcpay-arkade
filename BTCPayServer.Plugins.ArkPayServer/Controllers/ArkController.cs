@@ -200,7 +200,7 @@ public class ArkController(
                 
                 var lnConfig = new LightningPaymentMethodConfig()
                 {
-                    ConnectionString = $"type=arkade;wallet-id={config.WalletId}",
+                    ConnectionString = ArkLightningConnectionStringHandler.Build(config.WalletId, storeId),
                 };
                 
                 store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[lightningPaymentMethodId], lnConfig);
@@ -426,6 +426,7 @@ public class ArkController(
             AllowSubDustAmounts = config.AllowSubDustAmounts,
             BoardingEnabled = config.BoardingEnabled,
             MinBoardingAmountSats = config.MinBoardingAmountSats,
+            ReverseSwapFeePayer = config.ReverseSwapFeePayer,
             Wallet = wallet?.Secret,
             WalletType = wallet?.WalletType ?? WalletType.SingleKey,
             CanManagePrivateKeys = canManagePrivateKeys,
@@ -1990,6 +1991,32 @@ public class ArkController(
             return RedirectWithSuccess(nameof(StoreOverview), "Boarding disabled.", new { storeId });
         }
 
+        if (command == "toggle-fee-payer")
+        {
+            var newFeePayer = config!.ReverseSwapFeePayer == ReverseSwapFeePayer.Recipient
+                ? ReverseSwapFeePayer.Sender
+                : ReverseSwapFeePayer.Recipient;
+            var newConfig = config with { ReverseSwapFeePayer = newFeePayer };
+            store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], newConfig);
+
+            var lnPaymentMethodId = GetLightningPaymentMethod();
+            var lnConfig = store.GetPaymentMethodConfig<LightningPaymentMethodConfig>(lnPaymentMethodId, paymentMethodHandlerDictionary);
+            if (lnConfig?.ConnectionString is { } cs
+                && cs.Contains("type=arkade", StringComparison.OrdinalIgnoreCase)
+                && !cs.Contains("store-id=", StringComparison.OrdinalIgnoreCase))
+            {
+                lnConfig.ConnectionString = ArkLightningConnectionStringHandler.Build(config!.WalletId, storeId);
+                store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[lnPaymentMethodId], lnConfig);
+            }
+
+            await storeRepository.UpdateStore(store);
+            return RedirectWithSuccess(nameof(StoreOverview),
+                newFeePayer == ReverseSwapFeePayer.Sender
+                    ? "Reverse-swap fee now paid by the sender — invoices will exceed the requested amount and may be rejected by LNURL/checkout wallets."
+                    : "Reverse-swap fee now paid by the recipient — invoices match the requested amount (LUD-06-safe).",
+                new { storeId });
+        }
+
         return RedirectToAction(nameof(StoreOverview), new { storeId });
     }
 
@@ -2430,7 +2457,7 @@ public class ArkController(
 
         store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[lightningPaymentMethodId], new LightningPaymentMethodConfig
         {
-            ConnectionString = $"type=arkade;wallet-id={config!.WalletId}",
+            ConnectionString = ArkLightningConnectionStringHandler.Build(config!.WalletId, storeId),
         });
         store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[lnurlPaymentMethodId], new LNURLPaymentMethodConfig
         {
