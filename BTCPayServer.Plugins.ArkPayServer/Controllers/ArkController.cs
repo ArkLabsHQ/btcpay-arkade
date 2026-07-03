@@ -272,8 +272,8 @@ public class ArkController(
 
                 // Boarding (on-chain) UTXOs aren't covered by offchain recovery.
                 var boardingContracts = (await contractStorage.GetContracts(
-                        walletIds: [walletId], cancellationToken: CancellationToken.None))
-                    .Where(c => c.Type == ArkBoardingContract.ContractType).ToList();
+                        walletIds: [walletId], scope: ContractScope.Onchain,
+                        cancellationToken: CancellationToken.None)).ToList();
                 if (boardingContracts.Count > 0)
                     await boardingUtxoSyncService.SyncAsync(boardingContracts, CancellationToken.None);
 
@@ -3225,12 +3225,10 @@ public class ArkController(
                     var selectedVtxos = await vtxoStorage.GetVtxos(
                         outpoints: outpoints, includeSpent: true, cancellationToken: cancellationToken);
                     var vtxoScripts = selectedVtxos.Select(v => v.Script).Distinct().ToArray();
-                    var contracts = await contractStorage.GetContracts(
-                        scripts: vtxoScripts, cancellationToken: cancellationToken);
-                    var boardingContracts = contracts
-                        .Where(c => c.Type == ArkBoardingContract.ContractType).ToList();
-                    var nonBoardingScripts = contracts
-                        .Where(c => c.Type != ArkBoardingContract.ContractType)
+                    var boardingContracts = await contractStorage.GetContracts(
+                        scripts: vtxoScripts, scope: ContractScope.Onchain, cancellationToken: cancellationToken);
+                    var nonBoardingScripts = (await contractStorage.GetContracts(
+                            scripts: vtxoScripts, scope: ContractScope.Offchain, cancellationToken: cancellationToken))
                         .Select(c => c.Script).ToHashSet();
                     if (nonBoardingScripts.Count > 0)
                         await vtxoSyncService.PollScriptsForVtxos(nonBoardingScripts, cancellationToken);
@@ -3316,12 +3314,10 @@ public class ArkController(
             {
                 case "sync-selected":
                     // Poll scripts for VTXO updates, routing boarding contracts to UTXO provider
-                    var selectedContracts = await contractStorage.GetContracts(
-                        scripts: selectedItems, cancellationToken: cancellationToken);
-                    var selectedBoarding = selectedContracts
-                        .Where(c => c.Type == ArkBoardingContract.ContractType).ToList();
-                    var selectedNonBoardingScripts = selectedContracts
-                        .Where(c => c.Type != ArkBoardingContract.ContractType)
+                    var selectedBoarding = await contractStorage.GetContracts(
+                        scripts: selectedItems, scope: ContractScope.Onchain, cancellationToken: cancellationToken);
+                    var selectedNonBoardingScripts = (await contractStorage.GetContracts(
+                            scripts: selectedItems, scope: ContractScope.Offchain, cancellationToken: cancellationToken))
                         .Select(c => c.Script).ToHashSet();
                     if (selectedNonBoardingScripts.Count > 0)
                         await vtxoSyncService.PollScriptsForVtxos(selectedNonBoardingScripts, cancellationToken);

@@ -153,21 +153,17 @@ public class ArkGreenfieldController(
                 walletId = walletInfo.Id;
             }
 
-            // Sync existing contracts if linking an existing wallet
-            var contracts = await contractStorage.GetContracts(
-                walletIds: [walletId!], cancellationToken: cancellationToken);
-            if (contracts.Count > 0)
-            {
-                var boardingContracts = contracts
-                    .Where(c => c.Type == ArkBoardingContract.ContractType).ToList();
-                var nonBoardingScripts = contracts
-                    .Where(c => c.Type != ArkBoardingContract.ContractType)
-                    .Select(c => c.Script).ToHashSet();
-                if (nonBoardingScripts.Count > 0)
-                    await vtxoSyncService.PollScriptsForVtxos(nonBoardingScripts, cancellationToken);
-                if (boardingContracts.Count > 0)
-                    await boardingUtxoSyncService.SyncAsync(boardingContracts, cancellationToken);
-            }
+            // Sync existing contracts if linking an existing wallet: boarding (on-chain) drives the
+            // UTXO sync, off-chain (VTXO) scripts drive the indexer poll.
+            var boardingContracts = await contractStorage.GetContracts(
+                walletIds: [walletId!], scope: ContractScope.Onchain, cancellationToken: cancellationToken);
+            var offchainScripts = (await contractStorage.GetContracts(
+                    walletIds: [walletId!], scope: ContractScope.Offchain, cancellationToken: cancellationToken))
+                .Select(c => c.Script).ToHashSet();
+            if (offchainScripts.Count > 0)
+                await vtxoSyncService.PollScriptsForVtxos(offchainScripts, cancellationToken);
+            if (boardingContracts.Count > 0)
+                await boardingUtxoSyncService.SyncAsync(boardingContracts, cancellationToken);
 
             var config = new ArkadePaymentMethodConfig(walletId!, isNew);
             store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], config);
