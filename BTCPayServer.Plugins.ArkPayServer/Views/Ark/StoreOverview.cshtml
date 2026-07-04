@@ -125,6 +125,7 @@
                             <form asp-action="UpdateWalletConfig" method="post" asp-route-storeId="@storeId" class="d-inline">
                                 <button type="submit" name="command" value="toggle-fee-payer"
                                         class="btn btn-sm badge text-primary @(senderPays ? "btn-outline-warning" : "btn-outline-secondary")"
+                                        data-testid="toggle-fee-payer-btn"
                                         title="@(senderPays
                                                    ? "Sender pays the Boltz fee: invoices exceed the requested amount and are rejected by LNURL/checkout (LUD-06) wallets. Click to switch back to Recipient."
                                                    : "Recipient pays the Boltz fee: invoices match the requested amount (LUD-06-safe); you net the amount minus the fee. Click to make the sender pay instead.")">
