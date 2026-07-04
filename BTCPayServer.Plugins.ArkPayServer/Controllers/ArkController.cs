@@ -200,9 +200,9 @@ public class ArkController(
                 
                 var lnConfig = new LightningPaymentMethodConfig()
                 {
-                    ConnectionString = ArkLightningConnectionStringHandler.Build(config.WalletId, storeId),
+                    ConnectionString = $"type=arkade;wallet-id={config.WalletId}",
                 };
-                
+
                 store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[lightningPaymentMethodId], lnConfig);
                 store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[lnurlPaymentMethodId], new LNURLPaymentMethodConfig
                 {
@@ -426,7 +426,7 @@ public class ArkController(
             AllowSubDustAmounts = config.AllowSubDustAmounts,
             BoardingEnabled = config.BoardingEnabled,
             MinBoardingAmountSats = config.MinBoardingAmountSats,
-            ReverseSwapFeePayer = config.ReverseSwapFeePayer,
+            ReverseSwapFeePayer = GetReverseSwapFeePayer(wallet),
             Wallet = wallet?.Secret,
             WalletType = wallet?.WalletType ?? WalletType.SingleKey,
             CanManagePrivateKeys = canManagePrivateKeys,
@@ -1993,23 +1993,13 @@ public class ArkController(
 
         if (command == "toggle-fee-payer")
         {
-            var newFeePayer = config!.ReverseSwapFeePayer == ReverseSwapFeePayer.Recipient
+            var currentWallet = await walletStorage.GetWalletById(config!.WalletId!, cancellationToken);
+            var newFeePayer = GetReverseSwapFeePayer(currentWallet) == ReverseSwapFeePayer.Recipient
                 ? ReverseSwapFeePayer.Sender
                 : ReverseSwapFeePayer.Recipient;
-            var newConfig = config with { ReverseSwapFeePayer = newFeePayer };
-            store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], newConfig);
+            await walletStorage.SetMetadataValue(
+                config.WalletId!, ArkLightningClient.ReverseSwapFeePayerMetadataKey, newFeePayer.ToString(), cancellationToken);
 
-            var lnPaymentMethodId = GetLightningPaymentMethod();
-            var lnConfig = store.GetPaymentMethodConfig<LightningPaymentMethodConfig>(lnPaymentMethodId, paymentMethodHandlerDictionary);
-            if (lnConfig?.ConnectionString is { } cs
-                && cs.Contains("type=arkade", StringComparison.OrdinalIgnoreCase)
-                && !cs.Contains("store-id=", StringComparison.OrdinalIgnoreCase))
-            {
-                lnConfig.ConnectionString = ArkLightningConnectionStringHandler.Build(config!.WalletId, storeId);
-                store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[lnPaymentMethodId], lnConfig);
-            }
-
-            await storeRepository.UpdateStore(store);
             return RedirectWithSuccess(nameof(StoreOverview),
                 newFeePayer == ReverseSwapFeePayer.Sender
                     ? "Reverse-swap fee now paid by the sender — invoices will exceed the requested amount and may be rejected by LNURL/checkout wallets."
@@ -2457,7 +2447,7 @@ public class ArkController(
 
         store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[lightningPaymentMethodId], new LightningPaymentMethodConfig
         {
-            ConnectionString = ArkLightningConnectionStringHandler.Build(config!.WalletId, storeId),
+            ConnectionString = $"type=arkade;wallet-id={config!.WalletId}",
         });
         store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[lnurlPaymentMethodId], new LNURLPaymentMethodConfig
         {
@@ -3078,6 +3068,16 @@ public class ArkController(
     }
 
     #region Helper Methods
+
+    /// <summary>
+    /// Reads the wallet-level Boltz reverse-swap fee payer setting, defaulting to Recipient
+    /// (LUD-06-safe) when unset.
+    /// </summary>
+    private static ReverseSwapFeePayer GetReverseSwapFeePayer(ArkWalletInfo? wallet) =>
+        wallet?.Metadata?.TryGetValue(ArkLightningClient.ReverseSwapFeePayerMetadataKey, out var raw) is true
+            && Enum.TryParse<ReverseSwapFeePayer>(raw, out var feePayer)
+            ? feePayer
+            : ReverseSwapFeePayer.Recipient;
 
     /// <summary>
     /// Checks whether the given wallet ID is referenced by any store's Ark or LN payment method config.

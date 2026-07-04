@@ -23,7 +23,8 @@ public class StoreOverviewViewModel
     public long MinBoardingAmountSats { get; set; }
 
     /// <summary>
-    /// Absorbs the Boltz reverse-swap fee on Lightning receives.
+    /// Who absorbs the Boltz reverse-swap fee on Lightning receives. Wallet-level setting
+    /// (stored in the wallet's metadata), so it follows the wallet even if shared across stores.
     /// </summary>
     public ReverseSwapFeePayer ReverseSwapFeePayer { get; set; }
 

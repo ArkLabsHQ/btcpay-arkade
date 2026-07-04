@@ -1,13 +1,11 @@
 using System.ComponentModel.DataAnnotations;
-using BTCPayServer.Data;
 using BTCPayServer.Lightning;
 using BTCPayServer.Payments.Lightning;
-using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Services.Invoices;
-using BTCPayServer.Services.Stores;
 using Microsoft.Extensions.Logging;
 using NArk.Abstractions.Blockchain;
 using NArk.Abstractions.Contracts;
+using NArk.Abstractions.Wallets;
 using NArk.Core.Contracts;
 using NArk.Core.Services;
 using NArk.Swaps.Abstractions;
@@ -24,26 +22,25 @@ public class ArkLightningClient(
     IClientTransport clientTransport,
     Network network,
     string walletId,
-    string storeId,
     SwapsManagementService swapsManagementService,
     BoltzLimitsValidator boltzLimitsValidator,
     ISwapStorage swapStorage,
     IContractStorage contractStorage,
     ISpendingService spendingService,
     IBitcoinBlockchain chainTimeProvider,
-    StoreRepository storeRepository,
-    PaymentMethodHandlerDictionary paymentMethodHandlerDictionary,
+    IWalletStorage walletStorage,
     ILogger<ArkLightningInvoiceListener> logger) : IExtendedLightningClient
 {
-    private async Task<ReverseSwapFeePayer> ResolveReverseSwapFeePayer()
-    {
-        if (string.IsNullOrEmpty(storeId))
-            return ReverseSwapFeePayer.Recipient;
+    /// <summary>Wallet-level metadata key holding the configured <see cref="ReverseSwapFeePayer"/>.</summary>
+    public const string ReverseSwapFeePayerMetadataKey = "arkade.reverseSwapFeePayer";
 
-        var store = await storeRepository.FindStore(storeId);
-        var config = store?.GetPaymentMethodConfig<ArkadePaymentMethodConfig>(
-            ArkadePlugin.ArkadePaymentMethodId, paymentMethodHandlerDictionary);
-        return config?.WalletId == walletId ? config.ReverseSwapFeePayer : ReverseSwapFeePayer.Recipient;
+    private async Task<ReverseSwapFeePayer> ResolveReverseSwapFeePayer(CancellationToken cancellation)
+    {
+        var wallet = await walletStorage.GetWalletById(walletId, cancellation);
+        return wallet?.Metadata?.TryGetValue(ReverseSwapFeePayerMetadataKey, out var raw) is true
+            && Enum.TryParse<ReverseSwapFeePayer>(raw, out var feePayer)
+            ? feePayer
+            : ReverseSwapFeePayer.Recipient;
     }
 
     /// <summary>
@@ -263,7 +260,7 @@ public class ArkLightningClient(
         }
 
         // Create reverse swap via NNark's SwapsManagementService
-        var feePayer = await ResolveReverseSwapFeePayer();
+        var feePayer = await ResolveReverseSwapFeePayer(cancellation);
         var invoice = await swapsManagementService.InitiateReverseSwap(
             walletId, createInvoiceRequest, feePayer, cancellation);
 
