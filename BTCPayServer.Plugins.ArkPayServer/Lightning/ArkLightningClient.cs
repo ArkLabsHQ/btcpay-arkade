@@ -1,9 +1,11 @@
 using System.ComponentModel.DataAnnotations;
 using BTCPayServer.Lightning;
 using BTCPayServer.Payments.Lightning;
+using BTCPayServer.Services.Invoices;
 using Microsoft.Extensions.Logging;
 using NArk.Abstractions.Blockchain;
 using NArk.Abstractions.Contracts;
+using NArk.Abstractions.Wallets;
 using NArk.Core.Contracts;
 using NArk.Core.Services;
 using NArk.Swaps.Abstractions;
@@ -26,8 +28,21 @@ public class ArkLightningClient(
     IContractStorage contractStorage,
     ISpendingService spendingService,
     IBitcoinBlockchain chainTimeProvider,
+    IWalletStorage walletStorage,
     ILogger<ArkLightningInvoiceListener> logger) : IExtendedLightningClient
 {
+    /// <summary>Wallet-level metadata key holding the configured <see cref="ReverseSwapFeePayer"/>.</summary>
+    public const string ReverseSwapFeePayerMetadataKey = "arkade.reverseSwapFeePayer";
+
+    private async Task<ReverseSwapFeePayer> ResolveReverseSwapFeePayer(CancellationToken cancellation)
+    {
+        var wallet = await walletStorage.GetWalletById(walletId, cancellation);
+        return wallet?.Metadata?.TryGetValue(ReverseSwapFeePayerMetadataKey, out var raw) is true
+            && Enum.TryParse<ReverseSwapFeePayer>(raw, out var feePayer)
+            ? feePayer
+            : ReverseSwapFeePayer.Recipient;
+    }
+
     /// <summary>
     /// Gets swaps with their contracts by fetching swaps first, then contracts separately.
     /// </summary>
@@ -245,7 +260,9 @@ public class ArkLightningClient(
         }
 
         // Create reverse swap via NNark's SwapsManagementService
-        var invoice = await swapsManagementService.InitiateReverseSwap(walletId, createInvoiceRequest, cancellation);
+        var feePayer = await ResolveReverseSwapFeePayer(cancellation);
+        var invoice = await swapsManagementService.InitiateReverseSwap(
+            walletId, createInvoiceRequest, feePayer, cancellation);
 
         // Fetch the created swap from DB to return proper LightningInvoice
         var swapsWithContracts = await GetSwapsWithContractsAsync(
