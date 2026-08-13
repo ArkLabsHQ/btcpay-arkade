@@ -37,8 +37,14 @@ using NArk.Abstractions.VTXOs;
 using NArk.Swaps.Abstractions;
 using NArk.Abstractions.Wallets;
 using NArk.Swaps.Models;
+using NArk.Storage.EfCore.Entities;
 using NArk.Core.Wallet;
+using LNURL;
 using NBitcoin;
+using NBitcoin.DataEncoders;
+using NBitcoin.Scripting;
+using NBitcoin.Secp256k1;
+using ArkIntent = NArk.Abstractions.Intents.ArkIntent;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Controllers;
 
