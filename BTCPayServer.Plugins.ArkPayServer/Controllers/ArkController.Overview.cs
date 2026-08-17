@@ -192,7 +192,6 @@ public partial class ArkController
             AllowSubDustAmounts = config.AllowSubDustAmounts,
             BoardingEnabled = config.BoardingEnabled,
             MinBoardingAmountSats = config.MinBoardingAmountSats,
-            ReverseSwapFeePayer = GetReverseSwapFeePayer(wallet),
             Wallet = wallet?.Secret,
             WalletType = wallet?.WalletType ?? WalletType.SingleKey,
             CanManagePrivateKeys = canManagePrivateKeys,
@@ -330,22 +329,6 @@ public partial class ArkController
             store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], newConfig);
             await storeRepository.UpdateStore(store);
             return RedirectWithSuccess(nameof(StoreOverview), "Boarding disabled.", new { storeId });
-        }
-
-        if (command == "toggle-fee-payer")
-        {
-            var currentWallet = await walletStorage.GetWalletById(config!.WalletId!, cancellationToken);
-            var newFeePayer = GetReverseSwapFeePayer(currentWallet) == ReverseSwapFeePayer.Recipient
-                ? ReverseSwapFeePayer.Sender
-                : ReverseSwapFeePayer.Recipient;
-            await walletStorage.SetMetadataValue(
-                config.WalletId!, ArkLightningClient.ReverseSwapFeePayerMetadataKey, newFeePayer.ToString(), cancellationToken);
-
-            return RedirectWithSuccess(nameof(StoreOverview),
-                newFeePayer == ReverseSwapFeePayer.Sender
-                    ? "Reverse-swap fee now paid by the sender — invoices will exceed the requested amount and may be rejected by LNURL/checkout wallets."
-                    : "Reverse-swap fee now paid by the recipient — invoices match the requested amount (LUD-06-safe).",
-                new { storeId });
         }
 
         return RedirectToAction(nameof(StoreOverview), new { storeId });

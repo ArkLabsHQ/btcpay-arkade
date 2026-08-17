@@ -1,80 +1,73 @@
 using System.Threading.Channels;
 using BTCPayServer.Lightning;
 using Microsoft.Extensions.Logging;
-using NArk.Abstractions.Contracts;
-using NArk.Swaps.Abstractions;
-using NArk.Swaps.Models;
+using NArk.ArkadeIntents;
+using NArk.ArkadeIntents.Models;
 using NBitcoin;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Lightning;
 
+/// <summary>
+/// Tells BTCPay when a Lightning invoice this wallet handed out has actually been received.
+/// </summary>
+/// <remarks>
+/// The signal is the swap reaching <see cref="ArkadeSwapIntentStatus.Fulfilled"/> — the claim spend
+/// landing on Arkade — and not the payer's payment, which on this corridor happens first and settles
+/// nothing on its own. The solver mints a hold invoice, funds Arkade against it, and only our claim
+/// publishes the preimage that releases the payer's HTLC. An earlier signal would mark an order paid
+/// while the money still sat in a covenant with a closing window.
+/// </remarks>
 public class ArkLightningInvoiceListener : ILightningInvoiceListener
 {
     private readonly string _walletId;
     private readonly ILogger<ArkLightningInvoiceListener> _logger;
     private readonly Network _network;
     private readonly CancellationToken _cancellationToken;
-    private readonly ISwapStorage _swapStorage;
-    private readonly IContractStorage _contractStorage;
-    private readonly Func<ArkSwap, ArkContractEntity?, Network, LightningInvoice> _mapFunc;
+    private readonly IArkadeIntentStorage _intentStorage;
 
     private readonly Channel<LightningInvoice> _paidInvoicesChannel = Channel.CreateUnbounded<LightningInvoice>();
 
     public ArkLightningInvoiceListener(
         string walletId,
         ILogger<ArkLightningInvoiceListener> logger,
-        ISwapStorage swapStorage,
-        IContractStorage contractStorage,
+        IArkadeIntentStorage intentStorage,
         Network network,
-        Func<ArkSwap, ArkContractEntity?, Network, LightningInvoice> mapFunc,
         CancellationToken cancellationToken)
     {
         _walletId = walletId;
         _logger = logger;
         _network = network;
         _cancellationToken = cancellationToken;
-        _swapStorage = swapStorage;
-        _contractStorage = contractStorage;
-        _mapFunc = mapFunc;
+        _intentStorage = intentStorage;
 
-        // Subscribe to NNark's swap storage events directly
-        _swapStorage.SwapsChanged += OnSwapChanged;
+        _intentStorage.SwapsChanged += OnSwapChanged;
     }
 
-    private async void OnSwapChanged(object? sender, ArkSwap swap)
+    private void OnSwapChanged(object? sender, ArkadeSwapIntent intent)
     {
         try
         {
-            // Only process swaps for this wallet that are settled (reverse swaps = receiving)
-            if (swap.WalletId != _walletId)
+            if (intent.WalletId != _walletId)
                 return;
 
-            if (swap.Status != ArkSwapStatus.Settled)
+            if (intent.Type != ArkadeSwapIntentType.LightningToBtc)
                 return;
 
-            if (swap.SwapType != ArkSwapType.ReverseSubmarine)
+            if (intent.Status != ArkadeSwapIntentStatus.Fulfilled)
                 return;
 
-            // Fetch the contract data for mapping
-            ArkContractEntity? contract = null;
-            if (!string.IsNullOrEmpty(swap.ContractScript))
-            {
-                var contracts = await _contractStorage.GetContracts(
-                    walletIds: [_walletId],
-                    scripts: [swap.ContractScript],
-                    cancellationToken: _cancellationToken);
-                contract = contracts.FirstOrDefault();
-            }
-
-            var invoice = _mapFunc(swap, contract, _network);
-            if (invoice.Status != LightningInvoiceStatus.Paid)
+            // Mapped rather than trusted: the same status rule that decides an invoice is paid lives
+            // in one place, so this cannot drift into announcing a payment BTCPay would not agree is
+            // one. A swap without an invoice is not one we handed out.
+            if (ArkadeIntentLightningMapper.ToInvoice(intent, _network) is not
+                { Status: LightningInvoiceStatus.Paid } invoice)
                 return;
 
-            await _paidInvoicesChannel.Writer.WriteAsync(invoice, _cancellationToken);
+            _paidInvoicesChannel.Writer.TryWrite(invoice);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error processing swap change for {SwapId}", swap.SwapId);
+            _logger.LogError(ex, "Error processing Arkade swap change for {SwapId}", intent.Id);
         }
     }
 
@@ -84,7 +77,6 @@ public class ArkLightningInvoiceListener : ILightningInvoiceListener
 
         try
         {
-            // Wait for a paid invoice from the channel
             while (await _paidInvoicesChannel.Reader.WaitToReadAsync(combinedCts.Token))
             {
                 if (await _paidInvoicesChannel.Reader.ReadAsync(combinedCts.Token) is { } invoice)
@@ -104,9 +96,10 @@ public class ArkLightningInvoiceListener : ILightningInvoiceListener
 
         return new LightningInvoice();
     }
+
     public void Dispose()
     {
-        _swapStorage.SwapsChanged -= OnSwapChanged;
+        _intentStorage.SwapsChanged -= OnSwapChanged;
         _paidInvoicesChannel.Writer.Complete();
     }
 }

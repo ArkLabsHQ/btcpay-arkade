@@ -359,16 +359,6 @@ public partial class ArkController(
 
 
     /// <summary>
-    /// Reads the wallet-level Boltz reverse-swap fee payer setting, defaulting to Recipient
-    /// (LUD-06-safe) when unset.
-    /// </summary>
-    private static ReverseSwapFeePayer GetReverseSwapFeePayer(ArkWalletInfo? wallet) =>
-        wallet?.Metadata?.TryGetValue(ArkLightningClient.ReverseSwapFeePayerMetadataKey, out var raw) is true
-            && Enum.TryParse<ReverseSwapFeePayer>(raw, out var feePayer)
-            ? feePayer
-            : ReverseSwapFeePayer.Recipient;
-
-    /// <summary>
     /// Checks whether the given wallet ID is referenced by any store's Ark or LN payment method config.
     /// </summary>
     private async Task<bool> IsWalletUsedByAnyStore(string walletId, string? excludeStoreId = null)

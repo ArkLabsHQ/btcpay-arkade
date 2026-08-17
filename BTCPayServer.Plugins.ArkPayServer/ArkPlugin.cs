@@ -21,6 +21,8 @@ using NArk.Abstractions.Blockchain;
 using NArk.Abstractions.Intents;
 using NArk.Abstractions.Safety;
 using NArk.Abstractions.Wallets;
+using NArk.Arkade.Hosting;
+using NArk.ArkadeIntents.Hosting;
 using NArk.Blockchain;
 using NArk.Hosting;
 using NArk.Core.Models.Options;
@@ -75,8 +77,11 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         // UI extensions
         RegisterUIExtensions(services);
 
-        // Boltz swap services (optional)
-        RegisterBoltzServices(services, networkConfig);
+        // The Arkade intent corridors — how this plugin does Lightning.
+        RegisterArkadeIntentServices(services, pluginServices);
+
+        // Pre-ArkadeIntents Boltz swaps, kept resolvable so their history stays readable.
+        RegisterLegacySwapServices(services, networkConfig);
     }
 
     #region Service Registration
@@ -331,23 +336,61 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         services.AddUIExtension("dashboard", "/Views/Ark/ArkActivityDashboardWidget.cshtml");
     }
 
-    private static void RegisterBoltzServices(IServiceCollection services, ArkNetworkConfig networkConfig)
+    /// <summary>
+    /// Wires the Arkade intent corridors: the covenant emulator, the intent services, and the
+    /// solver this deployment trades with.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The emulator gates everything. Its key is one of the parameters both corridors' lockup
+    /// scripts commit to, so without an endpoint there is no address to derive and the intent
+    /// services would resolve an <c>IEmulatorProvider</c> that does not exist. A missing solver is
+    /// milder — the corridors register and refuse at the point of use, which is where an operator
+    /// can actually read the reason.
+    /// </para>
+    /// <para>
+    /// Registered unconditionally otherwise, including the LNURL filter: it needs to run precisely
+    /// when the corridors are unavailable, to stop handing out an LNURL nothing can settle.
+    /// </para>
+    /// </remarks>
+    private static void RegisterArkadeIntentServices(
+        IServiceCollection services, PluginServiceCollection pluginServices)
+    {
+        var solverOptions = GetSolverOptions(pluginServices);
+        services.AddSingleton(solverOptions);
+        services.AddSingleton<ArkadeSolverService>();
+
+        services.AddSingleton<ArkadeLNURLPayRequestFilter>();
+        services.AddSingleton<IPluginHookFilter>(sp => sp.GetRequiredService<ArkadeLNURLPayRequestFilter>());
+
+        // The "Use Arkade" option on BTCPay's Lightning setup screen. Previously gated on Boltz being
+        // configured, which made the option vanish rather than explain itself; a store that picks it
+        // without a solver now gets a validation error naming what is missing.
+        services.AddUIExtension("ln-payment-method-setup-tabhead", "/Views/Ark/ArkLNSetupTabhead.cshtml");
+
+        if (!solverOptions.HasEmulator) return;
+
+        services.AddArkadeEmulator(o => o.ServerUrl = solverOptions.EmulatorUri!);
+        services.AddArkadeIntentsServices();
+    }
+
+    /// <summary>
+    /// Registers the pre-ArkadeIntents Boltz swap services.
+    /// </summary>
+    /// <remarks>
+    /// Nothing creates a Boltz swap any more — the Lightning client negotiates with an Arkade solver
+    /// instead. This stays for the swaps that already exist: their rows are still rendered on the
+    /// swaps and contracts pages, and <c>VHTLCContractTransformer</c> is what keeps a VHTLC from a
+    /// pre-migration swap spendable, so dropping it would strand any in-flight refund. The same call
+    /// also provides wallet recovery and the swap sweep policy, neither of which is Boltz-specific.
+    /// </remarks>
+    private static void RegisterLegacySwapServices(IServiceCollection services, ArkNetworkConfig networkConfig)
     {
         if (!string.IsNullOrWhiteSpace(networkConfig.BoltzUri))
         {
             services.AddHttpClient<BoltzClient>();
             services.AddHttpClient<CachedBoltzClient>();
             services.AddArkSwapServices();
-
-            // Tag every Boltz swap-creation request with the BTCPay-Arkade
-            // referral so Boltz can credit the integration. Mirrors the
-            // wallet-side `arkade-money` referral added in arkade-os/wallet#606.
-            services.Configure<NArk.Swaps.Boltz.Models.BoltzClientOptions>(o => o.ReferralId = "btcpay-arkade");
-
-            services.AddUIExtension("ln-payment-method-setup-tabhead", "/Views/Ark/ArkLNSetupTabhead.cshtml");
-
-            services.AddSingleton<ArkadeLNURLPayRequestFilter>();
-            services.AddSingleton<IPluginHookFilter>(sp => sp.GetRequiredService<ArkadeLNURLPayRequestFilter>());
         }
         else
         {
@@ -399,6 +442,31 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
             ElectrumWsUri: !string.IsNullOrEmpty(fileConfig?.ElectrumWsUri) ? fileConfig.ElectrumWsUri : preset.ElectrumWsUri,
             ElectrumTcpUri: !string.IsNullOrEmpty(fileConfig?.ElectrumTcpUri) ? fileConfig.ElectrumTcpUri : preset.ElectrumTcpUri
         );
+    }
+
+    /// <summary>
+    /// Reads the Arkade intent corridors' endpoints from the same <c>ark.json</c> as the network
+    /// config, falling back to whatever the network's preset knows.
+    /// </summary>
+    /// <remarks>
+    /// A second deserialisation of one file rather than one deserialisation of a merged type: the
+    /// network config is <c>ArkNetworkConfig</c>, which lives in the SDK, and these keys are the
+    /// plugin's own. Reading them separately keeps them out of a type this repo does not own.
+    /// A malformed file is not fatal here — it already failed the network parse above, and throwing
+    /// twice for one typo tells an operator nothing new.
+    /// </remarks>
+    private static ArkadeSolverOptions GetSolverOptions(PluginServiceCollection pluginServices)
+    {
+        var configuration = pluginServices.BootstrapServices.GetRequiredService<IConfiguration>();
+        var networkType = DefaultConfiguration.GetNetworkType(configuration);
+        var preset = ArkadeSolverOptions.ForNetwork(networkType);
+
+        var dataDir = new DataDirectories().Configure(configuration).DataDir;
+        var configPath = Path.Combine(dataDir, "ark.json");
+        if (!File.Exists(configPath)) return preset;
+
+        var fileOptions = JsonSerializer.Deserialize<ArkadeSolverOptions>(File.ReadAllText(configPath));
+        return ArkadeSolverOptions.Merge(preset, fileOptions);
     }
 
     private static ArkNetworkConfig? GetNetworkPreset(ChainName networkType)

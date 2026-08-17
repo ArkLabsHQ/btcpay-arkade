@@ -5,65 +5,39 @@ using BTCPayServer.Plugins.ArkPayServer.Lightning;
 namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 
 /// <summary>
-/// Plugin hook filter that validates Boltz limits for LNURL requests when Arkade Lightning is enabled
+/// Withdraws LNURL-pay from a store whose Arkade Lightning has nothing to settle with.
 /// </summary>
+/// <remarks>
+/// <para>
+/// LNURL is a standing offer to be paid any amount within a range, which makes an unsettleable
+/// corridor worse here than elsewhere: the payer picks the amount and pays before anything of ours
+/// gets a say, so a corridor that cannot fill leaves them holding a payment nothing will honour.
+/// Withdrawing the offer is the only honest answer.
+/// </para>
+/// <para>
+/// It no longer narrows the range. The Boltz integration this replaced clamped
+/// <c>MinSendable</c>/<c>MaxSendable</c> to published swap limits; an Arkade solver's limits come
+/// back with a quote, so there is nothing to clamp to until a negotiation is already open. An amount
+/// outside the solver's terms is refused at quoting time with its own reason, rather than silently
+/// excluded from a range computed earlier.
+/// </para>
+/// </remarks>
 public class ArkadeLNURLPayRequestFilter(
-    ArkadeLightningLimitsService limitsService
+    ArkadeLightningLimitsService limitsService,
+    ArkadeSolverService solver
 ) : PluginHookFilter<StoreLNURLPayRequest>
 {
     public override string Hook => "modify-lnurlp-request";
 
-    public override async Task<StoreLNURLPayRequest> Execute(StoreLNURLPayRequest request)
+    public override Task<StoreLNURLPayRequest> Execute(StoreLNURLPayRequest request)
     {
         if (request?.Tag != "payRequest" || request.Store == null)
-            return request;
+            return Task.FromResult(request);
 
-        // Check if Arkade Lightning is enabled for this store
+        // Not using Arkade Lightning, so this store's LNURL is somebody else's problem.
         if (!limitsService.IsStoreUsingArkadeLightning(request.Store))
-        {
-            // Not using Arkade Lightning, don't modify limits
-            return request;
-        }
-        
-        // Get Boltz limits for this store
-        var boltzLimits = await limitsService.GetLimitsForStoreAsync(request.Store, CancellationToken.None);
-        if (boltzLimits == null)
-        {
-            // Boltz unavailable - disable LNURL since we can't fulfill Lightning payments
-            return null;
-        }
+            return Task.FromResult(request);
 
-        // Apply Boltz limits to the LNURL request
-        // MinSendable and MaxSendable are in millisatoshis
-        var boltzMinMsat = boltzLimits.ReverseMinAmount * 1000L;
-        var boltzMaxMsat = boltzLimits.ReverseMaxAmount * 1000L;
-
-        // Constrain the LNURL limits to Boltz limits
-        if (request.MinSendable is not null)
-        {
-            request.MinSendable = Math.Max(request.MinSendable, boltzMinMsat);
-        }
-        else
-        {
-            request.MinSendable = boltzMinMsat;
-        }
-
-        if (request.MaxSendable is not null)
-        {
-            request.MaxSendable = Math.Min(request.MaxSendable, boltzMaxMsat);
-        }
-        else
-        {
-            request.MaxSendable = boltzMaxMsat;
-        }
-
-        // If min > max after applying constraints, the request is invalid
-        if (request.MinSendable > request.MaxSendable)
-        {
-            // Return null or throw to indicate LNURL should not be available
-            return null;
-        }
-
-        return request;
+        return Task.FromResult(solver.IsConfigured ? request : null);
     }
 }

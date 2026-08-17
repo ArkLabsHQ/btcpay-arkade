@@ -5,17 +5,31 @@ using BTCPayServer.Payments.Lightning;
 using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Stores;
 using Microsoft.Extensions.Caching.Memory;
-using NArk.Swaps.Boltz;
 using NBXplorer;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Lightning;
 
 /// <summary>
-/// Service that determines if a store uses Arkade Lightning and validates amounts against Boltz limits
+/// Decides whether a store can be offered Lightning at all.
 /// </summary>
+/// <remarks>
+/// <para>
+/// Two questions, and only the second is interesting. Whether a store is on Arkade Lightning is
+/// read from its connection string; whether Arkade Lightning can currently settle anything is
+/// whether a solver is configured to settle it with.
+/// </para>
+/// <para>
+/// It deliberately does not pre-check the amount. The Boltz integration this replaced could, because
+/// Boltz published its limits as an endpoint; an Arkade solver's terms are per-quote, and the only
+/// way to learn them is to open a negotiation — far too expensive to do while rendering a checkout
+/// page, and stale by the time the customer pays. An amount a solver will not take is refused at the
+/// point of quoting, with the solver's own reason attached, which is a better error than a guess made
+/// minutes earlier.
+/// </para>
+/// </remarks>
 public class ArkadeLightningLimitsService : IDisposable
 {
-    private readonly BoltzLimitsValidator? _boltzLimitsValidator;
+    private readonly ArkadeSolverService _solver;
     private readonly PaymentMethodHandlerDictionary _paymentMethodHandlerDictionary;
     private readonly IMemoryCache _memoryCache;
     private readonly StoreRepository _storeRepository;
@@ -28,9 +42,9 @@ public class ArkadeLightningLimitsService : IDisposable
         EventAggregator eventAggregator,
         IMemoryCache memoryCache,
         StoreRepository storeRepository,
-        BoltzLimitsValidator? boltzLimitsValidator = null)
+        ArkadeSolverService solver)
     {
-        _boltzLimitsValidator = boltzLimitsValidator;
+        _solver = solver;
         _paymentMethodHandlerDictionary = paymentMethodHandlerDictionary;
         _memoryCache = memoryCache;
         _storeRepository = storeRepository;
@@ -74,13 +88,13 @@ public class ArkadeLightningLimitsService : IDisposable
     /// <param name="amountSats">Amount in satoshis (0 for top-up invoices)</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>True if Lightning should be included, false otherwise</returns>
-    public async Task<bool> CanSupportLightningAsync(string storeId, long amountSats,
+    public Task<bool> CanSupportLightningAsync(string storeId, long amountSats,
         CancellationToken cancellationToken = default)
     {
         // Allow top-up invoices (amount = 0)
         if (amountSats == 0)
-            return true;
-        
+            return Task.FromResult(true);
+
         // Check cache first to see if store uses Arkade Lightning
         var isArkade = _memoryCache.GetOrCreate<bool?>(GetStoreCacheKey(storeId), entry =>
         {
@@ -103,26 +117,12 @@ public class ArkadeLightningLimitsService : IDisposable
         // If store doesn't use Arkade Lightning, always allow Lightning
         if (isArkade != true)
         {
-            return true;
+            return Task.FromResult(true);
         }
 
-        // If BoltzLimitsValidator is not available, disallow Lightning for Arkade stores
-        if (_boltzLimitsValidator == null)
-        {
-            return false;
-        }
-
-        // Validate against Boltz limits
-        try
-        {
-            var (isValid, _) = await _boltzLimitsValidator.ValidateAmountAsync(amountSats, isReverse: true, cancellationToken);
-            return isValid;
-        }
-        catch (Exception)
-        {
-            // If we can't validate (e.g., Boltz unavailable), be conservative and disallow
-            return false;
-        }
+        // No solver means nothing can settle a Lightning payment for this store, so offering the
+        // method would hand the customer an invoice that cannot be fulfilled.
+        return Task.FromResult(_solver.IsConfigured);
     }
 
     /// <summary>
@@ -132,62 +132,19 @@ public class ArkadeLightningLimitsService : IDisposable
     /// <param name="amountSats">Amount in satoshis (0 for top-up invoices)</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>True if Lightning should be included, false otherwise</returns>
-    public async Task<bool> CanSupportLightningAsync(StoreData? store, long amountSats, CancellationToken cancellationToken = default)
+    public Task<bool> CanSupportLightningAsync(StoreData? store, long amountSats, CancellationToken cancellationToken = default)
     {
         // Allow top-up invoices (amount = 0)
         if (amountSats == 0)
-            return true;
+            return Task.FromResult(true);
 
         // If store doesn't use Arkade Lightning, always allow Lightning
         if (store == null || !IsStoreUsingArkadeLightning(store))
         {
-            return true;
+            return Task.FromResult(true);
         }
 
-        // If BoltzLimitsValidator is not available, disallow Lightning for Arkade stores
-        // since we can't fulfill Lightning payments without Boltz
-        if (_boltzLimitsValidator == null)
-        {
-            return false;
-        }
-
-        // Validate against Boltz limits
-        try
-        {
-            var (isValid, _) = await _boltzLimitsValidator.ValidateAmountAsync(amountSats, isReverse: true, cancellationToken);
-            return isValid;
-        }
-        catch (Exception)
-        {
-            // If we can't validate (e.g., Boltz unavailable), be conservative and disallow
-            // This prevents creating invoices that can't be fulfilled
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Gets Boltz limits if the store uses Arkade Lightning, otherwise returns null
-    /// </summary>
-    public async Task<BoltzAllLimits?> GetLimitsForStoreAsync(StoreData? store, CancellationToken cancellationToken = default)
-    {
-        if (store == null || !IsStoreUsingArkadeLightning(store))
-        {
-            return null;
-        }
-
-        if (_boltzLimitsValidator == null)
-        {
-            return null;
-        }
-
-        try
-        {
-            return await _boltzLimitsValidator.GetAllLimitsAsync(cancellationToken);
-        }
-        catch (Exception)
-        {
-            return null;
-        }
+        return Task.FromResult(_solver.IsConfigured);
     }
 
     /// <summary>
