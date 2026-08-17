@@ -1,4 +1,3 @@
-using BTCPayServer;
 using BTCPayServer.Abstractions.Constants;
 using BTCPayServer.Abstractions.Extensions;
 using BTCPayServer.Client;
@@ -13,7 +12,6 @@ using BTCPayServer.Plugins.ArkPayServer.Models.Api;
 using BTCPayServer.Plugins.ArkPayServer.Models.Api.Greenfield;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Services;
-using BTCPayServer.Security;
 using BTCPayServer.Services.Invoices;
 using BTCPayServer.Services.Stores;
 using LNURL;
@@ -69,7 +67,7 @@ public class ArkGreenfieldController(
     IIntentStorage intentStorage,
     BoardingUtxoSyncService boardingUtxoSyncService,
     IHttpClientFactory httpClientFactory,
-    BoltzLimitsValidator? boltzLimitsValidator) : ControllerBase
+    ArkadeSolverService arkadeSolver) : ControllerBase
 {
     private string? CurrentStoreId => HttpContext.GetStoreData()?.Id;
 
@@ -480,27 +478,22 @@ public class ArkGreenfieldController(
                 var dest = request.Outputs[0].Destination?.Trim() ?? string.Empty;
                 if (ArkSpendHelpers.IsLightningDestination(dest))
                 {
-                    if (boltzLimitsValidator == null)
-                        return this.CreateAPIError(503, "boltz-not-configured",
-                            "Lightning swaps are not available: Boltz integration is not configured.");
-
-                    var limits = await boltzLimitsValidator.GetAllLimitsAsync(cancellationToken);
-                    if (limits == null)
-                        return this.CreateAPIError(503, "boltz-unavailable",
-                            "Boltz instance does not support Ark.");
+                    if (!arkadeSolver.IsConfigured)
+                        return this.CreateAPIError(503, "solver-not-configured",
+                            "Lightning swaps are not available: no Arkade swap solver is configured.");
 
                     var amountSats = request.Outputs[0].AmountSats ?? 0L;
                     if (amountSats <= 0)
                         return this.CreateAPIError("missing-amount",
                             "amountSats is required when estimating a Lightning fee.");
 
+                    // Reported without a figure, deliberately. A corridor's fee is the spread in the
+                    // solver's quote, and obtaining one means opening a negotiation the caller has
+                    // not asked to open. An estimate not derived from a quote would be a number this
+                    // API invented, which is worse for a caller deciding whether to send than an
+                    // acknowledged absence.
                     response.IsLightning = true;
-                    response.FeePercentage = limits.SubmarineFeePercentage * 100m;
-                    response.MinerFeeSats = limits.SubmarineMinerFee;
-                    response.EstimatedFeeSats =
-                        (long)Math.Ceiling(amountSats * limits.SubmarineFeePercentage) + limits.SubmarineMinerFee;
-                    response.FeeDescription =
-                        $"{limits.SubmarineFeePercentage * 100m:F2}% + {limits.SubmarineMinerFee} sats miner fee";
+                    response.FeeDescription = "Swap fee quoted by the solver at send time";
                     return Ok(response);
                 }
             }
@@ -741,16 +734,9 @@ public class ArkGreenfieldController(
             result.LnurlMinSats = (long)info.MinSendable.ToUnit(LightMoneyUnit.Satoshi);
             result.LnurlMaxSats = (long)info.MaxSendable.ToUnit(LightMoneyUnit.Satoshi);
 
-            // Intersect with Boltz submarine swap limits when available.
-            if (boltzLimitsValidator != null)
-            {
-                var limits = await boltzLimitsValidator.GetAllLimitsAsync(cancellationToken);
-                if (limits != null)
-                {
-                    result.LnurlMinSats = Math.Max(result.LnurlMinSats, limits.SubmarineMinAmount);
-                    result.LnurlMaxSats = Math.Min(result.LnurlMaxSats, limits.SubmarineMaxAmount);
-                }
-            }
+            // The LNURL endpoint's own range stands unnarrowed: an Arkade solver quotes its terms per
+            // request, so an amount it will not take is refused at quoting time with its own reason
+            // rather than excluded from a range computed in advance.
 
             result.AmountSats = amountBtc.HasValue ? (long)(amountBtc.Value * 100_000_000m) : 0L;
             result.IsValid = true;
@@ -1139,29 +1125,19 @@ public class ArkGreenfieldController(
             };
         }
 
-        // Check Boltz
-        if (boltzLimitsValidator != null)
+        // The Arkade swap solver. Nothing is dialled: both sides of the RFQ transport dial out and
+        // neither listens, so IsConnected reports that a solver is configured to reach, which is the
+        // strongest claim available without opening a negotiation to answer a status call.
+        status.Solver = new ArkServiceConnectionData
         {
-            try
-            {
-                var limits = await boltzLimitsValidator.GetAllLimitsAsync(cancellationToken);
-                status.Boltz = new ArkServiceConnectionData
-                {
-                    Url = arkNetworkConfig.BoltzUri,
-                    IsConnected = limits != null,
-                    Error = limits == null ? "Boltz instance does not support Ark" : null
-                };
-            }
-            catch (Exception ex)
-            {
-                status.Boltz = new ArkServiceConnectionData
-                {
-                    Url = arkNetworkConfig.BoltzUri,
-                    IsConnected = false,
-                    Error = ex.Message
-                };
-            }
-        }
+            Url = arkadeSolver.RelayUri,
+            IsConnected = arkadeSolver.IsConfigured,
+            Error = arkadeSolver.IsConfigured
+                ? arkadeSolver.CanReceive
+                    ? null
+                    : "Send only: receiving over Lightning needs a claim daemon ('covclaimd')."
+                : "No Arkade swap solver is configured ('solver-relay' and 'solver-pubkey')."
+        };
 
         // Blockchain info
         try
@@ -1183,49 +1159,36 @@ public class ArkGreenfieldController(
 
     #endregion
 
-    #region Boltz Limits
+    #region Lightning corridors
 
     /// <summary>
-    /// Get Boltz swap limits and fees.
+    /// Report the Arkade swap solver this store's Lightning corridors run through.
     /// </summary>
-    [HttpGet("~/api/v1/stores/{storeId}/arkade/boltz-limits")]
+    /// <remarks>
+    /// This replaces the <c>boltz-limits</c> endpoint and does not carry limits, because there are
+    /// none to publish: an Arkade solver quotes its terms per request over RFQ, so the only way to
+    /// state a minimum, a maximum or a fee would be to open a negotiation on behalf of a caller that
+    /// asked a read-only question. What a caller can act on is whether a corridor exists at all and
+    /// in which directions, which is what this returns.
+    /// </remarks>
+    [HttpGet("~/api/v1/stores/{storeId}/arkade/lightning-solver")]
     [Authorize(Policy = Policies.CanViewStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Greenfield)]
-    public async Task<IActionResult> GetBoltzLimits(string storeId, CancellationToken cancellationToken)
+    public IActionResult GetLightningSolver(string storeId)
     {
         var (_, error) = GetStoreConfig();
         if (error != null) return error;
 
-        if (boltzLimitsValidator == null)
-            return this.CreateAPIError(404, "boltz-not-configured", "Boltz integration is not configured.");
+        if (!arkadeSolver.IsConfigured)
+            return this.CreateAPIError(404, "solver-not-configured",
+                "No Arkade swap solver is configured. Set 'solver-relay' and 'solver-pubkey' in ark.json.");
 
-        try
+        return Ok(new ArkLightningSolverData
         {
-            var limits = await boltzLimitsValidator.GetAllLimitsAsync(cancellationToken);
-            if (limits == null)
-                return this.CreateAPIError(503, "boltz-unavailable", "Boltz instance does not support Ark.");
-
-            return Ok(new ArkBoltzLimitsData
-            {
-                Submarine = new ArkSwapLimitData
-                {
-                    MinAmountSats = limits.SubmarineMinAmount,
-                    MaxAmountSats = limits.SubmarineMaxAmount,
-                    FeePercentage = limits.SubmarineFeePercentage,
-                    MinerFeeSats = limits.SubmarineMinerFee
-                },
-                Reverse = new ArkSwapLimitData
-                {
-                    MinAmountSats = limits.ReverseMinAmount,
-                    MaxAmountSats = limits.ReverseMaxAmount,
-                    FeePercentage = limits.ReverseFeePercentage,
-                    MinerFeeSats = limits.ReverseMinerFee
-                }
-            });
-        }
-        catch (Exception ex)
-        {
-            return this.CreateAPIError(503, "boltz-unavailable", $"Cannot reach Boltz: {ex.Message}");
-        }
+            RelayUri = arkadeSolver.RelayUri,
+            SolverPubkey = arkadeSolver.SolverPubkey,
+            CanSend = true,
+            CanReceive = arkadeSolver.CanReceive
+        });
     }
 
     #endregion
