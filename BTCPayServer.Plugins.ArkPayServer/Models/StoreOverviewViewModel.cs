@@ -48,21 +48,23 @@ public class StoreOverviewViewModel
     public bool ArkOperatorConnected { get; set; }
     public string? ArkOperatorError { get; set; }
     
-    public string? BoltzUrl { get; set; }
-    public bool BoltzConnected { get; set; }
-    public string? BoltzError { get; set; }
-    
-    // Boltz limits for Lightning - Reverse Swap (Receiving Lightning)
-    public long? BoltzReverseMinAmount { get; set; }
-    public long? BoltzReverseMaxAmount { get; set; }
-    public decimal? BoltzReverseFeePercentage { get; set; }
-    public long? BoltzReverseMinerFee { get; set; }
-    
-    // Boltz limits for Lightning - Submarine Swap (Sending Lightning)
-    public long? BoltzSubmarineMinAmount { get; set; }
-    public long? BoltzSubmarineMaxAmount { get; set; }
-    public decimal? BoltzSubmarineFeePercentage { get; set; }
-    public long? BoltzSubmarineMinerFee { get; set; }
+    /// <summary>The relay the Arkade swap solver is reached on, when one is configured.</summary>
+    public string? SolverRelayUrl { get; set; }
+
+    /// <summary>The solver's x-only public key, hex — its identity on the relay.</summary>
+    public string? SolverPubkey { get; set; }
+
+    /// <summary>Whether both halves needed to reach a solver are configured.</summary>
+    /// <remarks>
+    /// Configured, not connected — and the distinction is worth keeping in the name. Both sides of
+    /// this transport dial out and neither listens, so there is nothing to ping: the first evidence a
+    /// solver is actually there is a quote coming back. Reporting "connected" from a relay URL being
+    /// present would be reporting something nobody checked.
+    /// </remarks>
+    public bool SolverConfigured { get; set; }
+
+    /// <summary>Whether receiving over Lightning is possible, which additionally needs a claim daemon.</summary>
+    public bool SolverCanReceive { get; set; }
 
     // VTXOs for the overview (recent unspent)
     public IReadOnlyCollection<ArkVtxo> RecentVtxos { get; set; } = [];

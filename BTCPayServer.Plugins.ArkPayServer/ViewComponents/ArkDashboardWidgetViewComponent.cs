@@ -1,6 +1,7 @@
 using BTCPayServer.Data;
 using BTCPayServer.Models.StoreViewModels;
 using BTCPayServer.Plugins.ArkPayServer.Controllers;
+using BTCPayServer.Plugins.ArkPayServer.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.Models;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Services.Invoices;
@@ -13,8 +14,6 @@ using NArk.Core.Contracts;
 using NArk.Core.Transport;
 using NArk.Hosting;
 using NBitcoin.Scripting;
-using NArk.Swaps.Boltz;
-using NArk.Swaps.Boltz.Client;
 
 namespace BTCPayServer.Plugins.ArkPayServer.ViewComponents;
 
@@ -27,8 +26,7 @@ public class ArkDashboardWidgetViewComponent(
     IVtxoStorage vtxoStorage,
     IIntentStorage intentStorage,
     IWalletStorage walletStorage,
-    BoltzClient? boltzClient = null,
-    BoltzLimitsValidator? boltzLimitsValidator = null) : ViewComponent
+    ArkadeSolverService arkadeSolver) : ViewComponent
 {
     public async Task<IViewComponentResult> InvokeAsync(StoreDashboardViewModel dashboardModel)
     {
@@ -132,24 +130,13 @@ public class ArkDashboardWidgetViewComponent(
                 }
             }
 
-            // Get Boltz connection status
-            if (boltzClient != null)
-            {
-                model.BoltzUrl = arkNetworkConfig.BoltzUri;
-                try
-                {
-                    if (boltzLimitsValidator != null)
-                    {
-                        var limits = await boltzLimitsValidator.GetAllLimitsAsync();
-                        model.BoltzConnected = limits != null;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    model.BoltzConnected = false;
-                    model.BoltzError = ex.Message;
-                }
-            }
+            // The Arkade swap solver. Nothing is dialled to report this: both sides of the RFQ
+            // transport dial out and neither listens, so "configured" is the strongest claim
+            // available without opening a negotiation on a dashboard render.
+            model.SolverRelayUrl = arkadeSolver.RelayUri;
+            model.SolverPubkey = arkadeSolver.SolverPubkey;
+            model.SolverConfigured = arkadeSolver.IsConfigured;
+            model.SolverCanReceive = arkadeSolver.CanReceive;
 
             return View(model);
         }

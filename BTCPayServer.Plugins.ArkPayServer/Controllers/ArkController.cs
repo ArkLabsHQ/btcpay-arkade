@@ -37,22 +37,16 @@ using NArk.Abstractions.VTXOs;
 using NArk.Swaps.Abstractions;
 using NArk.Abstractions.Wallets;
 using NArk.Swaps.Models;
-using NArk.Storage.EfCore.Entities;
 using NArk.Core.Wallet;
-using LNURL;
 using NBitcoin;
-using NBitcoin.DataEncoders;
-using NBitcoin.Scripting;
-using NBitcoin.Secp256k1;
-using ArkIntent = NArk.Abstractions.Intents.ArkIntent;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Controllers;
 
 [Route("plugins/ark")]
 [Authorize(AuthenticationSchemes = AuthenticationSchemes.Cookie)]
 public partial class ArkController(
-    BoltzLimitsValidator? boltzLimitsValidator,
     BoltzClient? boltzClient,
+    ArkadeSolverService arkadeSolver,
     ArkNetworkConfig arkNetworkConfig,
     ArkLightningSpendKeyService spendKeyService,
     IAuthorizationService authorizationService,
@@ -190,16 +184,7 @@ public partial class ArkController(
             }
         });
     }
-
-
-
-
-
-
-
-
-
-
+    
     private bool IsArkadeLightningEnabled()
     {
         var store = HttpContext.GetStoreData();
@@ -480,23 +465,4 @@ public partial class ArkController(
         return filters.Length == 1 ? filters[0] == trueValue : null;
     }
 
-    /// <summary>
-    /// Gets Boltz connection status and cached limits.
-    /// </summary>
-    private async Task<(bool connected, string? error, BoltzAllLimits? limits)> GetBoltzConnectionStatusAsync(
-        CancellationToken cancellationToken)
-    {
-        if (boltzLimitsValidator == null)
-            return (false, null, null);
-
-        try
-        {
-            var limits = await boltzLimitsValidator.GetAllLimitsAsync(cancellationToken);
-            return (limits != null, limits == null ? "Boltz instance does not support Arkade" : null, limits);
-        }
-        catch (Exception ex)
-        {
-            return (false, ex.Message, null);
-        }
-    }
 }

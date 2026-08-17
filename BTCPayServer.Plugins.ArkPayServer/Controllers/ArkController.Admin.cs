@@ -1,55 +1,12 @@
 using BTCPayServer.Abstractions.Constants;
-using BTCPayServer.Abstractions.Extensions;
-using BTCPayServer.Abstractions.Models;
-using BTCPayServer.Models.StoreViewModels;
 using BTCPayServer.Client;
-using BTCPayServer.Data;
-using BTCPayServer.HostedServices;
-using BTCPayServer.Lightning;
-using BTCPayServer.Payments;
-using BTCPayServer.Payments.Lightning;
-using BTCPayServer.PayoutProcessors;
-using BTCPayServer.Plugins.ArkPayServer.Data;
-using BTCPayServer.Plugins.ArkPayServer.Exceptions;
-using BTCPayServer.Plugins.ArkPayServer.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.Models;
-using BTCPayServer.Plugins.ArkPayServer.Models.Api;
-using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
-using BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
 using BTCPayServer.Plugins.ArkPayServer.Services;
-using BTCPayServer.Plugins.ArkPayServer.Services.WalletLogger;
-using BTCPayServer.Security;
-using BTCPayServer.Services.Invoices;
-using BTCPayServer.Services.Stores;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using NArk.Abstractions;
-using NArk.Abstractions.Fees;
-using NArk.Abstractions.Intents;
-using NArk.Swaps.Boltz;
-using NArk.Swaps.Boltz.Client;
-using NArk.Core.Contracts;
-using NArk.Hosting;
-using NArk.Core.Services;
-using NArk.Core.Transport;
-using NArk.Abstractions.Blockchain;
-using NArk.Abstractions.Contracts;
 using NArk.Abstractions.Extensions;
-using NArk.Abstractions.VTXOs;
-using NArk.Swaps.Abstractions;
-using NArk.Abstractions.Wallets;
-using NArk.Swaps.Models;
-using NArk.Storage.EfCore.Entities;
-using NArk.Core.Wallet;
-using LNURL;
 using NBitcoin;
-using NBitcoin.DataEncoders;
-using NBitcoin.Scripting;
-using NBitcoin.Secp256k1;
-using ArkIntent = NArk.Abstractions.Intents.ArkIntent;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Controllers;
 
@@ -88,11 +45,6 @@ public partial class ArkController
         var (arkOperatorConnected, arkOperatorError) = await CheckServiceConnectionAsync(
             ct => clientTransport.GetServerInfoAsync(ct), cancellationToken);
 
-        // Check Boltz connection using helper
-        var (boltzConnected, boltzError) = boltzClient != null
-            ? await CheckServiceConnectionAsync(ct => boltzClient.GetVersionAsync(), cancellationToken)
-            : (false, null);
-
         ViewData["IsAdminView"] = true;
         ViewData["WalletId"] = walletId;
 
@@ -109,9 +61,10 @@ public partial class ArkController
             ArkOperatorUrl = arkNetworkConfig.ArkUri,
             ArkOperatorConnected = arkOperatorConnected,
             ArkOperatorError = ArkOperatorAvailability.DescribeMessage(arkOperatorError),
-            BoltzUrl = arkNetworkConfig.BoltzUri,
-            BoltzConnected = boltzConnected,
-            BoltzError = boltzError
+            SolverRelayUrl = arkadeSolver.RelayUri,
+            SolverPubkey = arkadeSolver.SolverPubkey,
+            SolverConfigured = arkadeSolver.IsConfigured,
+            SolverCanReceive = arkadeSolver.CanReceive
         });
     }
 

@@ -98,7 +98,7 @@
 
                 <!-- Right Column: Features -->
                 <div class="col-md-6">
-                    @if (!string.IsNullOrEmpty(Model.BoltzUrl))
+                    @if (Model.SolverConfigured)
                     {
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="text-muted">Lightning</span>
@@ -113,7 +113,7 @@
                     {
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="text-muted">Lightning</span>
-                            <span class="badge text-bg-secondary" title="Requires a Boltz swap service — configure the Boltz URL in Arkade server settings">Unavailable</span>
+                            <span class="badge text-bg-secondary" title="Requires an Arkade swap solver — configure solver-relay and solver-pubkey in ark.json">Unavailable</span>
                         </div>
                     }
 

@@ -8,46 +8,27 @@
         ? $"Arkade Operator: Connected\n{Model.ArkOperatorUrl}"
         : $"Arkade Operator: {Model.ArkOperatorError ?? "Disconnected"}\n{Model.ArkOperatorUrl}";
 
-    // Build Boltz tooltip content
-    var boltzTooltipLines = new List<string>();
-    if (!string.IsNullOrEmpty(Model.BoltzUrl))
+    // Build the Arkade solver tooltip. It reports configuration, not reachability: both sides of the
+    // RFQ transport dial out and neither listens, so the first evidence a solver is there is a quote.
+    var solverTooltipLines = new List<string>();
+    if (Model.SolverConfigured)
     {
-        boltzTooltipLines.Add(Model.BoltzConnected ? "Boltz: Connected" : $"Boltz: {Model.BoltzError ?? "Disconnected"}");
-        boltzTooltipLines.Add(Model.BoltzUrl);
-
-        if (Model.BoltzConnected)
+        solverTooltipLines.Add("Arkade swap solver: Configured");
+        solverTooltipLines.Add(Model.SolverRelayUrl ?? "");
+        if (!string.IsNullOrEmpty(Model.SolverPubkey))
         {
-            if (Model.BoltzReverseMinAmount.HasValue && Model.BoltzReverseMaxAmount.HasValue)
-            {
-                var reverseFee = "";
-                if (Model.BoltzReverseFeePercentage.HasValue)
-                {
-                    reverseFee = $" ({(Model.BoltzReverseFeePercentage.Value * 100):0.##}%";
-                    if (Model.BoltzReverseMinerFee.HasValue && Model.BoltzReverseMinerFee.Value > 0)
-                    {
-                        reverseFee += $" + {Model.BoltzReverseMinerFee.Value} sats";
-                    }
-                    reverseFee += ")";
-                }
-                boltzTooltipLines.Add($"Receive: {Model.BoltzReverseMinAmount.Value}-{Model.BoltzReverseMaxAmount.Value} sats{reverseFee}");
-            }
-            if (Model.BoltzSubmarineMinAmount.HasValue && Model.BoltzSubmarineMaxAmount.HasValue)
-            {
-                var subFee = "";
-                if (Model.BoltzSubmarineFeePercentage.HasValue)
-                {
-                    subFee = $" ({(Model.BoltzSubmarineFeePercentage.Value * 100):0.##}%";
-                    if (Model.BoltzSubmarineMinerFee.HasValue && Model.BoltzSubmarineMinerFee.Value > 0)
-                    {
-                        subFee += $" + {Model.BoltzSubmarineMinerFee.Value} sats";
-                    }
-                    subFee += ")";
-                }
-                boltzTooltipLines.Add($"Send: {Model.BoltzSubmarineMinAmount.Value}-{Model.BoltzSubmarineMaxAmount.Value} sats{subFee}");
-            }
+            solverTooltipLines.Add($"Solver: {Model.SolverPubkey}");
         }
+        solverTooltipLines.Add(Model.SolverCanReceive
+            ? "Send and receive available"
+            : "Send only — receiving needs a claim daemon (set 'covclaimd' in ark.json)");
     }
-    var boltzTooltip = string.Join("\n", boltzTooltipLines);
+    else
+    {
+        solverTooltipLines.Add("Arkade swap solver: Not configured");
+        solverTooltipLines.Add("Set 'solver-relay' and 'solver-pubkey' in ark.json to enable Lightning");
+    }
+    var solverTooltip = string.Join("\n", solverTooltipLines);
 }
 
 @if (compactMode)
@@ -71,25 +52,22 @@
             <span class="small text-muted">Arkade</span>
         </div>
 
-        <!-- Boltz Status -->
-        @if (!string.IsNullOrEmpty(Model.BoltzUrl))
-        {
-            <div class="d-flex align-items-center gap-2" data-bs-toggle="tooltip" data-bs-placement="bottom" data-bs-html="true" title="@boltzTooltip.Replace("\n", "<br/>")">
-                @if (Model.BoltzConnected)
-                {
-                    <span class="status-circle status-connected">
-                        <vc:icon symbol="checkmark" />
-                    </span>
-                }
-                else
-                {
-                    <span class="status-circle status-disconnected">
-                        <vc:icon symbol="cross" />
-                    </span>
-                }
-                <span class="small text-muted">Lightning</span>
-            </div>
-        }
+        <!-- Arkade solver status -->
+        <div class="d-flex align-items-center gap-2" data-bs-toggle="tooltip" data-bs-placement="bottom" data-bs-html="true" title="@solverTooltip.Replace("\n", "<br/>")">
+            @if (Model.SolverConfigured)
+            {
+                <span class="status-circle status-connected">
+                    <vc:icon symbol="checkmark" />
+                </span>
+            }
+            else
+            {
+                <span class="status-circle status-disconnected">
+                    <vc:icon symbol="cross" />
+                </span>
+            }
+            <span class="small text-muted">Lightning</span>
+        </div>
     </div>
 
     <style>
@@ -150,53 +128,45 @@ else
             </div>
         </div>
 
-        <!-- Boltz -->
-        @if (!string.IsNullOrEmpty(Model.BoltzUrl))
-        {
-            <div class="d-flex align-items-start gap-3">
-                @if (Model.BoltzConnected)
+        <!-- Arkade swap solver -->
+        <div class="d-flex align-items-start gap-3">
+            @if (Model.SolverConfigured)
+            {
+                <span class="status-circle-lg status-connected flex-shrink-0">
+                    <vc:icon symbol="checkmark" />
+                </span>
+            }
+            else
+            {
+                <span class="status-circle-lg status-disconnected flex-shrink-0">
+                    <vc:icon symbol="cross" />
+                </span>
+            }
+            <div class="flex-fill min-w-0">
+                <h6 class="mb-1">Lightning (Arkade solver)</h6>
+                @if (Model.SolverConfigured)
                 {
-                    <span class="status-circle-lg status-connected flex-shrink-0">
-                        <vc:icon symbol="checkmark" />
-                    </span>
+                    <div class="text-muted small font-monospace text-break">@Model.SolverRelayUrl</div>
+                    @if (!string.IsNullOrEmpty(Model.SolverPubkey))
+                    {
+                        <div class="text-muted small font-monospace text-break">@Model.SolverPubkey</div>
+                    }
+                    <div class="text-success small mt-1">Configured</div>
+                    @if (!Model.SolverCanReceive)
+                    {
+                        <div class="text-warning small mt-1">
+                            Send only — receiving over Lightning needs a claim daemon. Set &lsquo;covclaimd&rsquo; in ark.json.
+                        </div>
+                    }
                 }
                 else
                 {
-                    <span class="status-circle-lg status-disconnected flex-shrink-0">
-                        <vc:icon symbol="cross" />
-                    </span>
+                    <div class="text-danger small mt-1">
+                        Not configured — set &lsquo;solver-relay&rsquo; and &lsquo;solver-pubkey&rsquo; in ark.json to enable Lightning.
+                    </div>
                 }
-                <div class="flex-fill min-w-0">
-                    <h6 class="mb-1">Lightning (Boltz)</h6>
-                    <div class="text-muted small font-monospace text-break">@Model.BoltzUrl</div>
-                    @if (!Model.BoltzConnected && !string.IsNullOrEmpty(Model.BoltzError))
-                    {
-                        <div class="text-danger small mt-1">@Model.BoltzError</div>
-                    }
-                    else if (Model.BoltzConnected)
-                    {
-                        <div class="text-success small">Connected</div>
-                        @if (Model.BoltzReverseMinAmount.HasValue || Model.BoltzSubmarineMinAmount.HasValue)
-                        {
-                            <div class="text-muted small mt-1">
-                                @{
-                                    var limits = new List<string>();
-                                    if (Model.BoltzReverseMinAmount.HasValue && Model.BoltzReverseMaxAmount.HasValue)
-                                    {
-                                        limits.Add($"Recv: {Model.BoltzReverseMinAmount.Value/1000}k-{Model.BoltzReverseMaxAmount.Value/1000000}M");
-                                    }
-                                    if (Model.BoltzSubmarineMinAmount.HasValue && Model.BoltzSubmarineMaxAmount.HasValue)
-                                    {
-                                        limits.Add($"Send: {Model.BoltzSubmarineMinAmount.Value/1000}k-{Model.BoltzSubmarineMaxAmount.Value/1000000}M");
-                                    }
-                                }
-                                @string.Join(" | ", limits) sats
-                            </div>
-                        }
-                    }
-                </div>
             </div>
-        }
+        </div>
     </div>
 
     <style>
