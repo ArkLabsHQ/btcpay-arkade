@@ -2,7 +2,6 @@ using BTCPayServer.Client;
 using BTCPayServer.Client.Models;
 using Microsoft.Playwright;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace NArk.E2E.Tests;
 
@@ -137,13 +136,13 @@ public class FundedWalletTests : PlaywrightBaseTest
             PayoutMethodId = "ARKADE"
         });
         Assert.Equal(PayoutState.AwaitingApproval, payout.State);
-        await client.ApprovePayout(storeId, payout.Id, new ApprovePayoutRequest());
+        await client.ApprovePayout(payout.Id, new ApprovePayoutRequest());
 
         var deadline = DateTimeOffset.UtcNow + TimeSpan.FromMinutes(3);
         PayoutState last = PayoutState.AwaitingApproval;
         while (DateTimeOffset.UtcNow < deadline)
         {
-            var p = await client.GetStorePayout(storeId, payout.Id);
+            var p = await client.GetStorePayout(payout.Id);
             last = p.State;
             if (last is PayoutState.AwaitingPayment or PayoutState.InProgress or PayoutState.Completed)
                 return;

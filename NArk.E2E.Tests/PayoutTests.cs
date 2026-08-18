@@ -1,7 +1,6 @@
 using BTCPayServer.Client;
 using BTCPayServer.Client.Models;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace NArk.E2E.Tests;
 

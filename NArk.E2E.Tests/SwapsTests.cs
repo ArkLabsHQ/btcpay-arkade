@@ -4,7 +4,6 @@ using NArk.Swaps.Abstractions;
 using NArk.Swaps.Models;
 using NArk.Tests.End2End.Common;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace NArk.E2E.Tests;
 

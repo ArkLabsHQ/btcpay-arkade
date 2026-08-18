@@ -6,7 +6,7 @@ using NArk.Core.Services;
 using NBitcoin;
 using NBitcoin.DataEncoders;
 using NBitcoin.Secp256k1;
-using Xunit.Abstractions;
+using Xunit;
 
 namespace NArk.E2E.Tests;
 

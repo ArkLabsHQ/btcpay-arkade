@@ -5,7 +5,6 @@ using CliWrap;
 using CliWrap.Buffered;
 using Microsoft.Playwright;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace NArk.E2E.Tests;
 
@@ -134,7 +133,7 @@ public class InvoicePaymentLatencyTests : PlaywrightBaseTest
         InvoiceStatus lastStatus = InvoiceStatus.New;
         while (DateTimeOffset.UtcNow < deadline)
         {
-            var current = await client.GetInvoice(storeId, invoice.Id);
+            var current = await client.GetInvoice(invoice.Id);
             lastStatus = current.Status;
             if (current.Status == InvoiceStatus.Settled)
             {

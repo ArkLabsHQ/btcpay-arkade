@@ -1,7 +1,6 @@
 using Microsoft.Playwright;
 using NBitcoin;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace NArk.E2E.Tests;
 

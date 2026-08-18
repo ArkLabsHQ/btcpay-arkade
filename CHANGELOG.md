@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.4.3] - 2026-08-18
+
+### Breaking Changes
+- **Minimum BTCPay Server version raised to 2.4.2** (up from 2.3.8). The plugin is now built against BTCPay Server 2.4.2 and declares `>=2.4.2`; stores running an older BTCPay will not load it. Upgrading BTCPay also picks up the upstream fixes released across 2.3.9–2.4.2.
+
+### Compatibility
+- **Package pins realigned with the host.** The plugin mirrors BTCPayServer's own dependency versions so the two agree in-process; 2.4.2 moved several of them, so the mirror was updated to match: Roslyn Workspaces `5.6.0`, `NBitcoin` `10.0.8`, `NBXplorer.Client` `5.0.8`, `Npgsql.EntityFrameworkCore.PostgreSQL` `10.0.3`, `BTCPayServer.Lightning.Common` `1.7.1`, and the `Microsoft.Extensions.*` family at `10.0.10`.
+- **E2E suite moved to xunit v3** (`xunit.v3` `3.2.2`, `Microsoft.NET.Test.Sdk` `18.8.1`, `Microsoft.Playwright` `1.61.0`), matching `BTCPayServer.Tests` — running both xunit generations in one compilation made every `[Fact]` ambiguous. Also updated for the Greenfield client dropping the `storeId` parameter from `ApprovePayout`, `GetStorePayout`, and `GetInvoice`. Test-only, no plugin-runtime change.
+
 ## [2.4.2] - 2026-06-15
 
 ### SDK (NNark)
