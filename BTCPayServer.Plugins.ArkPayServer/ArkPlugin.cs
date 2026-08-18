@@ -47,7 +47,7 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
     public override IBTCPayServerPlugin.PluginDependency[] Dependencies { get; } =
     [
-        new() { Identifier = nameof(BTCPayServer), Condition = ">=2.3.8" }
+        new() { Identifier = nameof(BTCPayServer), Condition = ">=2.4.2" }
     ];
 
     public override void Execute(IServiceCollection services)
@@ -83,6 +83,8 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
     private static void RegisterBtcPayServices(IServiceCollection services)
     {
+        services.AddSingleton<ArkLightningSpendKeyService>();
+        services.AddHostedService<ArkLightningSpendKeyMigration>();
         services.AddSingleton<ILightningConnectionStringHandler, ArkLightningConnectionStringHandler>();
         services.AddSingleton<ArkadeLightningLimitsService>();
 

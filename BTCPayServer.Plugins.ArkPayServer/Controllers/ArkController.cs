@@ -83,6 +83,7 @@ public class ArkController(
     ISwapStorage swapStorage,
     IVtxoStorage vtxoStorage,
     IWalletStorage walletStorage,
+    ArkLightningSpendKeyService spendKeyService,
     IDbContextFactory<ArkPluginDbContext> dbContextFactory,
     IHttpClientFactory httpClientFactory,
     BoardingUtxoSyncService boardingUtxoSyncService,
@@ -200,7 +201,9 @@ public class ArkController(
                 
                 var lnConfig = new LightningPaymentMethodConfig()
                 {
-                    ConnectionString = $"type=arkade;wallet-id={config.WalletId}",
+                    ConnectionString = config.GeneratedByStore
+                        ? await spendKeyService.BuildConnectionStringAsync(config.WalletId)
+                        : ArkLightningSpendKeyService.BuildReceiveOnlyConnectionString(config.WalletId),
                 };
 
                 store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[lightningPaymentMethodId], lnConfig);
@@ -2447,7 +2450,9 @@ public class ArkController(
 
         store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[lightningPaymentMethodId], new LightningPaymentMethodConfig
         {
-            ConnectionString = $"type=arkade;wallet-id={config!.WalletId}",
+            ConnectionString = config!.GeneratedByStore
+                ? await spendKeyService.BuildConnectionStringAsync(config.WalletId)
+                : ArkLightningSpendKeyService.BuildReceiveOnlyConnectionString(config.WalletId),
         });
         store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[lnurlPaymentMethodId], new LNURLPaymentMethodConfig
         {
@@ -2461,6 +2466,57 @@ public class ArkController(
         store.SetStoreBlob(blob);
         await storeRepository.UpdateStore(store);
         return RedirectWithSuccess(nameof(StoreOverview), "Lightning enabled", new { storeId });
+    }
+
+    /// <summary>
+    /// Returns the wallet's Lightning connection string, including its spend capability, so
+    /// the owner can add the same wallet to another store they control.
+    ///
+    /// Gated on <c>requireOwnedByStore</c>: only a store with spend rights over the wallet
+    /// may read the capability.
+    /// </summary>
+    [HttpGet("stores/{storeId}/ln-connection-string")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> LightningConnectionString(string storeId)
+    {
+        var (_, config, errorResult) = await ValidateStoreAndConfig(requireOwnedByStore: true);
+        if (errorResult != null) return errorResult;
+
+        return Ok(new
+        {
+            connectionString = await spendKeyService.BuildConnectionStringAsync(
+                config!.WalletId, HttpContext.RequestAborted)
+        });
+    }
+
+    /// <summary>
+    /// Issues a fresh spend capability for the wallet. Connection strings previously shared
+    /// with other stores stop authorising spends and must be re-copied.
+    /// </summary>
+    [HttpPost("stores/{storeId}/regenerate-ln-spend-key")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> RegenerateLightningSpendKey(string storeId)
+    {
+        var (store, config, errorResult) = await ValidateStoreAndConfig(requireOwnedByStore: true);
+        if (errorResult != null) return errorResult;
+
+        await spendKeyService.RegenerateAsync(config!.WalletId, HttpContext.RequestAborted);
+
+        // Re-issue this store's own connection string so it keeps working with the new value.
+        var lightningPaymentMethodId = GetLightningPaymentMethod();
+        var lnConfig = store!.GetPaymentMethodConfig<LightningPaymentMethodConfig>(
+            lightningPaymentMethodId, paymentMethodHandlerDictionary);
+        if (lnConfig?.ConnectionString?.StartsWith("type=arkade", StringComparison.InvariantCultureIgnoreCase) is true)
+        {
+            lnConfig.ConnectionString = await spendKeyService.BuildConnectionStringAsync(
+                config.WalletId, HttpContext.RequestAborted);
+            store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[lightningPaymentMethodId], lnConfig);
+            await storeRepository.UpdateStore(store);
+        }
+
+        return RedirectWithSuccess(nameof(StoreOverview),
+            "Spend key regenerated. Connection strings shared with other stores must be updated.",
+            new { storeId });
     }
 
     [HttpPost("stores/{storeId}/disable-ln")]

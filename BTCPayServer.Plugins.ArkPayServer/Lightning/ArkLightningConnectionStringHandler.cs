@@ -21,8 +21,12 @@ public class ArkLightningConnectionStringHandler(IServiceProvider serviceProvide
             return null;
         }
 
+        // Optional. Absence yields a receive-only client rather than an error.
+        kv.TryGetValue("spend-key", out var spendKey);
+
         error = null;
-        return ActivatorUtilities.CreateInstance<ArkLightningClient>(serviceProvider, network, walletId);
+        return ActivatorUtilities.CreateInstance<ArkLightningClient>(
+            serviceProvider, network, walletId, new ArkLightningSpendCapability(spendKey));
     }
 }
 

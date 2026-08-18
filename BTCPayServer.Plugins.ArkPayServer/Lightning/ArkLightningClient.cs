@@ -1,4 +1,6 @@
 using System.ComponentModel.DataAnnotations;
+using System.Security.Cryptography;
+using System.Text;
 using BTCPayServer.Lightning;
 using BTCPayServer.Payments.Lightning;
 using BTCPayServer.Services.Invoices;
@@ -22,6 +24,7 @@ public class ArkLightningClient(
     IClientTransport clientTransport,
     Network network,
     string walletId,
+    ArkLightningSpendCapability spendCapability,
     SwapsManagementService swapsManagementService,
     BoltzLimitsValidator boltzLimitsValidator,
     ISwapStorage swapStorage,
@@ -29,10 +32,32 @@ public class ArkLightningClient(
     ISpendingService spendingService,
     IBitcoinBlockchain chainTimeProvider,
     IWalletStorage walletStorage,
+    ArkLightningSpendKeyService spendKeyService,
     ILogger<ArkLightningInvoiceListener> logger) : IExtendedLightningClient
 {
     /// <summary>Wallet-level metadata key holding the configured <see cref="ReverseSwapFeePayer"/>.</summary>
     public const string ReverseSwapFeePayerMetadataKey = "arkade.reverseSwapFeePayer";
+
+    /// <summary>
+    /// Wallet-level metadata key holding the Lightning spend capability.
+    /// See <see cref="ArkLightningSpendCapability"/>.
+    /// </summary>
+    public const string SpendKeyMetadataKey = "arkade.lightning.spendKey";
+
+    /// <summary>
+    /// Throws unless the caller presented the spend capability for this wallet.
+    /// </summary>
+    private async Task EnsureSpendAuthorized(CancellationToken cancellation)
+    {
+        if (await spendKeyService.VerifyAsync(walletId, spendCapability.Value, cancellation))
+            return;
+
+        logger.LogWarning(
+            "Rejected an Arkade Lightning spend for wallet {WalletId}: no valid spend " +
+            "capability was presented.", walletId);
+        throw new UnauthorizedAccessException(
+            "This store is not authorised to spend from the configured Arkade wallet.");
+    }
 
     private async Task<ReverseSwapFeePayer> ResolveReverseSwapFeePayer(CancellationToken cancellation)
     {
@@ -245,6 +270,8 @@ public class ArkLightningClient(
     public async Task<LightningInvoice> CreateInvoice(CreateInvoiceParams createInvoiceRequest,
         CancellationToken cancellation = default)
     {
+        await EnsureSpendAuthorized(cancellation);
+
         var terms = await clientTransport.GetServerInfoAsync(cancellation);
         if (terms.Dust > createInvoiceRequest.Amount)
         {
@@ -314,6 +341,8 @@ public class ArkLightningClient(
 
     public async Task<PayResponse> Pay(string bolt11, PayInvoiceParams payParams, CancellationToken cancellation = default)
     {
+        await EnsureSpendAuthorized(cancellation);
+
         try
         {
             if (string.IsNullOrEmpty(bolt11))

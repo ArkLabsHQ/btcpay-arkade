@@ -28,6 +28,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NArk.Swaps", "submodules\NN
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NArk.Storage.EfCore", "submodules\NNark\NArk.Storage.EfCore\NArk.Storage.EfCore.csproj", "{11DF32A5-0825-4703-9F8A-4ED7CA84F0BD}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NArk.Tests", "NArk.Tests\NArk.Tests.csproj", "{E5569F16-26D0-4314-8D71-7964CCFE9F68}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -170,6 +172,18 @@ Global
 		{11DF32A5-0825-4703-9F8A-4ED7CA84F0BD}.Release|x64.Build.0 = Release|Any CPU
 		{11DF32A5-0825-4703-9F8A-4ED7CA84F0BD}.Release|x86.ActiveCfg = Release|Any CPU
 		{11DF32A5-0825-4703-9F8A-4ED7CA84F0BD}.Release|x86.Build.0 = Release|Any CPU
+		{E5569F16-26D0-4314-8D71-7964CCFE9F68}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E5569F16-26D0-4314-8D71-7964CCFE9F68}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E5569F16-26D0-4314-8D71-7964CCFE9F68}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{E5569F16-26D0-4314-8D71-7964CCFE9F68}.Debug|x64.Build.0 = Debug|Any CPU
+		{E5569F16-26D0-4314-8D71-7964CCFE9F68}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{E5569F16-26D0-4314-8D71-7964CCFE9F68}.Debug|x86.Build.0 = Debug|Any CPU
+		{E5569F16-26D0-4314-8D71-7964CCFE9F68}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E5569F16-26D0-4314-8D71-7964CCFE9F68}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E5569F16-26D0-4314-8D71-7964CCFE9F68}.Release|x64.ActiveCfg = Release|Any CPU
+		{E5569F16-26D0-4314-8D71-7964CCFE9F68}.Release|x64.Build.0 = Release|Any CPU
+		{E5569F16-26D0-4314-8D71-7964CCFE9F68}.Release|x86.ActiveCfg = Release|Any CPU
+		{E5569F16-26D0-4314-8D71-7964CCFE9F68}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

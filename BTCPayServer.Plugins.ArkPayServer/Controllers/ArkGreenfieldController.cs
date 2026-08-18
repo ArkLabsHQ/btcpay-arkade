@@ -7,6 +7,7 @@ using BTCPayServer.Lightning;
 using BTCPayServer.Payments;
 using BTCPayServer.Payments.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.Exceptions;
+using BTCPayServer.Plugins.ArkPayServer.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.Models;
 using BTCPayServer.Plugins.ArkPayServer.Models.Api;
 using BTCPayServer.Plugins.ArkPayServer.Models.Api.Greenfield;
@@ -63,6 +64,7 @@ public class ArkGreenfieldController(
     ISwapStorage swapStorage,
     IVtxoStorage vtxoStorage,
     IWalletStorage walletStorage,
+    ArkLightningSpendKeyService spendKeyService,
     IWalletProvider walletProvider,
     IIntentStorage intentStorage,
     BoardingUtxoSyncService boardingUtxoSyncService,
@@ -173,7 +175,7 @@ public class ArkGreenfieldController(
             var lightningEnabled = false;
             if (request.EnableLightning)
             {
-                lightningEnabled = ConfigureLightning(store, walletId!);
+                lightningEnabled = await ConfigureLightning(store, walletId!, isNew, cancellationToken);
             }
 
             await storeRepository.UpdateStore(store);
@@ -1402,7 +1404,8 @@ public class ArkGreenfieldController(
             "Unsupported wallet input. Provide a BIP-39 mnemonic (12/24 words), nsec key, Ark address, or existing wallet ID.");
     }
 
-    private bool ConfigureLightning(StoreData store, string walletId)
+    private async Task<bool> ConfigureLightning(StoreData store, string walletId, bool generatedByStore,
+        CancellationToken cancellationToken)
     {
         var lightningPaymentMethodId = PaymentTypes.LN.GetPaymentMethodId("BTC");
         var existingLnConfig = store.GetPaymentMethodConfig<LightningPaymentMethodConfig>(
@@ -1413,7 +1416,9 @@ public class ArkGreenfieldController(
 
         var lnConfig = new LightningPaymentMethodConfig
         {
-            ConnectionString = $"type=arkade;wallet-id={walletId}",
+            ConnectionString = generatedByStore
+                ? await spendKeyService.BuildConnectionStringAsync(walletId, cancellationToken)
+                : ArkLightningSpendKeyService.BuildReceiveOnlyConnectionString(walletId),
         };
 
         store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[lightningPaymentMethodId], lnConfig);

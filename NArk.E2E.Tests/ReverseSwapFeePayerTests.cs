@@ -4,7 +4,6 @@ using Microsoft.Playwright;
 using NArk.Abstractions.Wallets;
 using NArk.Swaps.Models;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace NArk.E2E.Tests;
 

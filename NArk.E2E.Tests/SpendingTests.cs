@@ -1,7 +1,6 @@
 using System.Text.Json;
 using Microsoft.Playwright;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace NArk.E2E.Tests;
 
