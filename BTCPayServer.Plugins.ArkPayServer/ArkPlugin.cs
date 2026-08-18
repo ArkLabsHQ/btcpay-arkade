@@ -83,6 +83,7 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
     private static void RegisterBtcPayServices(IServiceCollection services)
     {
+        services.AddSingleton<ArkLightningSpendKeyService>();
         services.AddSingleton<ILightningConnectionStringHandler, ArkLightningConnectionStringHandler>();
         services.AddSingleton<ArkadeLightningLimitsService>();
 
