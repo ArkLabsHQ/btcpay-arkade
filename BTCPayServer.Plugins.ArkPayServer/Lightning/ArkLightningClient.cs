@@ -6,6 +6,7 @@ using NArk.Abstractions.Blockchain;
 using NArk.Abstractions.VTXOs;
 using NArk.ArkadeIntents;
 using NArk.ArkadeIntents.Models;
+using NArk.ArkadeIntents.Rfq;
 using NArk.ArkadeIntents.Services;
 using NArk.Core.Services;
 using NArk.Core.Transport;
@@ -152,10 +153,17 @@ public class ArkLightningClient(
     /// <returns>The invoice to hand the payer.</returns>
     /// <remarks>
     /// <para>
-    /// The requested amount is what this wallet <em>receives</em>, not what the payer is billed: the
-    /// solver's spread is added on top, so the BOLT11 it mints is for more. That direction is the
-    /// deliberate one — it guarantees the merchant is credited the amount the order was for, where
-    /// billing the order amount and absorbing the spread would settle every order slightly short.
+    /// The requested amount is what the <em>payer is billed</em>: the invoice is minted for exactly
+    /// what BTCPay asked for, and the solver's spread comes out of what lands on Arkade. The store
+    /// therefore nets the order amount minus the swap fee, the same way it nets a card sale minus
+    /// the processor's cut.
+    /// </para>
+    /// <para>
+    /// The other direction is a real option — <c>RfqAmountSide.To</c> pins the payout instead and
+    /// bills the payer the difference — and it is the wrong one here. An invoice for more than the
+    /// amount a customer approved is one a LUD-06 wallet refuses outright, so the sale is simply
+    /// lost; on a checkout that skips that check the customer is silently overcharged instead.
+    /// Neither is a trade a merchant would accept to avoid a fee it can price into the order.
     /// </para>
     /// <para>
     /// The description and expiry BTCPay passes are dropped, because the solver mints the invoice and
@@ -180,7 +188,8 @@ public class ArkLightningClient(
 
         var pending = await solver.WithTransportAsync(transport =>
             intents.ReceiveFromLightningAsync(
-                walletId, amountSats, transport, covclaimdKey, cancellationToken: cancellation));
+                walletId, amountSats, transport, covclaimdKey,
+                amountSide: RfqAmountSide.From, cancellationToken: cancellation));
 
         var intent = await GetIntentAsync(pending.RfqId, cancellation)
             ?? throw new InvalidOperationException(
