@@ -1,5 +1,8 @@
 using System.Text.Json;
 using BTCPayServer.Client;
+using Microsoft.Extensions.DependencyInjection;
+using NArk.ArkadeIntents;
+using NArk.ArkadeIntents.Models;
 using BTCPayServer.Client.Models;
 using BTCPayServer.Lightning;
 using Microsoft.Playwright;
@@ -165,8 +168,14 @@ public class ArkadeLightningCorridorTests : PlaywrightBaseTest
 
         // Swap-eligible coins are the non-recoverable ones; wait on them being spendable rather than
         // on the rendered balance, which moves earlier.
+        //
+        // Generously timed, and the slow part is not the corridor. Funding here redeems an arkd note,
+        // which needs a batch round, and the redemption intent is refused with AMOUNT_TOO_LOW until
+        // the wallet holds a shape arkd will take — retried every few seconds meanwhile. Observed
+        // between twenty seconds and over five minutes on the same stack, so a five-minute ceiling
+        // fails on the corridor's behalf for something upstream of it.
         var outpoints = await PollForSpendableCoinsAsync(
-            storeId, "LightningInvoice", 30_000, TimeSpan.FromMinutes(5));
+            storeId, "LightningInvoice", 30_000, TimeSpan.FromMinutes(10));
         Assert.NotEmpty(outpoints);
 
         var bolt11 = await DockerHelper.CreateLndInvoice(amtSats: 20_000, expirySecs: 1800);
@@ -176,8 +185,138 @@ public class ArkadeLightningCorridorTests : PlaywrightBaseTest
 
         var settled = await SpendToLightningAsync(storeId, bolt11, outpoints, token);
         Assert.True(settled, "the payee never saw the invoice settle");
+
+        // And the swap's own record agrees, with the txid of the spend that settled it.
+        var intent = await PollForIntentStatusAsync(
+            walletId!, ArkadeSwapIntentType.BtcToLightning, ArkadeSwapIntentStatus.Fulfilled);
+        Assert.False(string.IsNullOrEmpty(intent.SpentTxid), "a fulfilled send swap must record the spend that settled it");
+
+        // Deliberately not asserted: intent.Preimage, which is empty here. The monitor recovers the
+        // preimage out of the solver's claim witness — that recovery is precisely what proves the
+        // fill — and then discards it, because ProvesFill
+        // (NArk.ArkadeIntents/Services/ArkadeSwapIntentMonitoringService.cs) returns a bool rather
+        // than the value it found. Nothing on this leg ever assigns Preimage, so the receipt a
+        // Lightning node would hand back is lost, and BTCPay's LightningPayment.Preimage is null on
+        // every completed Arkade payment. Worth fixing in the SDK; asserting it here would only fail
+        // a suite for a gap it cannot close.
     }
 
+
+    // ─── What happens when it does not work ───────────────────────────
+
+    /// <summary>
+    /// A size no solver will quote yields no invoice at all, rather than one nothing can settle.
+    /// </summary>
+    /// <remarks>
+    /// The property worth holding is negative: when the corridor cannot serve an order, the customer
+    /// must not be handed a BOLT11. A payer who pays an invoice the solver never agreed to back has
+    /// moved real money into a swap that will never be funded, and the only way out is the payer's
+    /// own HTLC lapsing — a refund they wait for rather than one anybody issues.
+    ///
+    /// Driven with an amount past the solver's float rather than a malformed request, because that
+    /// is the refusal a real deployment meets: a solver that is up, honest and simply too small for
+    /// this order.
+    /// </remarks>
+    [Fact]
+    public async Task CreateInvoice_ForMoreThanTheSolverCanFund_HandsOutNoInvoice()
+    {
+        RequireSolver();
+
+        var (storeId, client) = await SetUpStoreAsync();
+
+        var ex = await Assert.ThrowsAnyAsync<Exception>(() =>
+            CreateLightningInvoiceAsync(client, storeId, 5_000_000_000L));
+
+        // Either BTCPay refuses the payment method outright, or it creates the invoice and no
+        // Lightning destination ever appears. Both are acceptable; handing out a BOLT11 is not.
+        Assert.True(
+            ex is GreenfieldAPIException or TimeoutException,
+            $"expected a refusal or an absent destination, got {ex.GetType().Name}: {ex.Message}");
+    }
+
+    /// <summary>A sub-dust order is refused before any solver is contacted.</summary>
+    /// <remarks>
+    /// Refused locally on purpose. An amount below the Arkade dust floor cannot become a VTXO no
+    /// matter what any solver quotes, so opening a negotiation for one spends a round trip to learn
+    /// something already known — and leaves a quote the solver has to expire.
+    /// </remarks>
+    [Fact]
+    public async Task CreateInvoice_BelowDust_IsRefusedWithoutNegotiating()
+    {
+        RequireSolver();
+
+        var (storeId, client) = await SetUpStoreAsync();
+
+        await Assert.ThrowsAnyAsync<Exception>(() =>
+            CreateLightningInvoiceAsync(client, storeId, 100));
+    }
+
+    /// <summary>An invoice nobody pays credits nobody.</summary>
+    /// <remarks>
+    /// The mirror of the round-trip test, and the one that would catch a corridor reporting success
+    /// on the strength of having negotiated rather than having been paid. Worth asserting explicitly
+    /// because the failure mode is silent and expensive: a store that books unpaid orders as settled
+    /// ships goods for free.
+    ///
+    /// Asserted on both surfaces a merchant would look at — the balance and the swap's own state —
+    /// since either agreeing with the truth while the other does not is still a defect.
+    /// </remarks>
+    [Fact]
+    public async Task UnpaidInvoice_CreditsNothingAndStaysUnfulfilled()
+    {
+        RequireSolver();
+
+        var (storeId, client) = await SetUpStoreAsync();
+        var walletId = await GetStoreWalletIdAsync(storeId);
+
+        await GoToUrl($"/plugins/ark/stores/{storeId}/overview");
+        var before = await ReadAvailableBalanceSatsAsync();
+
+        await CreateLightningInvoiceAsync(client, storeId, 25_000);
+
+        // Long enough for a funded lockup to have been observed and claimed, had one existed: the
+        // monitor is event-driven and the round trip takes seconds when a payer actually pays.
+        await Task.Delay(TimeSpan.FromSeconds(45));
+
+        await GoToUrl($"/plugins/ark/stores/{storeId}/overview");
+        var after = await ReadAvailableBalanceSatsAsync();
+        Assert.Equal(before, after);
+
+        var intents = await ReadIntentsAsync(walletId!);
+        Assert.DoesNotContain(intents, i => i.Status == ArkadeSwapIntentStatus.Fulfilled);
+    }
+
+    // ─── What happens as it progresses ────────────────────────────────
+
+    /// <summary>A receive swap is recorded before its invoice is handed out, and settles to Fulfilled.</summary>
+    /// <remarks>
+    /// The ordering is the point, not the endpoint. The swap's row carries the preimage, and the
+    /// preimage is the only thing that can claim the solver's lockup — we chose it, and the only
+    /// other copy is sealed to a key we do not hold. So the row has to exist before a payer can
+    /// possibly pay, or a crash in that window strands funds nobody can take.
+    /// </remarks>
+    [Fact]
+    public async Task ReceiveSwap_IsRecordedBeforePaying_ThenReachesFulfilled()
+    {
+        RequireSolver();
+
+        var (storeId, client) = await SetUpStoreAsync();
+        var walletId = await GetStoreWalletIdAsync(storeId);
+
+        var bolt11 = await CreateLightningInvoiceAsync(client, storeId, 25_000);
+
+        // Before anybody pays: the swap exists, knows its invoice, and holds the preimage.
+        var recorded = Assert.Single(await ReadIntentsAsync(walletId!, ArkadeSwapIntentType.LightningToBtc));
+        Assert.Equal(bolt11, recorded.Invoice);
+        Assert.False(string.IsNullOrEmpty(recorded.Preimage), "the preimage must be stored before the invoice is payable");
+        Assert.NotEqual(ArkadeSwapIntentStatus.Fulfilled, recorded.Status);
+
+        await DockerHelper.Exec("lnd", ["lncli", "--network=regtest", "payinvoice", "--force", bolt11]);
+
+        var settled = await PollForIntentStatusAsync(
+            walletId!, ArkadeSwapIntentType.LightningToBtc, ArkadeSwapIntentStatus.Fulfilled);
+        Assert.Equal(recorded.Id, settled.Id);
+    }
 
     /// <summary>Registers an admin, creates a store with a fresh Arkade wallet, and returns both.</summary>
     private async Task<(string StoreId, BTCPayServerClient Client)> SetUpStoreAsync()
@@ -279,6 +418,57 @@ public class ArkadeLightningCorridorTests : PlaywrightBaseTest
         }
 
         return false;
+    }
+
+    /// <summary>Reads this wallet's swaps straight out of the plugin's own storage.</summary>
+    /// <param name="walletId">The wallet to read.</param>
+    /// <param name="type">Narrow to one corridor, or all when omitted.</param>
+    /// <returns>The matching swaps.</returns>
+    /// <remarks>
+    /// Read in-process rather than through a page or an endpoint, because there is no UI for these
+    /// yet and a corridor's state is exactly what these tests are about. It also keeps the assertion
+    /// on the record the money path actually consults.
+    /// </remarks>
+    private async Task<IReadOnlyCollection<ArkadeSwapIntent>> ReadIntentsAsync(
+        string walletId, ArkadeSwapIntentType? type = null)
+    {
+        var storage = _fixture.ServerTester!.PayTester.ServiceProvider
+            .GetRequiredService<IArkadeIntentStorage>();
+
+        var all = await storage.GetArkadeSwapIntents(walletIds: [walletId]);
+        return type is null ? all : all.Where(i => i.Type == type).ToList();
+    }
+
+    /// <summary>Waits for one of this wallet's swaps to reach a status.</summary>
+    /// <param name="walletId">The wallet to watch.</param>
+    /// <param name="type">Which corridor.</param>
+    /// <param name="status">The status being waited on.</param>
+    /// <param name="timeout">How long to wait; two minutes by default.</param>
+    /// <returns>The swap that reached it.</returns>
+    /// <exception cref="TimeoutException">It never got there.</exception>
+    private async Task<ArkadeSwapIntent> PollForIntentStatusAsync(
+        string walletId,
+        ArkadeSwapIntentType type,
+        ArkadeSwapIntentStatus status,
+        TimeSpan? timeout = null)
+    {
+        var deadline = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromMinutes(2));
+        ArkadeSwapIntentStatus? last = null;
+
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            var match = (await ReadIntentsAsync(walletId, type))
+                .OrderByDescending(i => i.CreatedAt)
+                .FirstOrDefault();
+
+            last = match?.Status;
+            if (match is not null && match.Status == status) return match;
+
+            await Task.Delay(2_000);
+        }
+
+        throw new TimeoutException(
+            $"no {type} swap for wallet {walletId} reached {status} (last seen: {last?.ToString() ?? "none"}).");
     }
 
     /// <summary>Reads the lifecycle state out of an <c>lncli lookupinvoice</c> reply.</summary>
