@@ -29,6 +29,8 @@ using NArk.Core.Models.Options;
 using NArk.Core.Services;
 using NArk.Storage.EfCore.Entities;
 using NArk.Storage.EfCore.Hosting;
+using NArk.Swaps.Policies;
+using NArk.Swaps.Transformers;
 using NArk.Swaps.Boltz;
 using NArk.Swaps.Boltz.Client;
 using NArk.Swaps.Services;
@@ -37,6 +39,7 @@ using System.Text.Json;
 using BTCPayServer.Plugins.ArkPayServer.Services.Policies;
 using Microsoft.EntityFrameworkCore;
 using NArk.Core.Sweeper;
+using NArk.Core.Transformers;
 
 namespace BTCPayServer.Plugins.ArkPayServer;
 
@@ -394,6 +397,18 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         }
         else
         {
+            // Draining old swaps does not need Boltz, and must not be gated on it. An operator who
+            // finishes migrating and deletes `boltz` from ark.json is doing the obvious thing; if
+            // that also unregistered these two, every VHTLC still holding sats would stop being
+            // swept and stop being spendable, silently. Neither touches Boltz: the policy selects
+            // VHTLC coins and the transformer opens whichever leaf is available — the claim when we
+            // hold the preimage, the refund once the chain's clock passes the locktime.
+            //
+            // Registered only on this branch because AddArkSwapServices already includes both, and
+            // a second registration would run the policy twice.
+            services.AddSingleton<ISweepPolicy, SwapSweepPolicy>();
+            services.AddSingleton<IContractTransformer, VHTLCContractTransformer>();
+
             // Null implementations for optional dependencies
             services.AddSingleton<BoltzClient>(_ => null!);
             services.AddSingleton<CachedBoltzClient>(_ => null!);
