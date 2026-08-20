@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using BTCPayServer.Client;
 using Microsoft.Extensions.DependencyInjection;
@@ -316,6 +317,149 @@ public class ArkadeLightningCorridorTests : PlaywrightBaseTest
         var settled = await PollForIntentStatusAsync(
             walletId!, ArkadeSwapIntentType.LightningToBtc, ArkadeSwapIntentStatus.Fulfilled);
         Assert.Equal(recorded.Id, settled.Id);
+    }
+
+    // ─── The money-safety path ────────────────────────────────────────
+
+    /// <summary>
+    /// A send swap the solver never fills is refunded to us, and the sats come back.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The one path where being wrong costs the merchant their own money rather than a sale. Every
+    /// other failure here ends with a payer's HTLC lapsing; this one ends with our sats sitting in a
+    /// covenant, and only our own refund gets them out.
+    /// </para>
+    /// <para>
+    /// The non-fill is arranged with a HOLD invoice whose preimage is never revealed, which is the
+    /// honest version of this scenario rather than a simulated one: the solver really does pay, the
+    /// HTLC really is accepted, and it genuinely cannot claim our lockup — claiming means revealing
+    /// the preimage, and the payee has not released it. Stopping the solver would have produced the
+    /// same states without exercising that.
+    /// </para>
+    /// <para>
+    /// <b>Needs a solver quoting a short refund horizon, and skips without one.</b> Mining ahead of
+    /// the locktime is not enough, which is worth writing down because it looks like it should be:
+    /// the two clocks are read by different halves. Executing a refund is gated on median-time-past
+    /// (<c>AssertLocktimeReachedAsync</c>), so the chain must genuinely be past the locktime — but
+    /// deciding a swap has BECOME refundable is gated on the wall clock
+    /// (<c>ArkadeSwapIntentMonitoringService</c> passes <c>_time.GetUtcNow()</c> into
+    /// <c>SwapObservation.PastLocktime</c>). Moving the chain forward with <c>setmocktime</c>
+    /// therefore never triggers the transition, and the swap sits at Pending until real time
+    /// catches up. The two agree in production, where both clocks advance together; they only come
+    /// apart on a regtest someone is fast-forwarding.
+    /// </para>
+    /// <para>
+    /// So this waits out the solver's horizon for real, and the only way to make that quick is a
+    /// solver built with a shorter one (<c>MAX_REFUND_HORIZON</c> in <c>src/core/receive.ts</c>).
+    /// Set <c>ARKADE_E2E_SHORT_REFUND_HORIZON</c> to the horizon in seconds once such a solver is
+    /// running. The refund logic itself is covered by the SDK's own unit tests
+    /// (<c>LightningSendRefundTests</c>, <c>RefundMaturityTests</c>, <c>UnilateralLadderTests</c>);
+    /// what is uncovered without this is the plugin's wiring to them.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    [Trait("Category", "LightningCorridorsDestructive")]
+    public async Task UnfilledSendSwap_IsRefundedOnceItsLocktimePasses()
+    {
+        RequireSolver();
+
+        var horizonRaw = Environment.GetEnvironmentVariable("ARKADE_E2E_SHORT_REFUND_HORIZON");
+        Assert.SkipWhen(
+            !int.TryParse(horizonRaw, out var horizonSeconds) || horizonSeconds <= 0,
+            "needs a solver quoting a short refund horizon; set ARKADE_E2E_SHORT_REFUND_HORIZON to it " +
+            "(see this test's remarks for why mining ahead does not substitute)");
+
+        var (storeId, _) = await SetUpStoreAsync();
+        var walletId = await GetStoreWalletIdAsync(storeId);
+        await FundWalletViaNoteAsync(
+            _fixture.ServerTester!.PayTester.ServiceProvider, walletId!, 200_000);
+
+        var outpoints = await PollForSpendableCoinsAsync(
+            storeId, "LightningInvoice", 30_000, TimeSpan.FromMinutes(10));
+        Assert.NotEmpty(outpoints);
+
+        await GoToUrl($"/plugins/ark/stores/{storeId}/overview");
+        var fundedBalance = await ReadAvailableBalanceSatsAsync();
+        var token = (await GetAntiforgeryTokenAsync()) ?? "";
+
+        // A hold invoice: paid, accepted, never settled — so the preimage the solver needs to take
+        // our lockup is never published.
+        var preimage = RandomNumberGenerator.GetBytes(32);
+        var paymentHash = Convert.ToHexString(SHA256.HashData(preimage)).ToLowerInvariant();
+        await DockerHelper.Exec(
+            "lnd", ["lncli", "--network=regtest", "addholdinvoice", paymentHash, "20000"]);
+
+        var held = await ReadHoldInvoiceAsync(paymentHash);
+        Assert.False(string.IsNullOrEmpty(held), "lnd did not return a hold invoice");
+
+        var resp = await Page!.Context.APIRequest.PostAsync(
+            new Uri(ServerUri!, $"/plugins/ark/stores/{storeId}/build-intent").AbsoluteUri,
+            new APIRequestContextOptions
+            {
+                Headers = new Dictionary<string, string>
+                {
+                    ["RequestVerificationToken"] = token,
+                    ["Content-Type"] = "application/x-www-form-urlencoded"
+                },
+                Data = $"StoreId={Uri.EscapeDataString(storeId)}" +
+                       $"&VtxoOutpointsRaw={Uri.EscapeDataString(string.Join(",", outpoints))}" +
+                       $"&Outputs[0].Destination={Uri.EscapeDataString(held!)}"
+            });
+        Assert.True(resp.Ok, $"build-intent (LN) returned {resp.Status}: {await resp.TextAsync()}");
+
+        // The lockup is funded and waiting on a fill that cannot come.
+        var funded = await PollForIntentStatusAsync(
+            walletId!, ArkadeSwapIntentType.BtcToLightning, ArkadeSwapIntentStatus.Pending);
+        var locktime = funded.RefundLocktime
+            ?? throw new InvalidOperationException("the swap recorded no refund locktime");
+
+        // Necessary but not sufficient: the spend cannot confirm until median-time-past crosses the
+        // locktime, and mining is what moves it. The transition that starts the refund waits on the
+        // wall clock regardless — see this test's remarks.
+        await AdvanceChainPastAsync(locktime);
+
+        var waitFor = TimeSpan.FromSeconds(horizonSeconds) + TimeSpan.FromMinutes(2);
+
+        var refunded = await PollForIntentStatusAsync(
+            walletId!, ArkadeSwapIntentType.BtcToLightning, ArkadeSwapIntentStatus.Cancelled, waitFor);
+        Assert.False(string.IsNullOrEmpty(refunded.SpentTxid), "a refunded swap must record the spend that returned the sats");
+
+        // And the sats are ours again, less what the refund itself cost to make.
+        var returned = await PollForBalanceAsync(storeId, fundedBalance - 20_000, TimeSpan.FromMinutes(5));
+        Assert.True(returned > 0, "the refund did not restore a spendable balance");
+    }
+
+    /// <summary>Reads back the BOLT11 of a hold invoice by its payment hash.</summary>
+    private static async Task<string?> ReadHoldInvoiceAsync(string paymentHash)
+    {
+        var raw = await DockerHelper.Exec(
+            "lnd", ["lncli", "--network=regtest", "lookupinvoice", paymentHash]);
+
+        using var doc = JsonDocument.Parse(raw);
+        return doc.RootElement.TryGetProperty("payment_request", out var pr) ? pr.GetString() : null;
+    }
+
+    /// <summary>
+    /// Drags the chain's median-time-past beyond <paramref name="locktime"/>.
+    /// </summary>
+    /// <param name="locktime">The unix second the refund path opens at.</param>
+    /// <remarks>
+    /// Median-time-past is the median of the last eleven block times, so setting the clock forward
+    /// moves nothing on its own — the blocks have to be mined for the median to follow. Mined well
+    /// past the locktime rather than exactly to it, since the median trails the tip by design.
+    /// </remarks>
+    private static async Task AdvanceChainPastAsync(long locktime)
+    {
+        var target = locktime + (long)TimeSpan.FromMinutes(30).TotalSeconds;
+        string[] cli = ["bitcoin-cli", "-regtest", "-rpcuser=admin1", "-rpcpassword=123"];
+
+        await DockerHelper.Exec("bitcoin", [.. cli, "setmocktime", target.ToString()]);
+
+        var address = (await DockerHelper.Exec(
+            "bitcoin", [.. cli, "-rpcwallet=default", "getnewaddress"])).Trim();
+
+        await DockerHelper.Exec("bitcoin", [.. cli, "generatetoaddress", "15", address]);
     }
 
     /// <summary>Registers an admin, creates a store with a fresh Arkade wallet, and returns both.</summary>
