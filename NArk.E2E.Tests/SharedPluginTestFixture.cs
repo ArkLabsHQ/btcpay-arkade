@@ -37,8 +37,13 @@ public class SharedPluginTestFixture : IDisposable
         Environment.SetEnvironmentVariable("BTCPAY_ARKINTENTPOLLSECONDS", "5");
 
         var testDir = Path.Combine(Directory.GetCurrentDirectory(), "ArkadePluginTests");
-        WriteSolverConfigIfRequested(testDir);
         ServerTester = testInstance.CreateServerTester(testDir, newDb: true);
+
+        // After the tester is constructed and before it starts, which is the only window there is:
+        // its constructor deletes the scope directory outright, and StartAsync is what reads the
+        // config. The plugin looks in BTCPay's --datadir, which is the "pay" subdirectory of the
+        // scope rather than the scope itself.
+        WriteSolverConfigIfRequested(Path.Combine(testDir, "pay"));
         // Load plugins in an isolated AssemblyLoadContext — matches the
         // production load model AND matches rockstardev's reference
         // fixture.

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using BTCPayServer.Client;
 using BTCPayServer.Client.Models;
 using BTCPayServer.Lightning;
@@ -20,21 +21,44 @@ namespace NArk.E2E.Tests;
 /// <para>
 /// To run them:
 /// <code>
-/// # 1. the stack. The overrides are not optional — arkd's defaults are block counts, and the
-/// #    corridors need seconds. A stack without them comes up fine and fails later, at settle.
-/// ARKD_VTXO_TREE_EXPIRY=6144 ARKD_UNILATERAL_EXIT_DELAY=512 \
+/// # 1. the stack. The overrides are not optional — arkd's defaults are block counts and the
+/// #    corridors need seconds. VTXO_TREE_EXPIRY must exceed the solver's own 7200s refund
+/// #    horizon, not merely clear the SDK's 6000s floor: at 6144 the solver has no float that
+/// #    outlives the horizon and refuses to fund, which it reports only in its own log.
+/// ARKD_VTXO_TREE_EXPIRY=15360 ARKD_UNILATERAL_EXIT_DELAY=512 \
 /// ARKD_PUBLIC_UNILATERAL_EXIT_DELAY=512 ARKD_BOARDING_EXIT_DELAY=2048 \
 /// ARKD_CHECKPOINT_EXIT_DELAY=1536 COVCLAIMD_IMAGE=ghcr.io/arkade-os/covclaimd:v0.0.1-rc.4 \
 /// node submodules/NNark/regtest/regtest.mjs start --clean --profile emulator,covclaimd,boltz
 ///
-/// # 2. the solver (arkade-os/lightning-swap-service), pointed at that stack's LND, and funded:
-/// #    node scripts/regtest-fund.mjs &lt;regtest-dir&gt; 0.05 &amp;&amp; node scripts/regtest-settle.mjs
+/// # 2. the solver (arkade-os/lightning-swap-service). Rebuild it — a stale dist/ predating the
+/// #    decimal-string amount encoding refuses every request with unsupported_payload — and
+/// #    re-copy the stack's LND credentials, which a --clean regenerates:
+/// #      docker cp boltz-lnd:/root/.lnd/tls.cert ./boltz-lnd-tls.cert
+/// #      docker cp boltz-lnd:/root/.lnd/data/chain/bitcoin/regtest/admin.macaroon ./boltz-lnd-admin.macaroon
+/// #    Then fund its Arkade wallet and serve:
+/// #      node scripts/regtest-fund.mjs &lt;regtest-dir&gt; 0.05 &amp;&amp; node scripts/regtest-settle.mjs
 /// PORT=7095 node --experimental-eventsource --env-file=.env.regtest.lnd dist/cli.js serve
 ///
-/// # 3. this suite
-/// ARKADE_E2E_SOLVER_URL=http://127.0.0.1:7095 \
+/// # 3. the suite's own prerequisites, both easy to miss because the failures name neither:
+/// dotnet run --project ConfigBuilder/ConfigBuilder.csproj    # writes DEBUG_PLUGINS
+/// find NArk.E2E.Tests/bin -name playwright.ps1               # then install chromium
+///
+/// # 4. this suite, with BTCPay pointed at the stack's backing services
+/// TESTS_BTCRPCCONNECTION="server=http://127.0.0.1:18443;admin1:123" \
+/// TESTS_BTCNBXPLORERURL="http://127.0.0.1:32838/" \
+/// TESTS_POSTGRES="Host=localhost;Port=39372;Database=btcpay_e2e_test;Username=postgres" \
+/// TESTS_HOSTNAME=127.0.0.1 ARKADE_E2E_SOLVER_URL=http://127.0.0.1:7095 \
 ///   dotnet test NArk.E2E.Tests --filter "Category=LightningCorridors"
 /// </code>
+/// </para>
+/// <para>
+/// <b>Status as last run.</b> The send corridor and the invoice-amount check pass against a live
+/// solver. <see cref="PaidLightningInvoice_CreditsTheStoreOnArkade"/> does not: the solver quotes
+/// and mints the invoice, then fails to fund its lockup with
+/// <c>Invalid Arkade address: undefined</c>. That is solver-side and visible at compile time —
+/// <c>src/receive/fundLockup.ts</c> calls <c>wallet.send({ recipients: [...] })</c> where its
+/// pinned ts-sdk takes <c>{ address, amount }</c>, so the build errors and the emitted call passes
+/// an address the SDK reads as undefined.
 /// </para>
 /// <para>
 /// An <c>http://</c> solver URL selects the HTTP transport. Production solvers run outbound-only
@@ -246,15 +270,38 @@ public class ArkadeLightningCorridorTests : PlaywrightBaseTest
         var deadline = DateTimeOffset.UtcNow + TimeSpan.FromMinutes(5);
         while (DateTimeOffset.UtcNow < deadline)
         {
-            var state = await DockerHelper.Exec(
+            var raw = await DockerHelper.Exec(
                 "lnd", ["lncli", "--network=regtest", "lookupinvoice", paymentHash]);
 
-            if (state.Contains("\"SETTLED\"", StringComparison.OrdinalIgnoreCase)) return true;
+            if (InvoiceState(raw) is "SETTLED") return true;
 
             await Task.Delay(3_000);
         }
 
         return false;
+    }
+
+    /// <summary>Reads the lifecycle state out of an <c>lncli lookupinvoice</c> reply.</summary>
+    /// <param name="raw">The command's stdout.</param>
+    /// <returns>The state, or <c>null</c> when the reply carried none.</returns>
+    /// <remarks>
+    /// Parsed rather than substring-matched, and the difference is not stylistic: the reply of an
+    /// UNPAID invoice contains <c>"settled": false</c>, so a case-insensitive search for "SETTLED"
+    /// matches the field name and reports every invoice as paid. This assertion passed against a
+    /// deployment with no solver configured at all before it was written this way.
+    /// </remarks>
+    private static string? InvoiceState(string raw)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            return doc.RootElement.TryGetProperty("state", out var state) ? state.GetString() : null;
+        }
+        catch (JsonException)
+        {
+            // lncli prints diagnostics to stdout on some failures; not JSON, so not a state.
+            return null;
+        }
     }
 
     /// <summary>Skips the test unless a solver was named for this run.</summary>
