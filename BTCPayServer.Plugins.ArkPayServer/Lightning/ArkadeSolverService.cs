@@ -26,12 +26,27 @@ public class ArkadeSolverService(ArkadeSolverOptions options, IHttpClientFactory
 
     /// <summary>Whether this deployment has a solver to trade with at all.</summary>
     /// <remarks>
-    /// Both halves are needed to dial: a relay to connect out to, and the solver's identity to address
-    /// on it. Configuring one without the other reaches nobody, so it counts as unconfigured.
+    /// What is needed depends on how the solver is reached, and the endpoint's scheme says which.
+    /// Over a relay both halves are required — somewhere to connect out to, and the solver's identity
+    /// to address on it — because a relay carries traffic for everyone and the key is the only thing
+    /// that picks one counterparty out. Over HTTP the URL is already the address, so a pubkey is
+    /// accepted but not needed.
     /// </remarks>
     public bool IsConfigured =>
         !string.IsNullOrWhiteSpace(options.RelayUri)
-        && !string.IsNullOrWhiteSpace(options.SolverPubkey);
+        && (UsesHttp || !string.IsNullOrWhiteSpace(options.SolverPubkey));
+
+    /// <summary>
+    /// Whether the configured endpoint is reached over HTTP rather than a relay.
+    /// </summary>
+    /// <remarks>
+    /// Read off the scheme rather than configured separately: an operator who writes an
+    /// <c>http://</c> URL has already said which transport they mean, and a second flag that could
+    /// disagree with it would only create a way to be wrong.
+    /// </remarks>
+    private bool UsesHttp =>
+        Uri.TryCreate(options.RelayUri, UriKind.Absolute, out var uri)
+        && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
 
     /// <summary>Whether this deployment can be paid over Lightning, not merely pay.</summary>
     /// <remarks>
@@ -49,16 +64,27 @@ public class ArkadeSolverService(ArkadeSolverOptions options, IHttpClientFactory
     /// <summary>Open an RFQ transport to the configured solver.</summary>
     /// <returns>A transport the caller owns and must dispose.</returns>
     /// <exception cref="InvalidOperationException">No solver is configured.</exception>
+    /// <remarks>
+    /// Two transports, chosen by the endpoint's scheme. A relay is how solvers run in production —
+    /// both sides dial out, so the solver needs no inbound port at all — and HTTP is how one is
+    /// reached when it does have one, which in practice means a development stack. The negotiation
+    /// is identical either way; only the envelope differs.
+    /// </remarks>
     public IRfqTransport OpenTransport()
     {
         if (!IsConfigured)
         {
             throw new InvalidOperationException(
-                "No Arkade swap solver is configured. Set solver-relay and solver-pubkey in the " +
-                "Arkade network configuration to enable the Lightning corridors.");
+                "No Arkade swap solver is configured. Set solver-relay (and solver-pubkey, when it " +
+                "is a relay rather than an HTTP endpoint) in the Arkade network configuration to " +
+                "enable the Lightning corridors.");
         }
 
-        return new NostrRfqTransport(new Uri(options.RelayUri!), options.SolverPubkey!);
+        var endpoint = new Uri(options.RelayUri!);
+
+        return UsesHttp
+            ? new HttpRfqTransport(httpClientFactory.CreateClient(), endpoint)
+            : new NostrRfqTransport(endpoint, options.SolverPubkey!);
     }
 
     /// <summary>Run one negotiation against the configured solver, then close the transport.</summary>
