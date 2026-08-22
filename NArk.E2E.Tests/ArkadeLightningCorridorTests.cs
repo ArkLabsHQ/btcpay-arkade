@@ -1,3 +1,4 @@
+using Newtonsoft.Json.Linq;
 using System.Security.Cryptography;
 using System.Text.Json;
 using BTCPayServer.Client;
@@ -319,6 +320,177 @@ public class ArkadeLightningCorridorTests : PlaywrightBaseTest
         Assert.Equal(recorded.Id, settled.Id);
     }
 
+    // ─── LNURL, which is where LUD-06 actually bites ──────────────────
+
+    /// <summary>
+    /// The BOLT11 an LNURL callback returns is for the amount the customer approved.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The same property as <see cref="CreateInvoice_BillsThePayerTheOrderAmount"/>, but through the
+    /// path where it is actually enforced. LUD-06 is an LNURL rule, and a wallet applies it here: it
+    /// asks the callback for a specific number of millisatoshis and compares what comes back. Going
+    /// through Greenfield asserts what the plugin minted; going through the callback asserts what a
+    /// customer's wallet would accept.
+    /// </para>
+    /// <para>
+    /// Worth having both. The corridor could mint correctly and still be handed a different amount by
+    /// the LNURL layer — BTCPay records the requested amount and passes the solver's invoice through
+    /// without comparing them (UILNURLController), so nothing between here and the customer checks
+    /// this but the customer's own wallet.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task LnurlCallback_ReturnsAnInvoiceForTheAmountAsked()
+    {
+        RequireSolver();
+
+        var (storeId, client) = await SetUpStoreAsync();
+        const long orderSats = 25_000;
+
+        var invoice = await client.CreateInvoice(storeId, new CreateInvoiceRequest
+        {
+            Amount = orderSats,
+            Currency = "SATS",
+            Checkout = new InvoiceDataBase.CheckoutOptions { PaymentMethods = ["BTC-LNURL"] }
+        });
+
+        // What a wallet fetches first: the pay request, carrying the callback and the range.
+        var payRequest = await GetJsonAsync($"/BTC/lnurl/pay/i/{invoice.Id}");
+        var callback = payRequest.GetProperty("callback").GetString();
+        Assert.False(string.IsNullOrEmpty(callback), "the LNURL pay request carried no callback");
+
+        var minSendable = payRequest.GetProperty("minSendable").GetInt64();
+        var maxSendable = payRequest.GetProperty("maxSendable").GetInt64();
+        var askMsat = orderSats * 1000;
+        Assert.InRange(askMsat, minSendable, maxSendable);
+
+        // And what it does next: ask for exactly that, then check what it got.
+        var separator = callback!.Contains('?') ? "&" : "?";
+        var callbackResponse = await GetJsonAsync($"{callback}{separator}amount={askMsat}");
+
+        var pr = callbackResponse.TryGetProperty("pr", out var prValue) ? prValue.GetString() : null;
+        Assert.False(string.IsNullOrEmpty(pr),
+            $"the callback returned no invoice: {callbackResponse}");
+
+        var decoded = BOLT11PaymentRequest.Parse(pr!, Network.RegTest);
+        Assert.Equal(askMsat, (long)decoded.MinimumAmount.MilliSatoshi);
+    }
+
+    // ─── Deadlines the customer is shown ──────────────────────────────
+
+    /// <summary>
+    /// The invoice's life is the solver's to set, and a longer checkout window does not extend it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The solver mints the invoice and picks its own expiry — a fixed thirty minutes, derived from
+    /// its refund horizon less the claim window — and the expiry BTCPay asks for is dropped, because
+    /// nothing in the RFQ request carries one. That is fine while a store's checkout window is
+    /// shorter, and BTCPay's default fifteen minutes is.
+    /// </para>
+    /// <para>
+    /// <b>A merchant who lengthens it has a real problem, and this test records it rather than
+    /// fixing it.</b> Measured here: a sixty-minute checkout hands out an invoice that dies after
+    /// thirty, so half the window a customer is shown counting down cannot be paid in. Sixty minutes
+    /// is an ordinary setting for larger orders. A customer who waits and then pays, pays into an
+    /// expired invoice.
+    /// </para>
+    /// <para>
+    /// Left as a characterisation because the fix is a product decision, not a defect to patch
+    /// quietly: refusing to mint above the solver's window would break those stores outright, and
+    /// capping BTCPay's own checkout from a payment method is a bigger reach than a Lightning client
+    /// should make on its own. What the plugin does do correctly is report the real deadline —
+    /// ArkadeIntentLightningMapper reads ExpiresAt off the minted BOLT11, not off the request — so
+    /// the information is there for whoever decides.
+    /// </para>
+    /// <para>
+    /// Asserted as the relationship rather than the literal thirty minutes, so it still means
+    /// something if the solver's window changes, and fails loudly if it ever grows past the checkout.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task CheckoutWindow_OutlastsTheInvoiceItOffers()
+    {
+        RequireSolver();
+
+        var (storeId, client) = await SetUpStoreAsync();
+        var checkoutWindow = TimeSpan.FromMinutes(60);
+
+        var invoice = await client.CreateInvoice(storeId, new CreateInvoiceRequest
+        {
+            Amount = 25_000,
+            Currency = "SATS",
+            Checkout = new InvoiceDataBase.CheckoutOptions
+            {
+                PaymentMethods = ["BTC-LN"],
+                Expiration = checkoutWindow
+            }
+        });
+
+        var bolt11 = await ReadLightningDestinationAsync(client, invoice.Id);
+        var decoded = BOLT11PaymentRequest.Parse(bolt11, Network.RegTest);
+
+        var checkoutEnds = invoice.ExpirationTime;
+        var invoiceEnds = decoded.ExpiryDate;
+
+        // The gap is the unpayable tail of the checkout. Recorded, not tolerated silently.
+        var unpayable = checkoutEnds - invoiceEnds;
+
+        Assert.True(
+            unpayable > TimeSpan.Zero,
+            $"the invoice now outlives the {checkoutWindow.TotalMinutes:F0}-minute checkout " +
+            $"(checkout ends {checkoutEnds:u}, invoice {invoiceEnds:u}) — the constraint this test " +
+            "documents has changed, and the remarks above are stale");
+
+        TestLogs.LogInformation(
+            $"checkout window {checkoutWindow.TotalMinutes:F0} min, invoice window " +
+            $"{(invoiceEnds - DateTimeOffset.UtcNow).TotalMinutes:F0} min, " +
+            $"unpayable tail {unpayable.TotalMinutes:F0} min");
+    }
+
+    // ─── Spending somebody else's wallet ──────────────────────────────
+
+    /// <summary>
+    /// A store holding only a receive-only connection string cannot mint invoices or pay them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The capability is what separates a store that may spend an Arkade wallet from one that merely
+    /// references it by id. Both connection strings name the same wallet, so without the check the
+    /// second store would be spending the first store's money.
+    /// </para>
+    /// <para>
+    /// Asserted through the corridor rather than against the capability service, because the gate
+    /// lives at the top of Pay and CreateInvoice and was grafted onto this client during a rebase —
+    /// the unit tests cover the capability, not that the corridor consults it.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task ReceiveOnlyConnectionString_CannotMintInvoices()
+    {
+        RequireSolver();
+
+        var (ownerStoreId, client) = await SetUpStoreAsync();
+        var walletId = await GetStoreWalletIdAsync(ownerStoreId);
+        Assert.False(string.IsNullOrEmpty(walletId));
+
+        // A second store pointed at the same wallet, by id and nothing else.
+        var borrowerStoreId = await CreateStore("borrower");
+        await client.UpdateStorePaymentMethod(borrowerStoreId, "BTC-LN", new UpdatePaymentMethodRequest
+        {
+            Enabled = true,
+            Config = JObject.FromObject(new { connectionString = $"type=arkade;wallet-id={walletId}" })
+        });
+
+        var ex = await Assert.ThrowsAnyAsync<Exception>(() =>
+            CreateLightningInvoiceAsync(client, borrowerStoreId, 25_000));
+
+        Assert.True(
+            ex is GreenfieldAPIException or TimeoutException,
+            $"a receive-only store minted an invoice instead of being refused ({ex.GetType().Name}: {ex.Message})");
+    }
+
     // ─── The money-safety path ────────────────────────────────────────
 
     /// <summary>
@@ -430,6 +602,28 @@ public class ArkadeLightningCorridorTests : PlaywrightBaseTest
         Assert.True(returned > 0, "the refund did not restore a spendable balance");
     }
 
+    /// <summary>Fetches JSON from the running BTCPay, absolute or server-relative.</summary>
+    /// <param name="url">The URL to fetch.</param>
+    /// <returns>The parsed body.</returns>
+    /// <remarks>
+    /// Uses Playwright's request context rather than a bare HttpClient so the call carries the same
+    /// session as the browser. LNURL itself is unauthenticated, but the callback BTCPay hands back is
+    /// absolute and points at the tester's own host, and reusing one client keeps that consistent.
+    /// </remarks>
+    private async Task<JsonElement> GetJsonAsync(string url)
+    {
+        var absolute = url.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+            ? url
+            : new Uri(ServerUri!, url).AbsoluteUri;
+
+        var response = await Page!.Context.APIRequest.GetAsync(absolute);
+        var body = await response.TextAsync();
+
+        Assert.True(response.Ok, $"GET {absolute} returned {response.Status}: {body}");
+
+        return JsonDocument.Parse(body).RootElement.Clone();
+    }
+
     /// <summary>Reads back the BOLT11 of a hold invoice by its payment hash.</summary>
     private static async Task<string?> ReadHoldInvoiceAsync(string paymentHash)
     {
@@ -498,6 +692,19 @@ public class ArkadeLightningCorridorTests : PlaywrightBaseTest
                 PaymentMethods = ["BTC-LN"]
             }
         });
+
+        return await ReadLightningDestinationAsync(client, invoice.Id);
+    }
+
+    /// <summary>Waits for an invoice's Lightning destination to appear, and returns it.</summary>
+    /// <param name="client">A Greenfield client for the store's owner.</param>
+    /// <param name="invoiceId">The invoice to read.</param>
+    /// <returns>The BOLT11.</returns>
+    /// <exception cref="TimeoutException">No destination ever appeared.</exception>
+    private static async Task<string> ReadLightningDestinationAsync(
+        BTCPayServerClient client, string invoiceId)
+    {
+        var invoice = new { Id = invoiceId };
 
         // Minting means a negotiation with the solver, so the destination is not there the instant
         // the invoice is created.
