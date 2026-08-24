@@ -86,10 +86,6 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         // Pre-ArkadeIntents Boltz swaps, kept resolvable so their history stays readable.
         RegisterLegacySwapServices(services, networkConfig);
 
-        // Unconditional, and not part of the legacy registration above: its whole purpose is to get
-        // money out of swaps a deployment has stopped configuring for.
-        services.AddSingleton<ArkadeBoltzDrainService>();
-        services.AddHostedService(sp => sp.GetRequiredService<ArkadeBoltzDrainService>());
     }
 
     #region Service Registration
