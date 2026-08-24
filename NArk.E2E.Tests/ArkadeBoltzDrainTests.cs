@@ -36,7 +36,7 @@ public class ArkadeBoltzDrainTests : PlaywrightBaseTest
     /// merchant who is told can go and get the money; one who is not, never learns it is there.
     /// </remarks>
     [Fact]
-    public async Task ChainSwapWithOnchainLockup_IsReportedAsNeedingAnOperator()
+    public async Task ChainSwapWithOnchainLockup_IsReportedAsAwaitingItsTimeout()
     {
         var (storage, drain, walletId) = await SetUpAsync();
         var script = await SeedContractAsync(walletId);
@@ -46,7 +46,7 @@ public class ArkadeBoltzDrainTests : PlaywrightBaseTest
         var found = await drain.DrainAsync();
 
         var swap = Assert.Single(found, s => s.WalletId == walletId);
-        Assert.Equal(SwapRecourse.OnchainNeedsOperator, swap.Recourse);
+        Assert.Equal(SwapRecourse.OnchainAwaitingTimeout, swap.Recourse);
         Assert.Equal(50_000, swap.AmountSats);
     }
 

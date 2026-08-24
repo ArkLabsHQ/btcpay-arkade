@@ -34,9 +34,11 @@ public enum SwapRecourse
     NothingLeft,
 
     /// <summary>
-    /// Its exposure is a Bitcoin HTLC, which this plugin cannot spend. Needs a human, and Boltz.
+    /// Its exposure is a Bitcoin HTLC. The SDK refunds it unilaterally once the CLTV timeout passes,
+    /// but only while the Boltz services are registered — which means leaving <c>boltz</c> in
+    /// <c>ark.json</c> until it has drained.
     /// </summary>
-    OnchainNeedsOperator,
+    OnchainAwaitingTimeout,
 }
 
 /// <summary>
@@ -146,7 +148,7 @@ public class ArkadeBoltzDrainService(
         {
             return new StrandedSwap(
                 swap.WalletId, swap.SwapId, swap.SwapType, swap.ExpectedAmount,
-                SwapRecourse.OnchainNeedsOperator);
+                SwapRecourse.OnchainAwaitingTimeout);
         }
 
         var vtxos = await vtxoStorage.GetVtxos(
@@ -183,7 +185,7 @@ public class ArkadeBoltzDrainService(
     /// <summary>Says what was found, once per pass, at a level matching what it means.</summary>
     private void Report(IReadOnlyCollection<StrandedSwap> found)
     {
-        var onchain = found.Where(s => s.Recourse == SwapRecourse.OnchainNeedsOperator).ToList();
+        var onchain = found.Where(s => s.Recourse == SwapRecourse.OnchainAwaitingTimeout).ToList();
         var sweepable = found.Count(s => s.Recourse == SwapRecourse.SweepableOnArkade);
 
         if (sweepable > 0)
@@ -198,10 +200,10 @@ public class ArkadeBoltzDrainService(
         foreach (var swap in onchain)
         {
             logger.LogWarning(
-                "Boltz swap {SwapId} ({Type}, {Amount} sats, wallet {WalletId}) has an onchain HTLC " +
-                "this plugin cannot spend. Recovering it needs the Boltz lockup transaction. The " +
-                "swap's own record holds the refund key, the lockup script and the address it was " +
-                "paid to, so the sats are recoverable — but not from here.",
+                "Boltz swap {SwapId} ({Type}, {Amount} sats, wallet {WalletId}) still has an onchain " +
+                "HTLC. It refunds itself unilaterally once its CLTV timeout passes, without needing " +
+                "Boltz to be reachable — but only while the Boltz services are registered. Leave " +
+                "'boltz' in ark.json until this swap is gone, or the money goes with it.",
                 swap.SwapId, swap.Type, swap.AmountSats, swap.WalletId);
         }
     }
