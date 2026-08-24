@@ -7,6 +7,8 @@ using NArk.Abstractions.Intents;
 using NArk.Core.Contracts;
 using NArk.Abstractions.Contracts;
 using NArk.Abstractions.VTXOs;
+using NArk.ArkadeIntents;
+using NArk.ArkadeIntents.Models;
 using NArk.Swaps.Models;
 using NBitcoin;
 
@@ -95,6 +97,65 @@ public partial class ArkController
 
     [HttpGet("stores/{storeId}/swaps")]
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    /// <summary>
+    /// Lists the store's Arkade Lightning swaps.
+    /// </summary>
+    /// <remarks>
+    /// Read straight from intent storage rather than through the Lightning client. The client is
+    /// scoped to one wallet's connection string and refuses without a spend capability; this page is
+    /// a merchant looking at their own store, which the controller has already authorised.
+    /// </remarks>
+    [HttpGet("stores/{storeId}/lightning-swaps")]
+    [Authorize(Policy = Policies.CanViewStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> LightningSwaps(
+        string storeId,
+        string? searchTerm = null,
+        int skip = 0,
+        int count = 50)
+    {
+        var (_, config, errorResult) = await ValidateStoreAndConfig();
+        if (errorResult != null) return errorResult;
+
+        if (!config!.GeneratedByStore || arkadeIntentStorage is null)
+        {
+            return View(new StoreLightningSwapsViewModel
+            {
+                StoreId = storeId,
+                SolverConfigured = arkadeSolver.IsConfigured
+            });
+        }
+
+        var statusFilter = ParseEnumFilter<ArkadeSwapIntentStatus>(searchTerm, "status", s => s switch
+        {
+            "pending" => ArkadeSwapIntentStatus.Pending,
+            "claimable" => ArkadeSwapIntentStatus.Claimable,
+            "fulfilled" => ArkadeSwapIntentStatus.Fulfilled,
+            "refundable" => ArkadeSwapIntentStatus.Refundable,
+            "cancelled" => ArkadeSwapIntentStatus.Cancelled,
+            _ => null
+        });
+
+        var swaps = await arkadeIntentStorage.GetArkadeSwapIntents(
+            status: statusFilter,
+            walletIds: [config.WalletId!],
+            cancellationToken: HttpContext.RequestAborted);
+
+        return View(new StoreLightningSwapsViewModel
+        {
+            StoreId = storeId,
+            SolverConfigured = arkadeSolver.IsConfigured,
+            Search = new SearchString(searchTerm ?? string.Empty),
+            SearchText = searchTerm,
+            Skip = skip,
+            Count = count,
+            Swaps = swaps
+                .OrderByDescending(i => i.CreatedAt)
+                .Skip(skip)
+                .Take(count)
+                .ToList()
+        });
+    }
+
     public async Task<IActionResult> Swaps(
         string storeId,
         string? searchTerm = null,

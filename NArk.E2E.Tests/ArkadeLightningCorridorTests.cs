@@ -491,6 +491,38 @@ public class ArkadeLightningCorridorTests : PlaywrightBaseTest
             $"a receive-only store minted an invoice instead of being refused ({ex.GetType().Name}: {ex.Message})");
     }
 
+    // ─── What the merchant can actually see ───────────────────────────
+
+    /// <summary>A swap the store just made shows up on its Lightning swaps page.</summary>
+    /// <remarks>
+    /// The page render test proves the view compiles against an empty list, which is the easy half.
+    /// This proves the other one: that a real swap reaches it. Until this page existed a pending,
+    /// claimable or refunded corridor swap was invisible to the merchant — the money moved and the
+    /// only trace was a log line.
+    ///
+    /// Asserted on the payment hash because it is the one field that identifies this swap and no
+    /// other, and it is what a merchant would search for when reconciling against a payer's receipt.
+    /// </remarks>
+    [Fact]
+    public async Task LightningSwapsPage_ShowsASwapTheStoreJustMade()
+    {
+        RequireSolver();
+
+        var (storeId, client) = await SetUpStoreAsync();
+
+        var bolt11 = await CreateLightningInvoiceAsync(client, storeId, 25_000);
+        var paymentHash = BOLT11PaymentRequest.Parse(bolt11, Network.RegTest).PaymentHash!.ToString();
+
+        await GoToUrl($"/plugins/ark/stores/{storeId}/lightning-swaps");
+        var page = await Page!.ContentAsync();
+
+        Assert.Contains("Lightning swaps", page);
+
+        // Rendered through truncate-center, so the hash is present but split for display; its ends
+        // are what survive in the markup either way.
+        Assert.Contains(paymentHash[..8], page, StringComparison.OrdinalIgnoreCase);
+    }
+
     // ─── The money-safety path ────────────────────────────────────────
 
     /// <summary>

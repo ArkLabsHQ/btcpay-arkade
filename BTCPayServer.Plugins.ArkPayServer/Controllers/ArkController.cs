@@ -36,6 +36,7 @@ using NArk.Abstractions.Extensions;
 using NArk.Abstractions.VTXOs;
 using NArk.Swaps.Abstractions;
 using NArk.Abstractions.Wallets;
+using NArk.ArkadeIntents;
 using NArk.Swaps.Models;
 using NArk.Core.Wallet;
 using NBitcoin;
@@ -47,6 +48,7 @@ namespace BTCPayServer.Plugins.ArkPayServer.Controllers;
 public partial class ArkController(
     BoltzClient? boltzClient,
     ArkadeSolverService arkadeSolver,
+    IArkadeIntentStorage? arkadeIntentStorage,
     ArkNetworkConfig arkNetworkConfig,
     ArkLightningSpendKeyService spendKeyService,
     IAuthorizationService authorizationService,
