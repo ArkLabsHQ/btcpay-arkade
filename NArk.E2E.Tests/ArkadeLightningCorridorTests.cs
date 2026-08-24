@@ -35,7 +35,7 @@ namespace NArk.E2E.Tests;
 /// ARKD_CHECKPOINT_EXIT_DELAY=1536 COVCLAIMD_IMAGE=ghcr.io/arkade-os/covclaimd:v0.0.1-rc.4 \
 /// node submodules/NNark/regtest/regtest.mjs start --clean --profile emulator,covclaimd,boltz
 ///
-/// # 2. the solver (arkade-os/lightning-swap-service). Rebuild it — a stale dist/ predating the
+/// # 2. the swap solver. Rebuild it if its build predates the
 /// #    decimal-string amount encoding refuses every request with unsupported_payload — and
 /// #    re-copy the stack's LND credentials, which a --clean regenerates:
 /// #      docker cp boltz-lnd:/root/.lnd/tls.cert ./boltz-lnd-tls.cert
@@ -61,9 +61,7 @@ namespace NArk.E2E.Tests;
 /// solver. <see cref="PaidLightningInvoice_CreditsTheStoreOnArkade"/> does not: the solver quotes
 /// and mints the invoice, then fails to fund its lockup with
 /// <c>Invalid Arkade address: undefined</c>. That is solver-side and visible at compile time —
-/// <c>src/receive/fundLockup.ts</c> calls <c>wallet.send({ recipients: [...] })</c> where its
-/// pinned ts-sdk takes <c>{ address, amount }</c>, so the build errors and the emitted call passes
-/// an address the SDK reads as undefined.
+/// the solver build in use is stale; rebuild it against its current dependencies.
 /// </para>
 /// <para>
 /// An <c>http://</c> solver URL selects the HTTP transport. Production solvers run outbound-only
@@ -555,7 +553,7 @@ public class ArkadeLightningCorridorTests : PlaywrightBaseTest
     /// </para>
     /// <para>
     /// So this waits out the solver's horizon for real, and the only way to make that quick is a
-    /// solver built with a shorter one (<c>MAX_REFUND_HORIZON</c> in <c>src/core/receive.ts</c>).
+    /// solver configured with a shorter refund horizon.
     /// Set <c>ARKADE_E2E_SHORT_REFUND_HORIZON</c> to the horizon in seconds once such a solver is
     /// running. The refund logic itself is covered by the SDK's own unit tests
     /// (<c>LightningSendRefundTests</c>, <c>RefundMaturityTests</c>, <c>UnilateralLadderTests</c>);
