@@ -1,16 +1,16 @@
 @using BTCPayServer.Plugins.ArkPayServer
 @using BTCPayServer.Plugins.ArkPayServer.Lightning
-@inject ArkadeLightningLimitsService LimitsService
+@inject ArkadeLightningAvailabilityService Availability
 @model BTCPayServer.Models.InvoicingModels.CheckoutModel
 
 @using NBitcoin
 @using System.Globalization
 @using System.Text.RegularExpressions
 @{
-    // Check if Lightning should be shown for this store and invoice amount
-    // The limits service handles all validation logic (store config, Boltz limits, etc.)
+    // Whether to offer Lightning here at all: the store's own configuration, plus whether a solver
+    // is around to settle it. The amount is not vetted — a solver quotes its terms per request.
     var amountSats = (long)Money.Coins(decimal.Parse(Regex.Replace(Model.Due, @"\s", ""), CultureInfo.InvariantCulture)).Satoshi;
-    var shouldShowLightning = await LimitsService.CanSupportLightningAsync(Model.StoreId, amountSats, CancellationToken.None);
+    var shouldShowLightning = await Availability.ShouldOfferLightningAsync(Model.StoreId, amountSats, CancellationToken.None);
 }
 
 <template id="@ArkadePlugin.CheckoutBodyComponentName">

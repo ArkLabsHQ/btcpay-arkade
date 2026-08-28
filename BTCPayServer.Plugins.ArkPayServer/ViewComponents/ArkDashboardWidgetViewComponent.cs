@@ -136,7 +136,6 @@ public class ArkDashboardWidgetViewComponent(
             model.SolverRelayUrl = arkadeSolver.RelayUri;
             model.SolverPubkey = arkadeSolver.SolverPubkey;
             model.SolverConfigured = arkadeSolver.IsConfigured;
-            model.SolverCanReceive = arkadeSolver.CanReceive;
 
             return View(model);
         }

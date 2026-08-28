@@ -200,7 +200,6 @@ public partial class ArkController
             SolverRelayUrl = arkadeSolver.RelayUri,
             SolverPubkey = arkadeSolver.SolverPubkey,
             SolverConfigured = arkadeSolver.IsConfigured,
-            SolverCanReceive = arkadeSolver.CanReceive,
             RecentVtxos = recentVtxos,
             SpendableOutpoints = spendableOutpoints,
             VtxoContracts = vtxoContracts,

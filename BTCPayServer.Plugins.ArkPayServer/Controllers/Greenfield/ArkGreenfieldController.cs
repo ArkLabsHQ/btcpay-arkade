@@ -1133,10 +1133,9 @@ public class ArkGreenfieldController(
             Url = arkadeSolver.RelayUri,
             IsConnected = arkadeSolver.IsConfigured,
             Error = arkadeSolver.IsConfigured
-                ? arkadeSolver.CanReceive
-                    ? null
-                    : "Send only: receiving over Lightning needs a claim daemon ('covclaimd')."
-                : "No Arkade swap solver is configured ('solver-relay' and 'solver-pubkey')."
+                ? null
+                : "No Arkade swap solver can be reached: this network publishes no solver registry "
+                  + "and none is named in ark.json ('solver-relay' and 'solver-pubkey')."
         };
 
         // Blockchain info
@@ -1180,14 +1179,13 @@ public class ArkGreenfieldController(
 
         if (!arkadeSolver.IsConfigured)
             return this.CreateAPIError(404, "solver-not-configured",
-                "No Arkade swap solver is configured. Set 'solver-relay' and 'solver-pubkey' in ark.json.");
+                "No Arkade swap solver can be reached: this network publishes no solver registry and "
+                + "none is named in ark.json ('solver-relay' and 'solver-pubkey').");
 
         return Ok(new ArkLightningSolverData
         {
             RelayUri = arkadeSolver.RelayUri,
-            SolverPubkey = arkadeSolver.SolverPubkey,
-            CanSend = true,
-            CanReceive = arkadeSolver.CanReceive
+            SolverPubkey = arkadeSolver.SolverPubkey
         });
     }
 

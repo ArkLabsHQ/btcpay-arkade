@@ -8,25 +8,31 @@
         ? $"Arkade Operator: Connected\n{Model.ArkOperatorUrl}"
         : $"Arkade Operator: {Model.ArkOperatorError ?? "Disconnected"}\n{Model.ArkOperatorUrl}";
 
-    // Build the Arkade solver tooltip. It reports configuration, not reachability: both sides of the
-    // RFQ transport dial out and neither listens, so the first evidence a solver is there is a quote.
+    // Reports how a solver is reached, not whether one answered: both sides of the RFQ transport
+    // dial out and neither listens, so the first evidence a solver is there is a quote coming back.
+    // A blank relay and pubkey mean discovery — one is chosen per trade, so there is no one address
+    // to name here.
+    var solverNamed = !string.IsNullOrEmpty(Model.SolverRelayUrl);
     var solverTooltipLines = new List<string>();
     if (Model.SolverConfigured)
     {
-        solverTooltipLines.Add("Arkade swap solver: Configured");
-        solverTooltipLines.Add(Model.SolverRelayUrl ?? "");
-        if (!string.IsNullOrEmpty(Model.SolverPubkey))
+        solverTooltipLines.Add(solverNamed
+            ? "Arkade swap solver: Named in ark.json"
+            : "Arkade swap solver: Chosen per payment from the public registry");
+        if (solverNamed)
         {
-            solverTooltipLines.Add($"Solver: {Model.SolverPubkey}");
+            solverTooltipLines.Add(Model.SolverRelayUrl!);
+            if (!string.IsNullOrEmpty(Model.SolverPubkey))
+            {
+                solverTooltipLines.Add($"Solver: {Model.SolverPubkey}");
+            }
         }
-        solverTooltipLines.Add(Model.SolverCanReceive
-            ? "Send and receive available"
-            : "Send only — receiving needs a claim daemon (set 'covclaimd' in ark.json)");
+        solverTooltipLines.Add("Send and receive available");
     }
     else
     {
-        solverTooltipLines.Add("Arkade swap solver: Not configured");
-        solverTooltipLines.Add("Set 'solver-relay' and 'solver-pubkey' in ark.json to enable Lightning");
+        solverTooltipLines.Add("Arkade swap solver: Unavailable");
+        solverTooltipLines.Add("This network has no solver registry — name one with 'solver-relay' and 'solver-pubkey' in ark.json");
     }
     var solverTooltip = string.Join("\n", solverTooltipLines);
 }
@@ -144,25 +150,24 @@ else
             }
             <div class="flex-fill min-w-0">
                 <h6 class="mb-1">Lightning (Arkade solver)</h6>
-                @if (Model.SolverConfigured)
+                @if (Model.SolverConfigured && solverNamed)
                 {
                     <div class="text-muted small font-monospace text-break">@Model.SolverRelayUrl</div>
                     @if (!string.IsNullOrEmpty(Model.SolverPubkey))
                     {
                         <div class="text-muted small font-monospace text-break">@Model.SolverPubkey</div>
                     }
-                    <div class="text-success small mt-1">Configured</div>
-                    @if (!Model.SolverCanReceive)
-                    {
-                        <div class="text-warning small mt-1">
-                            Send only — receiving over Lightning needs a claim daemon. Set &lsquo;covclaimd&rsquo; in ark.json.
-                        </div>
-                    }
+                    <div class="text-success small mt-1">Named in ark.json</div>
+                }
+                else if (Model.SolverConfigured)
+                {
+                    <div class="text-muted small">Chosen per payment from the public solver registry.</div>
+                    <div class="text-success small mt-1">Available</div>
                 }
                 else
                 {
                     <div class="text-danger small mt-1">
-                        Not configured — set &lsquo;solver-relay&rsquo; and &lsquo;solver-pubkey&rsquo; in ark.json to enable Lightning.
+                        Unavailable — this network has no solver registry. Name one with &lsquo;solver-relay&rsquo; and &lsquo;solver-pubkey&rsquo; in ark.json.
                     </div>
                 }
             </div>

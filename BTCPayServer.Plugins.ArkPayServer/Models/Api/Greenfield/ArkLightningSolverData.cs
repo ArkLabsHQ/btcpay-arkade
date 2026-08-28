@@ -6,7 +6,9 @@ namespace BTCPayServer.Plugins.ArkPayServer.Models.Api.Greenfield;
 /// <remarks>
 /// Carries no limits or fees, unlike the Boltz-era shape it replaces. A solver quotes its terms per
 /// request over RFQ rather than publishing them, so any figure here would have to come from a
-/// negotiation opened to answer a read-only call — or be invented.
+/// negotiation opened to answer a read-only call — or be invented. It carries no direction flags
+/// either: both corridors work wherever a solver does, so the endpoint answering at all is the
+/// answer, and a pair of constants would only look like they might one day differ.
 /// </remarks>
 public class ArkLightningSolverData
 {
@@ -15,16 +17,4 @@ public class ArkLightningSolverData
 
     /// <summary>The solver's x-only public key, hex — its identity on the relay.</summary>
     public string? SolverPubkey { get; set; }
-
-    /// <summary>Whether this store can pay Lightning invoices out of its Arkade balance.</summary>
-    public bool CanSend { get; set; }
-
-    /// <summary>
-    /// Whether this store can be paid over Lightning.
-    /// </summary>
-    /// <remarks>
-    /// Narrower than <see cref="CanSend"/> on purpose: receiving additionally needs a claim daemon,
-    /// because the corridor seals its preimage to one and the solver refuses a request without it.
-    /// </remarks>
-    public bool CanReceive { get; set; }
 }

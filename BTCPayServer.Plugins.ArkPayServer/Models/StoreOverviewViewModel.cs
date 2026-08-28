@@ -63,9 +63,6 @@ public class StoreOverviewViewModel
     /// </remarks>
     public bool SolverConfigured { get; set; }
 
-    /// <summary>Whether receiving over Lightning is possible, which additionally needs a claim daemon.</summary>
-    public bool SolverCanReceive { get; set; }
-
     // VTXOs for the overview (recent unspent)
     public IReadOnlyCollection<ArkVtxo> RecentVtxos { get; set; } = [];
     public HashSet<OutPoint> SpendableOutpoints { get; set; } = [];

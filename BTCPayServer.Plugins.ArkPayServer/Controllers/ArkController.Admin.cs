@@ -63,8 +63,7 @@ public partial class ArkController
             ArkOperatorError = ArkOperatorAvailability.DescribeMessage(arkOperatorError),
             SolverRelayUrl = arkadeSolver.RelayUri,
             SolverPubkey = arkadeSolver.SolverPubkey,
-            SolverConfigured = arkadeSolver.IsConfigured,
-            SolverCanReceive = arkadeSolver.CanReceive
+            SolverConfigured = arkadeSolver.IsConfigured
         });
     }
 

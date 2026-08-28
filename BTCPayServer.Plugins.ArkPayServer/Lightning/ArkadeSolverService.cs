@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using NArk.ArkadeIntents.Rfq;
+using NBitcoin;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Lightning;
 
@@ -9,99 +10,88 @@ namespace BTCPayServer.Plugins.ArkPayServer.Lightning;
 /// </summary>
 /// <remarks>
 /// <para>
-/// One solver, named in configuration. That is a deliberate starting point rather than a limitation
-/// worked around: solvers do publish cards to a per-network registry, but an indexed market carries
-/// only who trades and what — not the relays to reach them on — so the registry cannot yet open a
-/// transport by itself. Naming one solver makes the corridors work today and leaves discovery to be
-/// switched on when a card carries enough to dial.
+/// Which solver is not fixed here: <see cref="ArkadeSolverSelector"/> chooses one per trade from the
+/// public registry, or takes the one configuration names. This owns what happens once that choice is
+/// made — opening the right transport for it, and closing it afterwards.
 /// </para>
 /// <para>
-/// The same applies to <see cref="GetCovclaimdKeyAsync"/>, more sharply: the receive corridor's wire
-/// schema requires a preimage sealed to a claim daemon, and no card carries that daemon's key.
+/// A claim daemon is configured the same way and for the same reason — no card carries its key —
+/// but unlike the solver it is optional. See <see cref="ResolveClaimRecipientAsync"/>.
 /// </para>
 /// </remarks>
-public class ArkadeSolverService(ArkadeSolverOptions options, IHttpClientFactory httpClientFactory)
+public class ArkadeSolverService(
+    ArkadeSolverOptions options,
+    ArkadeSolverSelector selector,
+    IHttpClientFactory httpClientFactory)
 {
     private string? _covclaimdKey;
 
-    /// <summary>Whether this deployment has a solver to trade with at all.</summary>
+    /// <summary>Whether this deployment can reach a solver at all.</summary>
     /// <remarks>
-    /// What is needed depends on how the solver is reached, and the endpoint's scheme says which.
-    /// Over a relay both halves are required — somewhere to connect out to, and the solver's identity
-    /// to address on it — because a relay carries traffic for everyone and the key is the only thing
-    /// that picks one counterparty out. Over HTTP the URL is already the address, so a pubkey is
-    /// accepted but not needed.
+    /// Either route counts: a solver named in configuration, or a registry to discover one in. It
+    /// says nothing about whether a solver is listed or serves a given size — that needs the network
+    /// and an amount, and is <see cref="ServesAsync"/>'s question. This is the cheap synchronous
+    /// answer several callers need while rendering a page.
     /// </remarks>
-    public bool IsConfigured =>
-        !string.IsNullOrWhiteSpace(options.RelayUri)
-        && (UsesHttp || !string.IsNullOrWhiteSpace(options.SolverPubkey));
+    public bool IsConfigured => selector.CanReachASolver;
+
+    /// <summary>Whether a solver will trade a Lightning swap of this size.</summary>
+    /// <param name="amountSats">The size being traded.</param>
+    /// <param name="cancellationToken">Cancels the registry fetch.</param>
+    /// <remarks>
+    /// Answered from published cards, so it costs a cached registry read rather than a negotiation.
+    /// A named solver publishes no card and is taken at its word.
+    /// </remarks>
+    public Task<bool> ServesAsync(long amountSats, CancellationToken cancellationToken = default) =>
+        selector.ServesAsync(amountSats, cancellationToken);
+
+    /// <summary>The size range any listed solver serves, for advertising one up front.</summary>
+    /// <param name="cancellationToken">Cancels the registry fetch.</param>
+    public Task<(long Min, long Max)?> ServedRangeAsync(CancellationToken cancellationToken = default) =>
+        selector.ServedRangeAsync(cancellationToken);
+
+    /// <summary>The relay a named solver is reached on, for display. Null when discovered per trade.</summary>
+    public string? RelayUri => selector.HasExplicitSolver ? options.RelayUri : null;
+
+    /// <summary>A named solver's public key, for display. Null when discovered per trade.</summary>
+    public string? SolverPubkey => selector.HasExplicitSolver ? options.SolverPubkey : null;
 
     /// <summary>
-    /// Whether the configured endpoint is reached over HTTP rather than a relay.
+    /// Run one negotiation against the solver chosen for this trade, then close the transport.
     /// </summary>
-    /// <remarks>
-    /// Read off the scheme rather than configured separately: an operator who writes an
-    /// <c>http://</c> URL has already said which transport they mean, and a second flag that could
-    /// disagree with it would only create a way to be wrong.
-    /// </remarks>
-    private bool UsesHttp =>
-        Uri.TryCreate(options.RelayUri, UriKind.Absolute, out var uri)
-        && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
-
-    /// <summary>Whether this deployment can be paid over Lightning, not merely pay.</summary>
-    /// <remarks>
-    /// Receiving needs a claim daemon on top of a solver, because the corridor's wire schema requires
-    /// a preimage sealed to one and the solver refuses a request without it. Sending needs neither.
-    /// </remarks>
-    public bool CanReceive => IsConfigured && !string.IsNullOrWhiteSpace(options.CovclaimdUri);
-
-    /// <summary>The relay the solver is reached on, for display.</summary>
-    public string? RelayUri => options.RelayUri;
-
-    /// <summary>The solver's x-only public key, hex, for display.</summary>
-    public string? SolverPubkey => options.SolverPubkey;
-
-    /// <summary>Open an RFQ transport to the configured solver.</summary>
-    /// <returns>A transport the caller owns and must dispose.</returns>
-    /// <exception cref="InvalidOperationException">No solver is configured.</exception>
-    /// <remarks>
-    /// Two transports, chosen by the endpoint's scheme. A relay is how solvers run in production —
-    /// both sides dial out, so the solver needs no inbound port at all — and HTTP is how one is
-    /// reached when it does have one, which in practice means a development stack. The negotiation
-    /// is identical either way; only the envelope differs.
-    /// </remarks>
-    public IRfqTransport OpenTransport()
-    {
-        if (!IsConfigured)
-        {
-            throw new InvalidOperationException(
-                "No Arkade swap solver is configured. Set solver-relay (and solver-pubkey, when it " +
-                "is a relay rather than an HTTP endpoint) in the Arkade network configuration to " +
-                "enable the Lightning corridors.");
-        }
-
-        var endpoint = new Uri(options.RelayUri!);
-
-        return UsesHttp
-            ? new HttpRfqTransport(httpClientFactory.CreateClient(), endpoint)
-            : new NostrRfqTransport(endpoint, options.SolverPubkey!);
-    }
-
-    /// <summary>Run one negotiation against the configured solver, then close the transport.</summary>
     /// <typeparam name="T">What the negotiation produces.</typeparam>
+    /// <param name="amountSats">The size being traded, which decides which solver can serve it.</param>
     /// <param name="negotiate">The negotiation to run.</param>
+    /// <param name="cancellationToken">Cancels the selection.</param>
     /// <returns>Whatever <paramref name="negotiate"/> returned.</returns>
-    /// <exception cref="InvalidOperationException">No solver is configured.</exception>
+    /// <exception cref="InvalidOperationException">No solver serves a trade this size.</exception>
     /// <remarks>
+    /// <para>
+    /// The solver is chosen per trade rather than once at startup, because which one can serve a
+    /// swap depends on its size: a size outside one solver's published bounds may be inside
+    /// another's, and picking a counterparty before knowing the amount throws that away.
+    /// </para>
+    /// <para>
     /// <see cref="IRfqTransport"/> is not itself disposable — an HTTP transport holds nothing to
     /// release — so a caller opening one directly has to remember the implementation it got might
     /// be. This closes over that difference rather than leaving each call site to test for it, which
     /// on the Nostr transport is the difference between closing a relay socket and leaking one per
     /// invoice.
+    /// </para>
     /// </remarks>
-    public async Task<T> WithTransportAsync<T>(Func<IRfqTransport, Task<T>> negotiate)
+    public async Task<T> WithTransportAsync<T>(
+        long amountSats,
+        Func<IRfqTransport, Task<T>> negotiate,
+        CancellationToken cancellationToken = default)
     {
-        var transport = OpenTransport();
+        var rendezvous = await selector.SelectAsync(amountSats, cancellationToken)
+            ?? throw new InvalidOperationException(
+                $"No Arkade swap solver serves a Lightning swap of {amountSats} sats. Either no " +
+                "solver is listed for this network, or none publishes bounds that include this " +
+                "amount. Set solver-relay and solver-pubkey in the Arkade network configuration to " +
+                "name one directly.");
+
+        var transport = Open(rendezvous);
         try
         {
             return await negotiate(transport);
@@ -112,31 +102,58 @@ public class ArkadeSolverService(ArkadeSolverOptions options, IHttpClientFactory
         }
     }
 
+    /// <summary>Open the transport the rendezvous calls for.</summary>
+    /// <remarks>
+    /// Chosen by the endpoint's scheme rather than configured separately: an operator who writes an
+    /// <c>http://</c> URL has already said which transport they mean, and a second flag that could
+    /// disagree with it would only create a way to be wrong. A discovered solver is always reached
+    /// over a relay — the registry publishes nothing else.
+    /// </remarks>
+    private IRfqTransport Open(SolverRendezvous rendezvous) =>
+        rendezvous.Relay.Scheme is var scheme
+        && (scheme == Uri.UriSchemeHttp || scheme == Uri.UriSchemeHttps)
+            ? new HttpRfqTransport(httpClientFactory.CreateClient(), rendezvous.Relay)
+            : new NostrRfqTransport(rendezvous.Relay, rendezvous.Pubkey);
+
     /// <summary>
-    /// The claim daemon's public key, which a receive swap seals its preimage to.
+    /// The key a receive swap seals its preimage to, so somebody can finish the claim.
     /// </summary>
     /// <param name="cancellationToken">Cancels the fetch.</param>
     /// <returns>The compressed key, hex.</returns>
-    /// <exception cref="InvalidOperationException">No daemon is configured, or it answered without a key.</exception>
+    /// <exception cref="InvalidOperationException">A daemon is configured but answered without a key.</exception>
     /// <remarks>
-    /// Read from the daemon rather than configured as a literal: it generates its key at startup, so a
-    /// value copied into a config file goes stale the first time the daemon restarts and nothing would
-    /// notice — the swap would simply seal to a key nobody holds and lose its offline claim path.
-    /// Cached for this service's lifetime only, for the same reason.
+    /// <para>
+    /// The corridor's wire schema requires this field, so there is always a key on the wire — but who
+    /// holds it is a deployment choice. With a claim daemon configured, the packet is sealed to it and
+    /// the swap gains a second party able to claim while we are down. Without one, it is sealed to a
+    /// key generated here and immediately discarded: the field is satisfied, the packet is openable by
+    /// nobody, and the only claim path is our own.
+    /// </para>
+    /// <para>
+    /// Losing that backstop is a real but bounded cost, and a long-running server is the deployment
+    /// that can afford it. Claiming is driven by intent events rather than by a wallet that has to be
+    /// open at the right moment. If this server were down for the whole claim window the lockup would
+    /// return to the solver and the payer's hold would lapse — a payment that fails, not funds that
+    /// are lost.
+    /// </para>
+    /// <para>
+    /// A configured daemon's key is read from it rather than written in configuration: it generates
+    /// the key at startup, so a literal copied into a config file goes stale the first time the daemon
+    /// restarts and nothing would notice. Cached for this service's lifetime only, for the same
+    /// reason. The throwaway key is deliberately not cached — reusing one across swaps would link them
+    /// on the wire for no benefit, since neither is openable.
+    /// </para>
     /// </remarks>
-    public async Task<string> GetCovclaimdKeyAsync(CancellationToken cancellationToken = default)
+    public async Task<string> ResolveClaimRecipientAsync(CancellationToken cancellationToken = default)
     {
+        if (string.IsNullOrWhiteSpace(options.CovclaimdUri))
+        {
+            return new Key().PubKey.Compress().ToHex();
+        }
+
         if (_covclaimdKey is { } cached)
         {
             return cached;
-        }
-
-        if (string.IsNullOrWhiteSpace(options.CovclaimdUri))
-        {
-            throw new InvalidOperationException(
-                "Receiving over Lightning needs a claim daemon: the corridor seals its preimage to one " +
-                "and the solver refuses a request without it. Set covclaimd in the Arkade network " +
-                "configuration. Paying invoices does not need it.");
         }
 
         using var http = httpClientFactory.CreateClient();

@@ -25,8 +25,6 @@ using Microsoft.Extensions.Logging;
 using NArk.Abstractions;
 using NArk.Abstractions.Fees;
 using NArk.Abstractions.Intents;
-using NArk.Swaps.Boltz;
-using NArk.Swaps.Boltz.Client;
 using NArk.Hosting;
 using NArk.Core.Services;
 using NArk.Core.Transport;
@@ -46,7 +44,6 @@ namespace BTCPayServer.Plugins.ArkPayServer.Controllers;
 [Route("plugins/ark")]
 [Authorize(AuthenticationSchemes = AuthenticationSchemes.Cookie)]
 public partial class ArkController(
-    BoltzClient? boltzClient,
     ArkadeSolverService arkadeSolver,
     IArkadeIntentStorage? arkadeIntentStorage,
     ArkNetworkConfig arkNetworkConfig,
@@ -73,6 +70,7 @@ public partial class ArkController(
     VtxoSynchronizationService vtxoSyncService,
     IContractStorage contractStorage,
     ISwapStorage swapStorage,
+    ArkadeLegacySwapsService legacySwaps,
     IVtxoStorage vtxoStorage,
     IWalletStorage walletStorage,
     IDbContextFactory<ArkPluginDbContext> dbContextFactory,

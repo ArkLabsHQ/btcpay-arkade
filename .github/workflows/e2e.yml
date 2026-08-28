@@ -116,10 +116,12 @@ jobs:
           # by the previous step so cheat-mode targets whichever exists,
           # rather than pinning to a name that goes stale across regtest bumps.
           ARKADE_CHEAT_ARK_CONTAINER: ${{ steps.arkd-container.outputs.name }}
-        # The Lightning corridors are excluded: they need a swap solver, a claim daemon and a
-        # covenant emulator running beside this stack, and none of them are started here. Drop the
-        # filter once they are — ArkadeLightningCorridorTests documents what it takes to run them.
-        run: dotnet test NArk.E2E.Tests/NArk.E2E.Tests.csproj --no-build --verbosity normal --filter "Category!=LightningCorridors" --logger "console;verbosity=detailed"
+        # Two categories are excluded. LightningCorridors needs a swap solver, a claim daemon and a
+        # covenant emulator running beside this stack, and none of them are started here — drop that
+        # filter once they are; ArkadeLightningCorridorTests documents what it takes. SolverRegistry
+        # reaches the public solver registry over the internet, so a slow GitHub Pages or a delisted
+        # solver would fail a build for reasons that have nothing to do with the commit.
+        run: dotnet test NArk.E2E.Tests/NArk.E2E.Tests.csproj --no-build --verbosity normal --filter "Category!=LightningCorridors&Category!=SolverRegistry" --logger "console;verbosity=detailed"
         timeout-minutes: 20
 
       - name: Collect docker logs on failure

@@ -86,7 +86,6 @@ public partial class ArkController
             ContractSwaps = contractSwaps,
             CanManageContracts = config.GeneratedByStore,
             Debug = debug,
-            CachedSwapScripts = [], // Active swap scripts tracked by SwapsManagementService internally
             CachedContractScripts = (await contractStorage.GetContracts(walletIds: [config.WalletId], isActive: true, cancellationToken: HttpContext.RequestAborted))
                 .Select(c => c.Script).ToHashSet(),
             ListenedScripts = debug ? vtxoSyncService.ListenedScripts.ToHashSet() : []
@@ -170,6 +169,12 @@ public partial class ArkController
         if (!config!.GeneratedByStore)
             return View(new StoreSwapsViewModel { StoreId = storeId });
 
+        // Hidden from the navigation once a store has no pre-migration swaps, so a request that
+        // still arrives is a stale bookmark rather than a choice. Send it to the page that replaced
+        // this one instead of rendering a table that can never fill.
+        if (!await legacySwaps.HasLegacySwapsAsync(config.WalletId, HttpContext.RequestAborted))
+            return RedirectToAction(nameof(LightningSwaps), new { storeId });
+
         // Get status filter using helper
         var statusFilter = ParseEnumFilter<ArkSwapStatus>(searchTerm, "status", s => s switch
         {
@@ -212,60 +217,10 @@ public partial class ArkController
             Count = count,
             SearchText = searchText,
             Search = new SearchString(searchTerm),
-            Debug = debug,
-            CachedSwapIds = []
+            Debug = debug
         };
 
         return View(model);
-    }
-
-    [HttpPost("stores/{storeId}/swaps/{swapId}/poll")]
-    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
-    public async Task<IActionResult> PollSwap(string storeId, string swapId)
-    {
-        var (store, config, errorResult) = await ValidateStoreAndConfig();
-        if (errorResult != null) return errorResult;
-
-        try
-        {
-            if (boltzClient == null)
-                return RedirectWithError(nameof(Swaps), "Boltz client is not configured", new { storeId });
-
-            var swaps = await swapStorage.GetSwaps(
-                walletIds: [config!.WalletId!],
-                swapIds: [swapId],
-                cancellationToken: HttpContext.RequestAborted);
-            var swap = swaps.FirstOrDefault();
-            if (swap == null)
-                return RedirectWithError(nameof(Swaps), $"Swap {swapId} not found.", new { storeId });
-
-            var statusResponse = await boltzClient.GetSwapStatusAsync(swapId, HttpContext.RequestAborted);
-            var newStatus = MapBoltzStatus(statusResponse.Status);
-
-            if (swap.Status != newStatus)
-            {
-                await swapStorage.UpdateSwapStatus(config.WalletId!, swapId, newStatus, cancellationToken: HttpContext.RequestAborted);
-                return RedirectWithSuccess(nameof(Swaps), $"Swap {swapId} polled successfully. Status updated to: {newStatus}", new { storeId });
-            }
-
-            return RedirectWithSuccess(nameof(Swaps), $"Swap {swapId} polled successfully. No status change (current: {swap.Status}).", new { storeId });
-        }
-        catch (Exception ex)
-        {
-            return RedirectWithError(nameof(Swaps), $"Error polling swap: {ex.Message}", new { storeId });
-        }
-    }
-
-    private static ArkSwapStatus MapBoltzStatus(string status)
-    {
-        return status switch
-        {
-            "swap.created" or "invoice.set" => ArkSwapStatus.Pending,
-            "invoice.failedToPay" or "invoice.expired" or "swap.expired" or "transaction.failed" or "transaction.refunded" => ArkSwapStatus.Failed,
-            "transaction.mempool" => ArkSwapStatus.Pending,
-            "transaction.confirmed" or "invoice.settled" or "transaction.claimed" => ArkSwapStatus.Settled,
-            _ => ArkSwapStatus.Unknown
-        };
     }
 
     [HttpGet("stores/{storeId}/vtxos")]
@@ -669,58 +624,6 @@ public partial class ArkController
         }
     }
 
-    [HttpPost("stores/{storeId}/swaps/mass-action")]
-    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
-    public async Task<IActionResult> MassActionSwaps(string storeId, string command, string[] selectedItems, CancellationToken cancellationToken)
-    {
-        var (store, config, errorResult) = await ValidateStoreAndConfig();
-        if (errorResult != null) return errorResult;
-
-        if (selectedItems.Length == 0)
-            return RedirectWithError(nameof(Swaps), "No items selected.", new { storeId });
-
-        try
-        {
-            switch (command)
-            {
-                case "poll-status":
-                    if (boltzClient == null)
-                        return RedirectWithError(nameof(Swaps), "Boltz client is not configured.", new { storeId });
-
-                    var updatedCount = 0;
-                    // Batch fetch all swaps at once for efficiency
-                    var swapsToCheck = await swapStorage.GetSwaps(
-                        walletIds: [config!.WalletId!],
-                        swapIds: selectedItems,
-                        cancellationToken: cancellationToken);
-                    var swapsDict = swapsToCheck.ToDictionary(s => s.SwapId);
-
-                    foreach (var swapId in selectedItems)
-                    {
-                        if (!swapsDict.TryGetValue(swapId, out var swap))
-                            continue;
-
-                        var statusResponse = await boltzClient.GetSwapStatusAsync(swapId, cancellationToken);
-                        var newStatus = MapBoltzStatus(statusResponse.Status);
-
-                        if (swap.Status != newStatus)
-                        {
-                            await swapStorage.UpdateSwapStatus(config.WalletId!, swapId, newStatus, cancellationToken: cancellationToken);
-                            updatedCount++;
-                        }
-                    }
-                    return RedirectWithSuccess(nameof(Swaps), $"Polled {selectedItems.Length} swaps. {updatedCount} status updates.", new { storeId });
-
-                default:
-                    return RedirectWithError(nameof(Swaps), $"Unknown command: {command}", new { storeId });
-            }
-        }
-        catch (Exception ex)
-        {
-            return RedirectWithError(nameof(Swaps), $"Mass action failed: {ex.Message}", new { storeId });
-        }
-    }
-
     [HttpPost("stores/{storeId}/contracts/mass-action")]
     [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
     public async Task<IActionResult> MassActionContracts(string storeId, string command, string[] selectedItems, CancellationToken cancellationToken)
@@ -796,58 +699,6 @@ public partial class ArkController
                 case "build-intent":
                     // Redirect to spend/intent builder with selected VTXOs
                     return RedirectToAction(nameof(SpendOverview), new { storeId, vtxoOutpoints = string.Join(",", selectedItems) });
-
-                default:
-                    return RedirectWithError(nameof(Contracts), $"Unknown command: {command}", new { storeId });
-            }
-        }
-        catch (Exception ex)
-        {
-            return RedirectWithError(nameof(Contracts), $"Mass action failed: {ex.Message}", new { storeId });
-        }
-    }
-
-    [HttpPost("stores/{storeId}/contracts/swaps-sublist/mass-action")]
-    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
-    public async Task<IActionResult> MassActionSwapsSublist(string storeId, string contractScript, string command, string[] selectedItems, CancellationToken cancellationToken)
-    {
-        var (store, config, errorResult) = await ValidateStoreAndConfig();
-        if (errorResult != null) return errorResult;
-
-        if (selectedItems.Length == 0)
-            return RedirectWithError(nameof(Contracts), "No items selected.", new { storeId });
-
-        try
-        {
-            switch (command)
-            {
-                case "poll-status":
-                    if (boltzClient == null)
-                        return RedirectWithError(nameof(Contracts), "Boltz client is not configured.", new { storeId });
-
-                    var updatedSwapCount = 0;
-                    // Batch fetch all swaps at once for efficiency
-                    var swapsForContracts = await swapStorage.GetSwaps(
-                        walletIds: [config!.WalletId!],
-                        swapIds: selectedItems,
-                        cancellationToken: cancellationToken);
-                    var contractSwapsDict = swapsForContracts.ToDictionary(s => s.SwapId);
-
-                    foreach (var swapId in selectedItems)
-                    {
-                        if (!contractSwapsDict.TryGetValue(swapId, out var swap))
-                            continue;
-
-                        var statusResponse = await boltzClient.GetSwapStatusAsync(swapId, cancellationToken);
-                        var newStatus = MapBoltzStatus(statusResponse.Status);
-
-                        if (swap.Status != newStatus)
-                        {
-                            await swapStorage.UpdateSwapStatus(config.WalletId!, swapId, newStatus, cancellationToken: cancellationToken);
-                            updatedSwapCount++;
-                        }
-                    }
-                    return RedirectWithSuccess(nameof(Contracts), $"Polled {selectedItems.Length} swaps. {updatedSwapCount} status updates.", new { storeId });
 
                 default:
                     return RedirectWithError(nameof(Contracts), $"Unknown command: {command}", new { storeId });

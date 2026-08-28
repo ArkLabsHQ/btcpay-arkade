@@ -184,12 +184,12 @@ public class ArkLightningClient(
         }
 
         var amountSats = (long)createInvoiceRequest.Amount.ToUnit(LightMoneyUnit.Satoshi);
-        var covclaimdKey = await solver.GetCovclaimdKeyAsync(cancellation);
+        var claimRecipient = await solver.ResolveClaimRecipientAsync(cancellation);
 
-        var pending = await solver.WithTransportAsync(transport =>
+        var pending = await solver.WithTransportAsync(amountSats, transport =>
             intents.ReceiveFromLightningAsync(
-                walletId, amountSats, transport, covclaimdKey,
-                amountSide: RfqAmountSide.From, cancellationToken: cancellation));
+                walletId, amountSats, transport, claimRecipient,
+                amountSide: RfqAmountSide.From, cancellationToken: cancellation), cancellation);
 
         var intent = await GetIntentAsync(pending.RfqId, cancellation)
             ?? throw new InvalidOperationException(
@@ -267,8 +267,14 @@ public class ArkLightningClient(
             var (intents, solver, _) = Corridors;
             var pr = BOLT11PaymentRequest.Parse(bolt11, network);
 
-            var funded = await solver.WithTransportAsync(transport =>
-                intents.SendToLightningAsync(walletId, bolt11, transport, cancellationToken: cancellation));
+            // The invoice amount, which is the Lightning leg. The Arkade leg is that plus the
+            // solver's fee, so this understates the trade by the fee — close enough to pick a solver
+            // by, and the quote is what settles the exact figure anyway.
+            var amountSats = (long)pr.MinimumAmount.ToUnit(LightMoneyUnit.Satoshi);
+
+            var funded = await solver.WithTransportAsync(amountSats, transport =>
+                intents.SendToLightningAsync(walletId, bolt11, transport, cancellationToken: cancellation),
+                cancellation);
 
             var intent = await GetIntentAsync(funded.RfqId, cancellation)
                 ?? throw new InvalidOperationException(

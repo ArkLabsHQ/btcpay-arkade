@@ -1,43 +1,63 @@
 using BTCPayServer.Abstractions.Services;
 using BTCPayServer.Payments.LNURLPay;
 using BTCPayServer.Plugins.ArkPayServer.Lightning;
+using BTCPayServer.Lightning;
+using LNURL;
 
 namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 
 /// <summary>
-/// Withdraws LNURL-pay from a store whose Arkade Lightning has nothing to settle with.
+/// Holds a store's LNURL-pay offer to what its Arkade Lightning corridor can actually settle.
 /// </summary>
 /// <remarks>
 /// <para>
 /// LNURL is a standing offer to be paid any amount within a range, which makes an unsettleable
 /// corridor worse here than elsewhere: the payer picks the amount and pays before anything of ours
 /// gets a say, so a corridor that cannot fill leaves them holding a payment nothing will honour.
-/// Withdrawing the offer is the only honest answer.
 /// </para>
 /// <para>
-/// It no longer narrows the range. The Boltz integration this replaced clamped
-/// <c>MinSendable</c>/<c>MaxSendable</c> to published swap limits; an Arkade solver's limits come
-/// back with a quote, so there is nothing to clamp to until a negotiation is already open. An amount
-/// outside the solver's terms is refused at quoting time with its own reason, rather than silently
-/// excluded from a range computed earlier.
+/// So the range is narrowed to what a solver publicly commits to serving, and the offer is
+/// withdrawn outright when nothing can serve it at all. Both answers come from published cards
+/// rather than from a negotiation — an LNURL request has no amount yet to negotiate over, and
+/// opening a quote to answer one would mean quoting for every wallet that merely looks.
+/// </para>
+/// <para>
+/// A solver named in configuration publishes no card, so there is nothing to narrow to and its
+/// range is left alone. That is the development case, and the case of an operator who has already
+/// decided who they trade with.
 /// </para>
 /// </remarks>
 public class ArkadeLNURLPayRequestFilter(
-    ArkadeLightningLimitsService limitsService,
+    ArkadeLightningAvailabilityService availability,
     ArkadeSolverService solver
 ) : PluginHookFilter<StoreLNURLPayRequest>
 {
     public override string Hook => "modify-lnurlp-request";
 
-    public override Task<StoreLNURLPayRequest> Execute(StoreLNURLPayRequest request)
+    public override async Task<StoreLNURLPayRequest> Execute(StoreLNURLPayRequest request)
     {
         if (request?.Tag != "payRequest" || request.Store == null)
-            return Task.FromResult(request);
+            return request;
 
         // Not using Arkade Lightning, so this store's LNURL is somebody else's problem.
-        if (!limitsService.IsStoreUsingArkadeLightning(request.Store))
-            return Task.FromResult(request);
+        if (!availability.IsStoreUsingArkadeLightning(request.Store))
+            return request;
 
-        return Task.FromResult(solver.IsConfigured ? request : null);
+        if (!solver.IsConfigured)
+            return null!;
+
+        if (await solver.ServedRangeAsync() is not { } served)
+            return request;
+
+        var min = LightMoney.Satoshis(served.Min);
+        var max = LightMoney.Satoshis(served.Max);
+
+        request.MinSendable = request.MinSendable > min ? request.MinSendable : min;
+        request.MaxSendable = request.MaxSendable < max ? request.MaxSendable : max;
+
+        // The store's own range and the corridor's can fail to overlap — a minimum above every
+        // solver's maximum, or the reverse. An inverted range is not an offer anyone can take, and
+        // publishing one invites a payment that cannot settle.
+        return request.MinSendable > request.MaxSendable ? null! : request;
     }
 }

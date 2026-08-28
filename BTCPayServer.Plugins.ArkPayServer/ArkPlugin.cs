@@ -31,6 +31,7 @@ using NArk.Storage.EfCore.Entities;
 using NArk.Storage.EfCore.Hosting;
 using NArk.Swaps.Policies;
 using NArk.Swaps.Transformers;
+using NArk.ArkadeIntents.Services;
 using NArk.Swaps.Boltz;
 using NArk.Swaps.Boltz.Client;
 using NArk.Swaps.Services;
@@ -95,7 +96,7 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         services.AddSingleton<ArkLightningSpendKeyService>();
         services.AddHostedService<ArkLightningSpendKeyMigration>();
         services.AddSingleton<ILightningConnectionStringHandler, ArkLightningConnectionStringHandler>();
-        services.AddSingleton<ArkadeLightningLimitsService>();
+        services.AddSingleton<ArkadeLightningAvailabilityService>();
 
         services.AddSingleton<ArkadePaymentMethodHandler>();
         services.AddSingleton<IPaymentMethodHandler>(sp => sp.GetRequiredService<ArkadePaymentMethodHandler>());
@@ -362,6 +363,19 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
     {
         var solverOptions = GetSolverOptions(pluginServices);
         services.AddSingleton(solverOptions);
+
+        // The registry's name for this chain, or null where it publishes no index — which is the
+        // whole of what decides whether a solver can be discovered rather than named.
+        var registryNetwork = ArkadeSolverSelector.RegistryNetworkName(
+            DefaultConfiguration.GetNetworkType(
+                pluginServices.BootstrapServices.GetRequiredService<IConfiguration>()));
+
+        // GetService, not GetRequiredService: SolverDiscoveryService arrives with
+        // AddArkadeIntentsServices below, which only runs when an emulator is configured. Without
+        // one the corridors are dark anyway, and the selector should say so rather than fail to
+        // resolve.
+        services.AddSingleton(sp => new ArkadeSolverSelector(
+            solverOptions, registryNetwork, sp.GetService<SolverDiscoveryService>()));
         services.AddSingleton<ArkadeSolverService>();
 
         services.AddSingleton<ArkadeLNURLPayRequestFilter>();
@@ -390,6 +404,10 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
     /// </remarks>
     private static void RegisterLegacySwapServices(IServiceCollection services, ArkNetworkConfig networkConfig)
     {
+        // Registered on both branches: the legacy page is hidden or shown by whether rows exist,
+        // which is a question about the database, not about whether Boltz is still reachable.
+        services.AddSingleton<ArkadeLegacySwapsService>();
+
         if (!string.IsNullOrWhiteSpace(networkConfig.BoltzUri))
         {
             services.AddHttpClient<BoltzClient>();
@@ -409,12 +427,6 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
             // a second registration would run the policy twice.
             services.AddSingleton<ISweepPolicy, SwapSweepPolicy>();
             services.AddSingleton<IContractTransformer, VHTLCContractTransformer>();
-
-            // Null implementations for optional dependencies
-            services.AddSingleton<BoltzClient>(_ => null!);
-            services.AddSingleton<CachedBoltzClient>(_ => null!);
-            services.AddSingleton<SwapsManagementService>(_ => null!);
-            services.AddSingleton<BoltzLimitsValidator>(_ => null!);
         }
     }
 

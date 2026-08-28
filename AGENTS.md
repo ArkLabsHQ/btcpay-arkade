@@ -62,7 +62,8 @@ The plugin supports these key flows:
   `NArk.ArkadeIntents`). Both directions settle into a covenant; sending funds a
   lockup the solver takes by revealing the preimage, receiving takes delivery by
   claiming one the solver funded. Configured under `solver-relay`,
-  `solver-pubkey`, `covclaimd` and `emulator` in `ark.json`.
+  `solver-pubkey` and `emulator` in `ark.json`; `covclaimd` is optional and adds
+  a daemon that can finish a claim while this server is down.
   Boltz swaps predate this and are no longer created — the old table and its
   pages remain read-only so existing swaps stay visible and refundable.
 - **Boarding Address Flow**: users enter the Ark system by funding a Taproot
