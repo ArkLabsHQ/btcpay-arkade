@@ -178,7 +178,10 @@ else
                                     }
                                 </div>
                                 <div class="col-12 col-md-3">
-                                    <label class="form-label" text-translate="true">Amount (BTC)</label>
+                                    <label class="form-label">
+                                        <span text-translate="true">Amount</span>
+                                        <span class="amount-unit-label">(BTC)</span>
+                                    </label>
                                     <div class="input-group">
                                         <input type="number"
                                                name="Outputs[@i].AmountBtc"
@@ -188,8 +191,13 @@ else
                                                step="0.00000001"
                                                min="0"
                                                data-index="@i"
+                                               data-unit="btc"
                                                @(output.IsReadonly && output.AmountBtc.HasValue ? "readonly" : "") />
                                         <button type="button" class="btn btn-outline-secondary max-amount-btn only-for-js" data-index="@i" title="Fill remaining balance">Max</button>
+                                        <select class="form-select amount-unit-select only-for-js" data-index="@i" style="max-width: 5.5rem; flex: 0 0 auto;" title="Switch denomination">
+                                            <option value="btc" selected>BTC</option>
+                                            <option value="sats">sats</option>
+                                        </select>
                                     </div>
                                     <small class="remaining-balance-hint text-muted d-none mt-1"></small>
                                 </div>
@@ -431,6 +439,78 @@ else
             };
         }
 
+        // Amount-input unit handling (BTC | sats) — issue #40.
+        // The form posts AmountBtc, but users can choose to type/read in sats.
+        // The .amount-input element holds the displayed value in its current
+        // `data-unit` (btc by default); read helpers always return BTC so the
+        // existing fee/balance math is unaffected. The form submit handler
+        // below converts any sats-mode inputs back to BTC strings before POST.
+        const SATS_PER_BTC = 100000000;
+        const AMOUNT_UNIT_STORAGE_KEY = 'arkSendAmountUnit';
+
+        function preferredAmountUnit() {
+            return localStorage.getItem(AMOUNT_UNIT_STORAGE_KEY) === 'sats' ? 'sats' : 'btc';
+        }
+
+        function readBtcFromAmountInput(input) {
+            if (!input || !input.value || input.value.toString().trim() === '') return 0;
+            const n = parseFloat(input.value);
+            if (isNaN(n) || n < 0) return 0;
+            return input.dataset.unit === 'sats' ? n / SATS_PER_BTC : n;
+        }
+
+        function readSatsFromAmountInput(input) {
+            return Math.round(readBtcFromAmountInput(input) * SATS_PER_BTC);
+        }
+
+        function writeAmountInputFromBtc(input, btc) {
+            if (!input) return;
+            if (input.dataset.unit === 'sats') {
+                input.value = Math.round(btc * SATS_PER_BTC).toString();
+            } else {
+                input.value = (typeof btc === 'number' ? btc.toFixed(8) : String(btc));
+            }
+        }
+
+        function applyUnitToAmountInput(input, unit) {
+            if (!input) return;
+            input.dataset.unit = unit;
+            input.step = unit === 'sats' ? '1' : '0.00000001';
+        }
+
+        // Convert displayed value of an input from its current unit to newUnit
+        // and update its presentation (step). Preserves empty / invalid input
+        // unchanged so we never destroy what the user typed.
+        function switchAmountInputUnit(input, newUnit) {
+            if (!input) return;
+            const oldUnit = input.dataset.unit === 'sats' ? 'sats' : 'btc';
+            if (oldUnit === newUnit) return;
+            const raw = (input.value ?? '').toString().trim();
+            if (raw !== '') {
+                const n = parseFloat(raw);
+                if (!isNaN(n) && n >= 0) {
+                    if (oldUnit === 'btc' && newUnit === 'sats') {
+                        input.value = Math.round(n * SATS_PER_BTC).toString();
+                    } else if (oldUnit === 'sats' && newUnit === 'btc') {
+                        input.value = (n / SATS_PER_BTC).toFixed(8);
+                    }
+                }
+            }
+            applyUnitToAmountInput(input, newUnit);
+            const row = input.closest('.output-row');
+            const label = row?.querySelector('.amount-unit-label');
+            if (label) label.textContent = newUnit === 'sats' ? '(sats)' : '(BTC)';
+        }
+
+        function syncAllUnitsTo(newUnit) {
+            document.querySelectorAll('.output-row').forEach(row => {
+                const select = row.querySelector('.amount-unit-select');
+                const input = row.querySelector('.amount-input');
+                if (select) select.value = newUnit;
+                switchAmountInputUnit(input, newUnit);
+            });
+        }
+
         // Toggle section collapse
         window.toggleSection = function(sectionId) {
             const section = document.getElementById(sectionId);
@@ -517,7 +597,7 @@ else
             outputRows.forEach(row => {
                 const amountInput = row.querySelector('.amount-input');
                 if (amountInput?.value) {
-                    totalAllocated += Math.round(parseFloat(amountInput.value) * 100000000);
+                    totalAllocated += readSatsFromAmountInput(amountInput);
                 }
             });
 
@@ -559,7 +639,7 @@ else
 
                 outputs.push({
                     destination: destInput?.value?.trim() || '',
-                    amountBtc: amountInput?.value ? parseFloat(amountInput.value) : null
+                    amountBtc: amountInput?.value ? readBtcFromAmountInput(amountInput) : null
                 });
             });
 
@@ -722,7 +802,7 @@ else
                             const adjInput = adjRow?.querySelector('.amount-input');
                             if (adjInput && !adjInput.readOnly) {
                                 const netSats = Math.max(0, adj.grossSats - data.estimatedFeeSats);
-                                adjInput.value = (netSats / 100000000).toFixed(8);
+                                writeAmountInputFromBtc(adjInput, netSats / 100000000);
                                 updateRemainingBalance();
                             }
                         }
@@ -1032,7 +1112,10 @@ else
                             </div>
                         </div>
                         <div class="col-12 col-md-3">
-                            <label class="form-label">Amount (BTC)</label>
+                            <label class="form-label">
+                                <span>Amount</span>
+                                <span class="amount-unit-label">(BTC)</span>
+                            </label>
                             <div class="input-group">
                                 <input type="number"
                                        name="Outputs[${index}].AmountBtc"
@@ -1040,8 +1123,13 @@ else
                                        placeholder="Optional"
                                        step="0.00000001"
                                        min="0"
-                                       data-index="${index}" />
+                                       data-index="${index}"
+                                       data-unit="btc" />
                                 <button type="button" class="btn btn-outline-secondary max-amount-btn" data-index="${index}" title="Fill remaining balance">Max</button>
+                                <select class="form-select amount-unit-select" data-index="${index}" style="max-width: 5.5rem; flex: 0 0 auto;" title="Switch denomination">
+                                    <option value="btc">BTC</option>
+                                    <option value="sats">sats</option>
+                                </select>
                             </div>
                             <small class="remaining-balance-hint text-muted d-none mt-1"></small>
                         </div>
@@ -1060,6 +1148,21 @@ else
                 </div>
             `;
             outputsContainer.insertAdjacentHTML('beforeend', template);
+
+            // Apply the user's currently-selected denomination to the new row
+            // so adding a destination doesn't reset the unit choice (issue #40).
+            const currentUnit = preferredAmountUnit();
+            if (currentUnit === 'sats') {
+                const newRow = outputsContainer.lastElementChild;
+                const newSelect = newRow?.querySelector('.amount-unit-select');
+                const newInput = newRow?.querySelector('.amount-input');
+                if (newSelect) newSelect.value = 'sats';
+                if (newInput) {
+                    applyUnitToAmountInput(newInput, 'sats');
+                    const label = newRow.querySelector('.amount-unit-label');
+                    if (label) label.textContent = '(sats)';
+                }
+            }
         }
 
         // Remove output row and reindex
@@ -1214,8 +1317,8 @@ else
             try {
                 // Include current amount from the form so the server can validate properly
                 const row = outputsContainer.querySelector(`.output-row[data-index="${index}"]`);
-                const amountVal = row?.querySelector('.amount-input')?.value;
-                const amountBtc = amountVal ? parseFloat(amountVal) : null;
+                const amountInputForApi = row?.querySelector('.amount-input');
+                const amountBtc = amountInputForApi?.value ? readBtcFromAmountInput(amountInputForApi) : null;
 
                 const response = await fetch(`/plugins/ark/stores/@Model.StoreId/parse-destination`, {
                     method: 'POST',
@@ -1276,7 +1379,7 @@ else
 
                 // Populate amount if parsed from BIP21/invoice (not LNURL — user picks amount)
                 if (!data.isLnurl && data.amountSats > 0 && !amountInput.value) {
-                    amountInput.value = data.amountBtc.toFixed(8);
+                    writeAmountInputFromBtc(amountInput, data.amountBtc);
                     if (data.isBip21 || data.isLightning) amountInput.readOnly = true;
                 }
 
@@ -1352,7 +1455,7 @@ else
                 outputsContainer.querySelectorAll('.output-row').forEach(r => {
                     const ai = r.querySelector('.amount-input');
                     if (ai && ai !== amountInput && ai.value) {
-                        otherAllocated += Math.round(parseFloat(ai.value) * 100000000);
+                        otherAllocated += readSatsFromAmountInput(ai);
                     }
                 });
 
@@ -1363,7 +1466,7 @@ else
                     // when it returns, the response handler reads this flag
                     // and revises the value to (gross − estimated fee).
                     state.pendingMaxAdjustment = { index, grossSats: remaining };
-                    amountInput.value = (remaining / 100000000).toFixed(8);
+                    writeAmountInputFromBtc(amountInput, remaining / 100000000);
                     amountInput.dispatchEvent(new Event('input', { bubbles: true }));
                 }
             }
@@ -1474,6 +1577,44 @@ else
                 handleCoinSelectionChange();
             }
         });
+
+        // Amount denomination switching (issue #40). One toggle drives every
+        // row so users never wonder which unit a sibling row is in. The form
+        // posts AmountBtc; sats-mode values are converted to BTC at submit.
+        outputsContainer?.addEventListener('change', function(e) {
+            if (!e.target.classList.contains('amount-unit-select')) return;
+            const newUnit = e.target.value === 'sats' ? 'sats' : 'btc';
+            try { localStorage.setItem(AMOUNT_UNIT_STORAGE_KEY, newUnit); } catch { /* storage may be blocked */ }
+            syncAllUnitsTo(newUnit);
+            // Re-run the existing input pipeline so fee estimates and remaining
+            // balance hints recompute with the post-conversion values.
+            outputsContainer.querySelectorAll('.amount-input').forEach(input => {
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+            });
+        });
+
+        form?.addEventListener('submit', function() {
+            // Server expects BTC; convert any sats-mode input back before POST.
+            // Preserve precision: parseFloat(value)/SATS_PER_BTC keeps 8 decimals
+            // exactly because the integer sats representation is lossless up to
+            // 2^53 — well past 21M BTC.
+            outputsContainer?.querySelectorAll('.amount-input').forEach(input => {
+                if (input.dataset.unit === 'sats' && input.value && input.value.trim() !== '') {
+                    const sats = parseFloat(input.value);
+                    if (!isNaN(sats) && sats >= 0) {
+                        input.value = (sats / SATS_PER_BTC).toFixed(8);
+                    }
+                    applyUnitToAmountInput(input, 'btc');
+                }
+            });
+        });
+
+        // Restore the user's preferred unit. Server-rendered values are always
+        // in BTC, so we let the saved choice drive the conversion.
+        if (preferredAmountUnit() === 'sats') {
+            document.querySelectorAll('.amount-unit-select').forEach(s => { s.value = 'sats'; });
+            syncAllUnitsTo('sats');
+        }
 
         // Initialize
         updateDestinationBadges();
