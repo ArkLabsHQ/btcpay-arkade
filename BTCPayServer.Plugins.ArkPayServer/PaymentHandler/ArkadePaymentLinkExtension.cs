@@ -10,14 +10,14 @@ namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 public class ArkadePaymentLinkExtension : IPaymentLinkExtension
 {
     private readonly IServiceProvider _serviceProvider;
-    private readonly ArkadeLightningLimitsService _limitsService;
+    private readonly ArkadeLightningAvailabilityService _availability;
 
     public ArkadePaymentLinkExtension(
         IServiceProvider serviceProvider,
-        ArkadeLightningLimitsService limitsService)
+        ArkadeLightningAvailabilityService availability)
     {
         _serviceProvider = serviceProvider;
-        _limitsService = limitsService;
+        _availability = availability;
     }
     public PaymentMethodId PaymentMethodId { get; } = ArkadePlugin.ArkadePaymentMethodId;
 
@@ -87,14 +87,11 @@ public class ArkadePaymentLinkExtension : IPaymentLinkExtension
 
     private async Task<bool> ShouldIncludeLightning(PaymentPrompt prompt)
     {
-        // Get the invoice amount in satoshis
         var amountSats = (long)Money.Coins(prompt.Calculate().Due).Satoshi;
 
-        // Use the centralized limits service to determine if Lightning should be included
-        // This handles caching of store configuration and Boltz limits validation
-        return await _limitsService.CanSupportLightningAsync(
-            prompt.ParentEntity.StoreId, 
-            amountSats, 
+        return await _availability.ShouldOfferLightningAsync(
+            prompt.ParentEntity.StoreId,
+            amountSats,
             CancellationToken.None);
     }
 }

@@ -9,9 +9,12 @@ public class ArkPluginDbContext(DbContextOptions<ArkPluginDbContext> options) : 
     public DbSet<ArkWalletEntity> Wallets { get; set; }
     public DbSet<ArkWalletContractEntity> WalletContracts { get; set; }
     public DbSet<VtxoEntity> Vtxos { get; set; }
-    public DbSet<ArkSwapEntity> Swaps { get; set; }
     public DbSet<ArkIntentEntity> Intents { get; set; }
     public DbSet<ArkIntentVtxoEntity> IntentVtxos { get; set; }
+    
+    public DbSet<ArkSwapEntity> Swaps { get; set; }// todo - will be replaced with bottom one 
+    public DbSet<ArkadeSwapIntentEntity> ArkadeIntentSwaps { get; set; }
+
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -19,17 +22,6 @@ public class ArkPluginDbContext(DbContextOptions<ArkPluginDbContext> options) : 
         modelBuilder.ConfigureArkEntities(opts =>
         {
             opts.Schema = "BTCPayServer.Plugins.Ark";
-        });
-
-        // PostgreSQL-specific: jsonb column types
-        modelBuilder.Entity<ArkWalletContractEntity>(entity =>
-        {
-            entity.Property(e => e.ContractDataJson).HasColumnType("jsonb");
-            entity.Property(e => e.MetadataJson).HasColumnType("jsonb");
-        });
-        modelBuilder.Entity<ArkSwapEntity>(entity =>
-        {
-            entity.Property(e => e.MetadataJson).HasColumnType("jsonb");
         });
     }
 }

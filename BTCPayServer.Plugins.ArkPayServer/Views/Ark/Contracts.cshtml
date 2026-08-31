@@ -82,7 +82,6 @@
         <div>
             <strong>Debug Mode Active</strong> - Showing cache and listening status.<br/>
             Tracked contracts cache: <strong>@Model.CachedContractScripts.Count</strong> active contracts<br/>
-            Boltz swaps cache: <strong>@Model.CachedSwapScripts.Count</strong> active swaps<br/>
             VtxoSyncService listening: <strong>@Model.ListenedScripts.Count</strong> scripts
         </div>
     </div>
@@ -304,10 +303,6 @@
                                     @if (Model.CachedContractScripts.Contains(contract.Script))
                                     {
                                         <span class="badge text-bg-info" title="In tracked contracts cache">📌</span>
-                                    }
-                                    @if (Model.CachedSwapScripts.Contains(contract.Script))
-                                    {
-                                        <span class="badge text-bg-info ms-1" title="In active swaps cache">🔄</span>
                                     }
                                 </td>
                                 <td class="align-middle text-center">

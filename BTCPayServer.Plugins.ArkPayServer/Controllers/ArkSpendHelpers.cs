@@ -1,10 +1,8 @@
 using System.Globalization;
-using BTCPayServer;
 using BTCPayServer.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.Models;
 using BTCPayServer.Plugins.ArkPayServer.Models.Api;
 using NArk.Abstractions;
-using NArk.Abstractions.Contracts;
 using NBitcoin;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Controllers;

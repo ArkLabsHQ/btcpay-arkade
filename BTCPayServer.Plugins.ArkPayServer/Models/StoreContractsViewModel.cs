@@ -11,7 +11,6 @@ public class StoreContractsViewModel : StoreCollectionViewModelBase
     public Dictionary<string, ArkSwap[]> ContractSwaps { get; set; } = new();
     public bool CanManageContracts { get; set; }
     public bool Debug { get; set; }
-    public HashSet<string> CachedSwapScripts { get; set; } = new();
     public HashSet<string> CachedContractScripts { get; set; } = new();
     public HashSet<string> ListenedScripts { get; set; } = new();
 

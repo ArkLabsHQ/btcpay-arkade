@@ -57,8 +57,15 @@ anchored onchain for finality.
 The plugin supports these key flows:
 
 - **Ark-native**: direct offchain VTXO-to-VTXO payments within the Ark network.
-- **Boltz-Ark**: trustless Lightning↔Ark swaps using BOLT11 invoices via Boltz
-  (submarine and reverse swaps).
+- **Lightning↔Arkade**: trustless swaps against an Arkade swap solver, negotiated
+  per request over RFQ (see `Lightning/ArkadeSolverService.cs` and the SDK's
+  `NArk.ArkadeIntents`). Both directions settle into a covenant; sending funds a
+  lockup the solver takes by revealing the preimage, receiving takes delivery by
+  claiming one the solver funded. Configured under `solver-relay`,
+  `solver-pubkey` and `emulator` in `ark.json`; `covclaimd` is optional and adds
+  a daemon that can finish a claim while this server is down.
+  Boltz swaps predate this and are no longer created — the old table and its
+  pages remain read-only so existing swaps stay visible and refundable.
 - **Boarding Address Flow**: users enter the Ark system by funding a Taproot
   "boarding address," which is converted into a VTXO with help from the Arkade
   Operator. If the Operator is unresponsive, users can reclaim funds

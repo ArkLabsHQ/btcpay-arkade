@@ -1,43 +1,51 @@
 using System.ComponentModel.DataAnnotations;
-using System.Security.Cryptography;
-using System.Text;
 using BTCPayServer.Lightning;
 using BTCPayServer.Payments.Lightning;
-using BTCPayServer.Services.Invoices;
 using Microsoft.Extensions.Logging;
 using NArk.Abstractions.Blockchain;
-using NArk.Abstractions.Contracts;
-using NArk.Abstractions.Wallets;
-using NArk.Core.Contracts;
+using NArk.Abstractions.VTXOs;
+using NArk.ArkadeIntents;
+using NArk.ArkadeIntents.Models;
+using NArk.ArkadeIntents.Rfq;
+using NArk.ArkadeIntents.Services;
 using NArk.Core.Services;
-using NArk.Swaps.Abstractions;
-using NArk.Swaps.Boltz;
-using NArk.Swaps.Models;
-using NArk.Swaps.Services;
 using NArk.Core.Transport;
 using NBitcoin;
 using NodeInfo = BTCPayServer.Lightning.NodeInfo;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Lightning;
 
+/// <summary>
+/// An Arkade wallet presented to BTCPay as a Lightning node, with the corridors run by an Arkade
+/// swap solver.
+/// </summary>
+/// <remarks>
+/// <para>
+/// There is no node here and no channels — a Lightning payment in either direction is an Arkade
+/// covenant plus a solver willing to take the other side of it. Everything BTCPay asks that depends
+/// on actually being a node is unsupported, and the rest is a swap intent wearing an invoice's
+/// clothes.
+/// </para>
+/// <para>
+/// The solver is a hard dependency of both corridors and it is optional configuration, so most of
+/// what follows starts by asserting it exists. Reading is exempt: a swap already recorded is
+/// readable whether or not the solver that made it is still reachable, which matters most when it
+/// is not.
+/// </para>
+/// </remarks>
 public class ArkLightningClient(
     IClientTransport clientTransport,
     Network network,
     string walletId,
-    ArkLightningSpendCapability spendCapability,
-    SwapsManagementService swapsManagementService,
-    BoltzLimitsValidator boltzLimitsValidator,
-    ISwapStorage swapStorage,
-    IContractStorage contractStorage,
     ISpendingService spendingService,
     IBitcoinBlockchain chainTimeProvider,
-    IWalletStorage walletStorage,
+    ILogger<ArkLightningInvoiceListener> logger,
+    ArkLightningSpendCapability spendCapability,
     ArkLightningSpendKeyService spendKeyService,
-    ILogger<ArkLightningInvoiceListener> logger) : IExtendedLightningClient
+    ArkadeIntentsService? intents = null,
+    ArkadeSolverService? solver = null,
+    IArkadeIntentStorage? intentStorage = null) : IExtendedLightningClient
 {
-    /// <summary>Wallet-level metadata key holding the configured <see cref="ReverseSwapFeePayer"/>.</summary>
-    public const string ReverseSwapFeePayerMetadataKey = "arkade.reverseSwapFeePayer";
-
     /// <summary>
     /// Wallet-level metadata key holding the Lightning spend capability.
     /// See <see cref="ArkLightningSpendCapability"/>.
@@ -59,218 +67,115 @@ public class ArkLightningClient(
             "This store is not authorised to spend from the configured Arkade wallet.");
     }
 
-    private async Task<ReverseSwapFeePayer> ResolveReverseSwapFeePayer(CancellationToken cancellation)
-    {
-        var wallet = await walletStorage.GetWalletById(walletId, cancellation);
-        return wallet?.Metadata?.TryGetValue(ReverseSwapFeePayerMetadataKey, out var raw) is true
-            && Enum.TryParse<ReverseSwapFeePayer>(raw, out var feePayer)
-            ? feePayer
-            : ReverseSwapFeePayer.Recipient;
-    }
-
     /// <summary>
-    /// Gets swaps with their contracts by fetching swaps first, then contracts separately.
+    /// The reason this client cannot do anything, or <c>null</c> when it can.
     /// </summary>
-    private async Task<IReadOnlyCollection<(ArkSwap Swap, ArkContractEntity? Contract)>> GetSwapsWithContractsAsync(
-        string[]? swapIds = null,
-        ArkSwapType? swapType = null,
-        ArkSwapStatus? status = null,
-        string? hash = null,
-        string? invoice = null,
-        int? skip = null,
-        CancellationToken cancellation = default)
+    /// <remarks>
+    /// The corridors are only registered when an emulator endpoint is configured, because its key is
+    /// a parameter of every lockup script — so without one the intent services are genuinely absent
+    /// from the container rather than merely idle.
+    /// </remarks>
+    private string? Unavailable =>
+        intents is null || solver is null || intentStorage is null
+            ? "The Arkade Lightning corridors are not configured. Set 'emulator' in the Arkade " +
+              "network configuration to enable them."
+            : null;
+
+    private (ArkadeIntentsService Intents, ArkadeSolverService Solver, IArkadeIntentStorage Storage) Corridors =>
+        Unavailable is { } reason
+            ? throw new InvalidOperationException(reason)
+            : (intents!, solver!, intentStorage!);
+
+    /// <summary>Every swap this wallet owns, newest first.</summary>
+    private async Task<List<ArkadeSwapIntent>> GetIntentsAsync(
+        ArkadeSwapIntentType type, CancellationToken cancellation)
     {
-        var swaps = await swapStorage.GetSwaps(
-            walletIds: [walletId],
-            swapIds: swapIds,
-            swapTypes: swapType != null ? [swapType.Value] : null,
-            status: status != null ? [status.Value] : null,
-            hashes: hash != null ? [hash] : null,
-            invoices: invoice != null ? [invoice] : null,
-            skip: skip,
-            cancellationToken: cancellation);
+        if (intentStorage is null) return [];
 
-        if (swaps.Count == 0)
-            return [];
+        var all = await intentStorage.GetArkadeSwapIntents(
+            walletIds: [walletId], cancellationToken: cancellation);
 
-        var contractScripts = swaps.Select(s => s.ContractScript).Distinct().ToArray();
-        var contracts = await contractStorage.GetContracts(
-            walletIds: [walletId],
-            scripts: contractScripts,
-            cancellationToken: cancellation);
-        var contractDict = contracts.ToDictionary(c => c.Script);
-
-        return swaps.Select(s => (s, contractDict.GetValueOrDefault(s.ContractScript))).ToList();
+        return all.Where(i => i.Type == type).OrderByDescending(i => i.CreatedAt).ToList();
     }
+
+    private async Task<ArkadeSwapIntent?> GetIntentAsync(string id, CancellationToken cancellation) =>
+        intentStorage is null ? null : await intentStorage.GetArkadeSwapIntent(id, cancellation);
+
+    // ─── Receiving ────────────────────────────────────────────────────
 
     public async Task<LightningInvoice?> GetInvoice(string invoiceId, CancellationToken cancellation = default)
     {
-        var swapsWithContracts = await GetSwapsWithContractsAsync(
-            swapIds: [invoiceId],
-            cancellation: cancellation);
-        var reverseSwap = swapsWithContracts.FirstOrDefault();
-
-        if (reverseSwap.Swap == null || reverseSwap.Swap.SwapType != ArkSwapType.ReverseSubmarine)
-            return null;
-
-        return Map(reverseSwap.Swap, reverseSwap.Contract, network);
+        var intent = await GetIntentAsync(invoiceId, cancellation);
+        return intent is { Type: ArkadeSwapIntentType.LightningToBtc } && intent.WalletId == walletId
+            ? ArkadeIntentLightningMapper.ToInvoice(intent, network)
+            : null;
     }
 
     public async Task<LightningInvoice?> GetInvoice(uint256 paymentHash, CancellationToken cancellation = default)
     {
-        var paymentHashStr = paymentHash.ToString();
-        var swapsWithContracts = await GetSwapsWithContractsAsync(
-            hash: paymentHashStr,
-            swapType: ArkSwapType.ReverseSubmarine,
-            cancellation: cancellation);
-        var reverseSwap = swapsWithContracts.FirstOrDefault();
+        // Filtered here because IArkadeIntentStorage takes no payment-hash filter — the column is
+        // indexed, but the abstraction offers no way to reach the index. A merchant's swap set is
+        // small and this is off the checkout path, so the scan is worth less than widening the SDK's
+        // interface for one caller.
+        var hash = paymentHash.ToString();
+        var intents = await GetIntentsAsync(ArkadeSwapIntentType.LightningToBtc, cancellation);
+        var match = intents.FirstOrDefault(i =>
+            string.Equals(i.PaymentHash, hash, StringComparison.OrdinalIgnoreCase));
 
-        return reverseSwap.Swap == null ? null : Map(reverseSwap.Swap, reverseSwap.Contract, network);
+        return match is null ? null : ArkadeIntentLightningMapper.ToInvoice(match, network);
     }
 
-    public static LightningInvoice Map(ArkSwap swap, ArkContractEntity? contractEntity, Network network)
+    public Task<LightningInvoice[]> ListInvoices(CancellationToken cancellation = default) =>
+        ListInvoices(new ListInvoicesParams(), cancellation);
+
+    public async Task<LightningInvoice[]> ListInvoices(
+        ListInvoicesParams request, CancellationToken cancellation = default)
     {
-        var bolt11 = BOLT11PaymentRequest.Parse(swap.Invoice, network);
+        var intents = await GetIntentsAsync(ArkadeSwapIntentType.LightningToBtc, cancellation);
 
-        var lightningStatus = swap.Status switch
-        {
-            ArkSwapStatus.Settled => LightningInvoiceStatus.Paid,
-            ArkSwapStatus.Failed => LightningInvoiceStatus.Expired,
-            ArkSwapStatus.Pending => LightningInvoiceStatus.Unpaid,
-            _ => throw new NotSupportedException()
-        };
-
-        VHTLCContract? contract = null;
-        if (contractEntity != null)
-        {
-            contract = ArkContractParser.Parse(
-                contractEntity.Type,
-                contractEntity.AdditionalData,
-                network) as VHTLCContract;
-        }
-
-        return new LightningInvoice
-        {
-            Id = swap.SwapId,
-            Amount = bolt11.MinimumAmount,
-            Status = lightningStatus,
-            ExpiresAt = bolt11.ExpiryDate,
-            BOLT11 = swap.Invoice,
-            PaymentHash = bolt11.PaymentHash?.ToString(),
-            PaidAt = lightningStatus == LightningInvoiceStatus.Paid ? swap.UpdatedAt.ToUniversalTime() : null,
-            // we have to comment this out because BTCPay will consider this invoice as partially paid..
-            // AmountReceived = lightningStatus == LightningInvoiceStatus.Paid
-            //     ? LightMoney.Satoshis(swap.ExpectedAmount)
-            //     : null,
-            Preimage = contract?.Preimage != null ? Convert.ToHexString(contract.Preimage).ToLowerInvariant() : null,
-        };
+        return
+        [
+            .. intents
+                .Skip((int)request.OffsetIndex.GetValueOrDefault(0))
+                .Select(i => ArkadeIntentLightningMapper.ToInvoice(i, network))
+                .OfType<LightningInvoice>()
+                .Where(i => request.PendingOnly != true || i.Status == LightningInvoiceStatus.Unpaid)
+        ];
     }
 
-    public async Task<LightningInvoice[]> ListInvoices(CancellationToken cancellation = default)
-    {
-        return await ListInvoices(new ListInvoicesParams(), cancellation);
-    }
+    public Task<LightningInvoice> CreateInvoice(
+        LightMoney amount, string description, TimeSpan expiry, CancellationToken cancellation = default) =>
+        CreateInvoice(new CreateInvoiceParams(amount, description, expiry), cancellation);
 
-    public async Task<LightningInvoice[]> ListInvoices(ListInvoicesParams request,
-        CancellationToken cancellation = default)
-    {
-        var status = request.PendingOnly == true ? ArkSwapStatus.Pending : (ArkSwapStatus?)null;
-        var reverseSwapsWithContracts = await GetSwapsWithContractsAsync(
-            swapType: ArkSwapType.ReverseSubmarine,
-            status: status,
-            skip: (int)request.OffsetIndex.GetValueOrDefault(0),
-            cancellation: cancellation);
-
-        var invoices = new List<LightningInvoice>();
-        foreach (var (swap, contract) in reverseSwapsWithContracts)
-        {
-            try
-            {
-                invoices.Add(Map(swap, contract, network));
-            }
-            catch
-            {
-                // Skip failed invoices
-            }
-        }
-
-        return invoices.ToArray();
-    }
-
-    public async Task<LightningPayment> GetPayment(string paymentHash, CancellationToken cancellation = default)
-    {
-        var swapsWithContracts = await GetSwapsWithContractsAsync(
-            hash: paymentHash,
-            swapType: ArkSwapType.Submarine,
-            cancellation: cancellation);
-        var result = swapsWithContracts.FirstOrDefault();
-
-        if (result.Swap == null)
-            throw new KeyNotFoundException("Swap with the given payment hash was not found");
-
-        return MapPayment(result.Swap, result.Contract);
-    }
-
-    private LightningPayment MapPayment(ArkSwap swap, ArkContractEntity? contractEntity)
-    {
-        var bolt11 = BOLT11PaymentRequest.Parse(swap.Invoice, network);
-        var status = swap.Status switch
-        {
-            ArkSwapStatus.Settled => LightningPaymentStatus.Complete,
-            ArkSwapStatus.Failed => LightningPaymentStatus.Failed,
-            ArkSwapStatus.Pending => LightningPaymentStatus.Pending,
-            _ => LightningPaymentStatus.Unknown
-        };
-
-        VHTLCContract? htlcContract = null;
-        if (contractEntity != null)
-        {
-            htlcContract = ArkContractParser.Parse(
-                contractEntity.Type,
-                contractEntity.AdditionalData,
-                network) as VHTLCContract;
-        }
-
-        return new LightningPayment
-        {
-            Id = swap.SwapId,
-            Amount = bolt11.MinimumAmount,
-            Status = status,
-            BOLT11 = swap.Invoice,
-            PaymentHash = bolt11.PaymentHash?.ToString(),
-            Preimage = htlcContract?.Preimage != null ? Convert.ToHexString(htlcContract.Preimage).ToLowerInvariant() : null,
-            CreatedAt = swap.CreatedAt,
-            AmountSent = LightMoney.Satoshis(swap.ExpectedAmount),
-        };
-    }
-
-    public Task<LightningPayment[]> ListPayments(CancellationToken cancellation = default)
-    {
-        return ListPayments(new ListPaymentsParams(), cancellation);
-    }
-
-    public async Task<LightningPayment[]> ListPayments(ListPaymentsParams request,
-        CancellationToken cancellation = default)
-    {
-        var swapsWithContracts = await GetSwapsWithContractsAsync(
-            swapType: ArkSwapType.Submarine,
-            skip: (int)request.OffsetIndex.GetValueOrDefault(0),
-            cancellation: cancellation);
-
-        return [.. swapsWithContracts.Select(s => MapPayment(s.Swap, s.Contract))];
-    }
-
-    public async Task<LightningInvoice> CreateInvoice(LightMoney amount, string description, TimeSpan expiry,
-        CancellationToken cancellation = default)
-    {
-        var createInvoiceParams = new CreateInvoiceParams(amount, description, expiry);
-        return await CreateInvoice(createInvoiceParams, cancellation);
-    }
-
-    public async Task<LightningInvoice> CreateInvoice(CreateInvoiceParams createInvoiceRequest,
-        CancellationToken cancellation = default)
+    /// <summary>Ask the solver to mint an invoice whose settlement pays this wallet on Arkade.</summary>
+    /// <param name="createInvoiceRequest">What BTCPay wants received.</param>
+    /// <param name="cancellation">Cancels the negotiation.</param>
+    /// <returns>The invoice to hand the payer.</returns>
+    /// <remarks>
+    /// <para>
+    /// The requested amount is what the <em>payer is billed</em>: the invoice is minted for exactly
+    /// what BTCPay asked for, and the solver's spread comes out of what lands on Arkade. The store
+    /// therefore nets the order amount minus the swap fee, the same way it nets a card sale minus
+    /// the processor's cut.
+    /// </para>
+    /// <para>
+    /// The other direction is a real option — <c>RfqAmountSide.To</c> pins the payout instead and
+    /// bills the payer the difference — and it is the wrong one here. An invoice for more than the
+    /// amount a customer approved is one a LUD-06 wallet refuses outright, so the sale is simply
+    /// lost; on a checkout that skips that check the customer is silently overcharged instead.
+    /// Neither is a trade a merchant would accept to avoid a fee it can price into the order.
+    /// </para>
+    /// <para>
+    /// The description and expiry BTCPay passes are dropped, because the solver mints the invoice and
+    /// nothing in the RFQ request carries either. Its own expiry is what bounds the swap.
+    /// </para>
+    /// </remarks>
+    public async Task<LightningInvoice> CreateInvoice(
+        CreateInvoiceParams createInvoiceRequest, CancellationToken cancellation = default)
     {
         await EnsureSpendAuthorized(cancellation);
+
+        var (intents, solver, _) = Corridors;
 
         var terms = await clientTransport.GetServerInfoAsync(cancellation);
         if (terms.Dust > createInvoiceRequest.Amount)
@@ -278,71 +183,78 @@ public class ArkLightningClient(
             throw new InvalidOperationException("Sub-dust amounts are not supported");
         }
 
-        // Validate amount against Boltz limits
         var amountSats = (long)createInvoiceRequest.Amount.ToUnit(LightMoneyUnit.Satoshi);
-        var (isValid, errorMessage) = await boltzLimitsValidator.ValidateAmountAsync(amountSats, isReverse: true, cancellation);
-        if (!isValid)
-        {
-            throw new InvalidOperationException(errorMessage);
-        }
+        var claimRecipient = await solver.ResolveClaimRecipientAsync(cancellation);
 
-        // Create reverse swap via NNark's SwapsManagementService
-        var feePayer = await ResolveReverseSwapFeePayer(cancellation);
-        var invoice = await swapsManagementService.InitiateReverseSwap(
-            walletId, createInvoiceRequest, feePayer, cancellation);
+        var pending = await solver.WithTransportAsync(amountSats, transport =>
+            intents.ReceiveFromLightningAsync(
+                walletId, amountSats, transport, claimRecipient,
+                amountSide: RfqAmountSide.From, cancellationToken: cancellation), cancellation);
 
-        // Fetch the created swap from DB to return proper LightningInvoice
-        var swapsWithContracts = await GetSwapsWithContractsAsync(
-            invoice: invoice,
-            cancellation: cancellation);
-        var result = swapsWithContracts.FirstOrDefault();
+        var intent = await GetIntentAsync(pending.RfqId, cancellation)
+            ?? throw new InvalidOperationException(
+                $"The Arkade receive swap '{pending.RfqId}' was negotiated but not recorded.");
 
-        if (result.Swap == null)
-        {
-            throw new InvalidOperationException("Failed to create reverse swap");
-        }
-
-        return Map(result.Swap, result.Contract, network);
+        return ArkadeIntentLightningMapper.ToInvoice(intent, network)
+            ?? throw new InvalidOperationException(
+                $"The Arkade receive swap '{pending.RfqId}' was recorded without the solver's invoice.");
     }
 
     public Task<ILightningInvoiceListener> Listen(CancellationToken cancellation = default)
     {
+        var (_, _, storage) = Corridors;
         return Task.FromResult<ILightningInvoiceListener>(
-            new ArkLightningInvoiceListener(walletId, logger, swapStorage, contractStorage, network, Map, cancellation));
+            new ArkLightningInvoiceListener(walletId, logger, storage, network, cancellation));
     }
 
-    public Task<LightningNodeInformation> GetInfo(CancellationToken cancellation = default)
+    // ─── Paying ───────────────────────────────────────────────────────
+
+    public async Task<LightningPayment> GetPayment(string paymentHash, CancellationToken cancellation = default)
     {
-        throw new NotSupportedException();
+        var intents = await GetIntentsAsync(ArkadeSwapIntentType.BtcToLightning, cancellation);
+        var match = intents.FirstOrDefault(i =>
+            string.Equals(i.PaymentHash, paymentHash, StringComparison.OrdinalIgnoreCase))
+            ?? throw new KeyNotFoundException("Swap with the given payment hash was not found");
+
+        return ArkadeIntentLightningMapper.ToPayment(match, network);
     }
 
-    public async Task<LightningNodeBalance> GetBalance(CancellationToken cancellation = default)
+    public Task<LightningPayment[]> ListPayments(CancellationToken cancellation = default) =>
+        ListPayments(new ListPaymentsParams(), cancellation);
+
+    public async Task<LightningPayment[]> ListPayments(
+        ListPaymentsParams request, CancellationToken cancellation = default)
     {
-        var availableCoins = await spendingService.GetAvailableCoins(walletId, cancellation);
-        var chainTime = await chainTimeProvider.GetChainTime(cancellation);
+        var intents = await GetIntentsAsync(ArkadeSwapIntentType.BtcToLightning, cancellation);
 
-        // Filter to only coins that can be spent offchain (not swept, not expired)
-        var spendableCoins = availableCoins.Where(c => c.CanSpendOffchain(chainTime));
-        var sum = spendableCoins.Sum(c => c.TxOut.Value.Satoshi);
-
-        return new LightningNodeBalance()
-        {
-            OffchainBalance = new OffchainBalance()
-            {
-                Local = LightMoney.Satoshis(sum)
-            }
-        };
+        return
+        [
+            .. intents
+                .Skip((int)request.OffsetIndex.GetValueOrDefault(0))
+                .Select(i => ArkadeIntentLightningMapper.ToPayment(i, network))
+        ];
     }
 
-    public Task<PayResponse> Pay(PayInvoiceParams payParams, CancellationToken cancellation = default)
-    {
+    public Task<PayResponse> Pay(PayInvoiceParams payParams, CancellationToken cancellation = default) =>
         throw new NotSupportedException("BOLT11 is required");
-    }
 
-    public async Task<PayResponse> Pay(string bolt11, PayInvoiceParams payParams, CancellationToken cancellation = default)
+    public Task<PayResponse> Pay(string bolt11, CancellationToken cancellation = default) =>
+        Pay(bolt11, new PayInvoiceParams(), cancellation);
+
+    /// <summary>Pay a BOLT11 by locking sats into a covenant only the solver can claim.</summary>
+    /// <param name="bolt11">The invoice to pay.</param>
+    /// <param name="payParams">Ignored — the corridor's route is the solver.</param>
+    /// <param name="cancellation">Cancels before funding; after funding the swap is live regardless.</param>
+    /// <returns>The payment, which is <see cref="LightningPaymentStatus.Pending"/> on success.</returns>
+    /// <remarks>
+    /// Returns pending rather than complete, always. Funding the lockup is the whole of what this
+    /// call does; the solver then pays the invoice and takes the lockup with the preimage, and only
+    /// that spend — observed by the monitor — settles the payment. Reporting complete at the point
+    /// of funding would call every payment successful, including the ones that end in a refund.
+    /// </remarks>
+    public async Task<PayResponse> Pay(
+        string bolt11, PayInvoiceParams payParams, CancellationToken cancellation = default)
     {
-        await EnsureSpendAuthorized(cancellation);
-
         try
         {
             if (string.IsNullOrEmpty(bolt11))
@@ -350,34 +262,29 @@ public class ArkLightningClient(
                 throw new NotSupportedException("BOLT11 is required");
             }
 
+            await EnsureSpendAuthorized(cancellation);
+
+            var (intents, solver, _) = Corridors;
             var pr = BOLT11PaymentRequest.Parse(bolt11, network);
 
-            // Validate amount against Boltz limits
-            var amountSats = (long)(pr.MinimumAmount?.ToUnit(LightMoneyUnit.Satoshi) ?? 0);
-            var (isValid, errorMessage) = await boltzLimitsValidator.ValidateAmountAsync(amountSats, isReverse: false, cancellation);
-            if (!isValid)
+            // The invoice amount, which is the Lightning leg. The Arkade leg is that plus the
+            // solver's fee, so this understates the trade by the fee — close enough to pick a solver
+            // by, and the quote is what settles the exact figure anyway.
+            var amountSats = (long)pr.MinimumAmount.ToUnit(LightMoneyUnit.Satoshi);
+
+            var funded = await solver.WithTransportAsync(amountSats, transport =>
+                intents.SendToLightningAsync(walletId, bolt11, transport, cancellationToken: cancellation),
+                cancellation);
+
+            var intent = await GetIntentAsync(funded.RfqId, cancellation)
+                ?? throw new InvalidOperationException(
+                    $"The Arkade send swap '{funded.RfqId}' funded {funded.FundingTxid} but was not recorded.");
+
+            var payment = ArkadeIntentLightningMapper.ToPayment(intent, network);
+            return new PayResponse
             {
-                return new PayResponse(PayResult.Error, errorMessage);
-            }
-
-            // Create submarine swap via NNark's SwapsManagementService
-            await swapsManagementService.InitiateSubmarineSwap(walletId, pr, autoPay: true, cancellation);
-
-            // Fetch the created swap from DB to return proper PayResponse
-            var swapsWithContracts = await GetSwapsWithContractsAsync(
-                invoice: bolt11,
-                cancellation: cancellation);
-            var result = swapsWithContracts.FirstOrDefault();
-
-            if (result.Swap == null)
-            {
-                return new PayResponse(PayResult.Error, "Failed to create submarine swap");
-            }
-
-            var payment = MapPayment(result.Swap, result.Contract);
-            return new PayResponse()
-            {
-                Details = new PayDetails()
+                Result = PayResult.Ok,
+                Details = new PayDetails
                 {
                     PaymentHash = pr.PaymentHash,
                     Preimage = string.IsNullOrEmpty(payment.Preimage) ? null : new uint256(payment.Preimage),
@@ -393,43 +300,51 @@ public class ArkLightningClient(
         }
     }
 
-    public Task<PayResponse> Pay(string bolt11, CancellationToken cancellation = default)
+    // ─── Wallet ───────────────────────────────────────────────────────
+
+    public async Task<LightningNodeBalance> GetBalance(CancellationToken cancellation = default)
     {
-        return Pay(bolt11, new PayInvoiceParams(), cancellation);
+        var availableCoins = await spendingService.GetAvailableCoins(walletId, cancellation);
+        var chainTime = await chainTimeProvider.GetChainTime(cancellation);
+
+        // Filter to only coins that can be spent offchain (not swept, not expired)
+        var spendableCoins = availableCoins.Where(c => c.CanSpendOffchain(chainTime));
+        var sum = spendableCoins.Sum(c => c.TxOut.Value.Satoshi);
+
+        return new LightningNodeBalance
+        {
+            OffchainBalance = new OffchainBalance
+            {
+                Local = LightMoney.Satoshis(sum)
+            }
+        };
     }
 
-    public Task<OpenChannelResponse> OpenChannel(OpenChannelRequest openChannelRequest,
-        CancellationToken cancellation = default)
-    {
+    public Task<ValidationResult?> Validate() =>
+        Task.FromResult(Unavailable is { } reason ? new ValidationResult(reason) : ValidationResult.Success);
+
+    // ─── Not a node ───────────────────────────────────────────────────
+
+    public Task<LightningNodeInformation> GetInfo(CancellationToken cancellation = default) =>
         throw new NotSupportedException();
-    }
 
-    public Task<BitcoinAddress> GetDepositAddress(CancellationToken cancellation = default)
-    {
+    public Task<OpenChannelResponse> OpenChannel(
+        OpenChannelRequest openChannelRequest, CancellationToken cancellation = default) =>
         throw new NotSupportedException();
-    }
 
-    public Task<ConnectionResult> ConnectTo(NodeInfo nodeInfo, CancellationToken cancellation = default)
-    {
+    public Task<BitcoinAddress> GetDepositAddress(CancellationToken cancellation = default) =>
         throw new NotSupportedException();
-    }
 
-    public Task CancelInvoice(string invoiceId, CancellationToken cancellation = default)
-    {
+    public Task<ConnectionResult> ConnectTo(NodeInfo nodeInfo, CancellationToken cancellation = default) =>
         throw new NotSupportedException();
-    }
 
-    public Task<LightningChannel[]> ListChannels(CancellationToken cancellation = default)
-    {
+    public Task CancelInvoice(string invoiceId, CancellationToken cancellation = default) =>
         throw new NotSupportedException();
-    }
 
-    public Task<ValidationResult?> Validate()
-    {
-        return Task.FromResult(ValidationResult.Success);
-    }
+    public Task<LightningChannel[]> ListChannels(CancellationToken cancellation = default) =>
+        throw new NotSupportedException();
 
-    public string DisplayName => "Arkade Lightning (Boltz)";
+    public string DisplayName => "Arkade Lightning";
     public Uri? ServerUri => null;
 
     public override string ToString() => $"type=arkade;wallet-id={walletId}";

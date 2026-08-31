@@ -1,0 +1,649 @@
+using BTCPayServer.Abstractions.Constants;
+using BTCPayServer.Abstractions.Extensions;
+using BTCPayServer.Abstractions.Models;
+using BTCPayServer.Models.StoreViewModels;
+using BTCPayServer.Client;
+using BTCPayServer.Data;
+using BTCPayServer.HostedServices;
+using BTCPayServer.Lightning;
+using BTCPayServer.Payments;
+using BTCPayServer.Payments.Lightning;
+using BTCPayServer.PayoutProcessors;
+using BTCPayServer.Plugins.ArkPayServer.Data;
+using BTCPayServer.Plugins.ArkPayServer.Exceptions;
+using BTCPayServer.Plugins.ArkPayServer.Lightning;
+using BTCPayServer.Plugins.ArkPayServer.Models;
+using BTCPayServer.Plugins.ArkPayServer.Models.Api;
+using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
+using BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
+using BTCPayServer.Plugins.ArkPayServer.Services;
+using BTCPayServer.Plugins.ArkPayServer.Services.WalletLogger;
+using BTCPayServer.Security;
+using BTCPayServer.Services.Invoices;
+using BTCPayServer.Services.Stores;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using NArk.Abstractions;
+using NArk.Abstractions.Fees;
+using NArk.Abstractions.Intents;
+using NArk.Swaps.Boltz;
+using NArk.Swaps.Boltz.Client;
+using NArk.Core.Contracts;
+using NArk.Hosting;
+using NArk.Core.Services;
+using NArk.Core.Transport;
+using NArk.Abstractions.Blockchain;
+using NArk.Abstractions.Contracts;
+using NArk.Abstractions.Extensions;
+using NArk.Abstractions.VTXOs;
+using NArk.Swaps.Abstractions;
+using NArk.Abstractions.Wallets;
+using NArk.Swaps.Models;
+using NArk.Storage.EfCore.Entities;
+using NArk.Core.Wallet;
+using LNURL;
+using NBitcoin;
+using NBitcoin.DataEncoders;
+using NBitcoin.Scripting;
+using NBitcoin.Secp256k1;
+using ArkIntent = NArk.Abstractions.Intents.ArkIntent;
+
+namespace BTCPayServer.Plugins.ArkPayServer.Controllers;
+
+public partial class ArkController
+{
+    [HttpPost("stores/{storeId}/rescan")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> Rescan(string storeId)
+    {
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
+        if (errorResult != null) return errorResult;
+        if (!config!.GeneratedByStore || string.IsNullOrEmpty(config.WalletId))
+            return RedirectWithError(nameof(StoreOverview),
+                "Rescan requires a store-managed wallet.", new { storeId });
+
+        StartBackgroundRecovery(config.WalletId);
+        return RedirectWithSuccess(nameof(StoreOverview),
+            "Wallet rescan started — contracts, funds and swaps will refresh shortly.", new { storeId });
+    }
+
+    [HttpGet("stores/{storeId}/overview")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> StoreOverview(CancellationToken cancellationToken)
+    {
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
+        if (errorResult != null) return errorResult;
+
+        var wallet = await walletStorage.GetWalletById(config!.WalletId!, cancellationToken);
+        var destination = wallet?.Destination;
+
+        // Get balances with error handling - indexer service may be unavailable
+        ArkBalancesViewModel? balances = null;
+        try
+        {
+            balances = await GetArkBalances(config.WalletId!, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            TempData[WellKnownTempData.ErrorMessage] = DescribeArkError(ex, "Unable to fetch balances");
+        }
+
+        var signerAvailable = await walletProvider.GetAddressProviderAsync(config.WalletId!, cancellationToken) != null;
+
+        // Get the default/active contract address
+        string? defaultAddress = null;
+        if (wallet?.WalletType == WalletType.SingleKey)
+        {
+            // SingleKey: compute the deterministic default address directly from the wallet key.
+            // This is recomputed from the CURRENT signer, which matches the persisted Default
+            // maintained by the SDK ContractReconciliationService — so display == watched holds.
+            var terms = await clientTransport.GetServerInfoAsync(cancellationToken);
+            var descriptor = OutputDescriptor.Parse(wallet.AccountDescriptor, terms.Network);
+            var defaultContract = new ArkPaymentContract(terms.SignerKey, terms.UnilateralExit, descriptor);
+            defaultAddress = defaultContract.GetArkAddress().ToString(terms.Network.ChainName == ChainName.Mainnet);
+        }
+
+        // Check Ark Operator connection
+        var (arkOperatorConnected, arkOperatorError) = await CheckServiceConnectionAsync(
+            ct => clientTransport.GetServerInfoAsync(ct), cancellationToken);
+
+        // Determine if user can manage private keys (spend/view keys)
+        // Allowed if: wallet was generated by this store OR user is server admin
+        var canManagePrivateKeys = config!.GeneratedByStore ||
+            (await authorizationService.AuthorizeAsync(User, null, new PolicyRequirement(Policies.CanModifyServerSettings))).Succeeded;
+
+        // Get recent VTXOs for the overview (latest 5, including spent)
+        IReadOnlyCollection<ArkVtxo> recentVtxos = [];
+        HashSet<OutPoint> spendableOutpoints = [];
+        Dictionary<string, ArkContractEntity> vtxoContracts = new();
+        var totalVtxoCount = 0;
+        try
+        {
+            var allCoins = await arkadeSpender.GetAvailableCoins(config.WalletId!, cancellationToken);
+            spendableOutpoints = allCoins.Select(c => c.Outpoint).ToHashSet();
+
+            var vtxos = await vtxoStorage.GetVtxos(
+                walletIds: [config.WalletId!],
+                includeSpent: true,
+                take: 5,
+                cancellationToken: cancellationToken);
+            recentVtxos = vtxos.ToList();
+
+            // Get total count (all VTXOs including spent)
+            var allVtxos = await vtxoStorage.GetVtxos(
+                walletIds: [config.WalletId!],
+                includeSpent: true,
+                cancellationToken: cancellationToken);
+            totalVtxoCount = allVtxos.Count();
+
+            // Get contract info for VTXOs
+            var vtxoScripts = recentVtxos.Select(v => v.Script).Distinct().ToArray();
+            var contracts = await contractStorage.GetContracts(
+                walletIds: [config.WalletId!],
+                scripts: vtxoScripts,
+                cancellationToken: cancellationToken);
+            vtxoContracts = contracts.ToDictionary(c => c.Script);
+        }
+        catch (Exception)
+        {
+            // Silently ignore - VTXOs section will show empty
+        }
+
+        // Get recent intents (latest 5)
+        IReadOnlyCollection<ArkIntent> recentIntents = [];
+        try
+        {
+            recentIntents = await intentStorage.GetIntents(
+                walletIds:[config.WalletId!], skip: 0, take: 5, states: [ArkIntentState.BatchInProgress, ArkIntentState.BatchSucceeded, ArkIntentState.WaitingForBatch, ArkIntentState.WaitingToSubmit], cancellationToken: cancellationToken);
+        }
+        catch (Exception)
+        {
+            // Silently ignore - intents section will show empty
+        }
+
+        // Get recent swaps (latest 5)
+        IReadOnlyCollection<NArk.Swaps.Models.ArkSwap> recentSwaps = [];
+        try
+        {
+            recentSwaps = await swapStorage.GetSwaps(
+                walletIds: [config.WalletId!], take: 5, status: [ArkSwapStatus.Pending , ArkSwapStatus.Settled], cancellationToken: cancellationToken);
+        }
+        catch (Exception)
+        {
+            // Silently ignore - swaps section will show empty
+        }
+
+        return View(new StoreOverviewViewModel
+        {
+            StoreId = store!.Id,
+            IsDestinationSweepEnabled = destination is not null,
+            IsLightningEnabled = IsArkadeLightningEnabled(),
+            Balances = balances,
+            WalletId = config.WalletId,
+            Destination = destination,
+            SignerAvailable = signerAvailable,
+            DefaultAddress = defaultAddress,
+            AllowSubDustAmounts = config.AllowSubDustAmounts,
+            BoardingEnabled = config.BoardingEnabled,
+            MinBoardingAmountSats = config.MinBoardingAmountSats,
+            Wallet = wallet?.Secret,
+            WalletType = wallet?.WalletType ?? WalletType.SingleKey,
+            CanManagePrivateKeys = canManagePrivateKeys,
+            DestinationPendingConfirmation = wallet?.Metadata?.ContainsKey(NArk.Core.Services.DestinationSafety.PendingConfirmationMetadataKey) == true,
+            RecoveryStatus = config.WalletId is { } recoveryWalletId ? recoveryStatusTracker.Get(recoveryWalletId) : null,
+            ArkOperatorUrl = arkNetworkConfig.ArkUri,
+            ArkOperatorConnected = arkOperatorConnected,
+            ArkOperatorError = ArkOperatorAvailability.DescribeMessage(arkOperatorError),
+            SolverRelayUrl = arkadeSolver.RelayUri,
+            SolverPubkey = arkadeSolver.SolverPubkey,
+            SolverConfigured = arkadeSolver.IsConfigured,
+            RecentVtxos = recentVtxos,
+            SpendableOutpoints = spendableOutpoints,
+            VtxoContracts = vtxoContracts,
+            TotalVtxoCount = totalVtxoCount,
+            RecentIntents = recentIntents,
+            RecentSwaps = recentSwaps
+        });
+    }
+
+    [HttpGet("stores/{storeId}/wallet-log")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> DownloadWalletLog(string storeId)
+    {
+        var (_, config, errorResult) = await ValidateStoreAndConfig();
+        if (errorResult != null) return errorResult;
+
+        var walletId = config!.WalletId!;
+        var stream = walletLogStore.OpenForRead(walletId);
+        if (stream is null)
+        {
+            TempData[WellKnownTempData.SuccessMessage] =
+                "No diagnostic log entries have been recorded for this wallet yet. " +
+                "Use the wallet (send / receive / sync) and try again.";
+            return RedirectToAction(nameof(StoreOverview), new { storeId });
+        }
+
+        var filename = $"arkade-wallet-{walletId}-{DateTime.UtcNow:yyyyMMddTHHmmssZ}.log";
+        return File(stream, "text/plain; charset=utf-8", filename);
+    }
+
+    [HttpPost("stores/{storeId}/show-private-key")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> ShowPrivateKey(string storeId)
+    {
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
+        if (errorResult != null) return errorResult;
+
+        var wallet = await walletStorage.GetWalletById(config!.WalletId);
+        if (wallet?.Secret == null)
+            return NotFound();
+
+        return this.RedirectToRecoverySeedBackup(new RecoverySeedBackupViewModel
+        {
+            ReturnUrl = Url.Action(nameof(StoreOverview), new { storeId }),
+            IsStored = true,
+            RequireConfirm = false,
+            CryptoCode = "ARK",
+            Mnemonic = wallet.Secret
+        });
+    }
+
+    [HttpPost("stores/{storeId}/update-wallet-config")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> UpdateWalletConfig(string storeId, StoreOverviewViewModel model, string? command = null, CancellationToken cancellationToken = default)
+    {
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
+        if (errorResult != null) return errorResult;
+
+        if (command == "clear-destination")
+        {
+            await UpdateWalletDestinationAsync(config!.WalletId!, null, cancellationToken);
+            return RedirectWithSuccess(nameof(StoreOverview), "Auto-sweep destination cleared.", new { storeId });
+        }
+
+        if (command == "save" && !string.IsNullOrEmpty(model.Destination))
+        {
+            if (config!.AllowSubDustAmounts)
+                return RedirectWithError(nameof(StoreOverview), "Cannot configure auto-sweep while sub-dust amounts are enabled. Disable sub-dust amounts first.", new { storeId });
+
+            try
+            {
+                var serverInfo = await clientTransport.GetServerInfoAsync(cancellationToken);
+                WalletFactory.ValidateDestination(model.Destination, serverInfo);
+                await UpdateWalletDestinationAsync(config.WalletId!, model.Destination, cancellationToken);
+                return RedirectWithSuccess(nameof(StoreOverview), "Auto-sweep destination updated.", new { storeId });
+            }
+            catch (Exception ex)
+            {
+                return RedirectWithError(nameof(StoreOverview), $"Failed to update destination: {ex.Message}", new { storeId });
+            }
+        }
+
+        if (command == "toggle-subdust")
+        {
+            var toggleWallet = await walletStorage.GetWalletById(config!.WalletId!, cancellationToken);
+            var destination = toggleWallet?.Destination;
+
+            if (!config.AllowSubDustAmounts && !string.IsNullOrEmpty(destination))
+                return RedirectWithError(nameof(StoreOverview), "Cannot enable sub-dust amounts while auto-sweep is configured. Clear the auto-sweep destination first.", new { storeId });
+
+            var newConfig = config with { AllowSubDustAmounts = !config.AllowSubDustAmounts };
+            store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], newConfig);
+            await storeRepository.UpdateStore(store);
+            return RedirectWithSuccess(nameof(StoreOverview),
+                newConfig.AllowSubDustAmounts ? "Sub-dust amounts enabled for Arkade payments." : "Sub-dust amounts disabled for Arkade payments.",
+                new { storeId });
+        }
+
+        if (command == "save-boarding")
+        {
+            var minAmount = model.MinBoardingAmountSats > 0
+                ? model.MinBoardingAmountSats
+                : ArkadePaymentMethodConfig.DefaultMinBoardingAmountSats;
+            if (minAmount < ArkadePaymentMethodConfig.P2trDustLimitSats)
+                return RedirectWithError(nameof(StoreOverview), $"Boarding minimum cannot be below the P2TR dust threshold ({ArkadePaymentMethodConfig.P2trDustLimitSats} sats).", new { storeId });
+
+            var newConfig = config! with { BoardingEnabled = true, MinBoardingAmountSats = minAmount };
+            store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], newConfig);
+            await storeRepository.UpdateStore(store);
+            return RedirectWithSuccess(nameof(StoreOverview), $"Boarding enabled with minimum {minAmount} sats.", new { storeId });
+        }
+
+        if (command == "disable-boarding")
+        {
+            var newConfig = config! with { BoardingEnabled = false };
+            store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[ArkadePlugin.ArkadePaymentMethodId], newConfig);
+            await storeRepository.UpdateStore(store);
+            return RedirectWithSuccess(nameof(StoreOverview), "Boarding disabled.", new { storeId });
+        }
+
+        return RedirectToAction(nameof(StoreOverview), new { storeId });
+    }
+
+    [HttpPost("stores/{storeId}/destination")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> UpdateDestination(string storeId, string destination, CancellationToken ct)
+    {
+        var (_, config, errorResult) = await ValidateStoreAndConfig();
+        if (errorResult != null) return errorResult;
+
+        destination = destination?.Trim() ?? string.Empty;
+        if (!NArk.Abstractions.ArkAddress.TryParse(destination, out var parsed) || parsed is null)
+            return RedirectWithError(nameof(StoreOverview), "Invalid Arkade address. Please enter a valid ark1… address.", new { storeId });
+
+        NArk.Core.ArkServerInfo serverInfo;
+        try
+        {
+            serverInfo = await clientTransport.GetServerInfoAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            return RedirectWithError(nameof(StoreOverview), DescribeArkError(ex, "Could not reach the Arkade server"), new { storeId });
+        }
+
+        if (NArk.Core.Services.DestinationSafety.IsStale(parsed, serverInfo))
+            return RedirectWithError(nameof(StoreOverview),
+                "That address is still on a deprecated signer; use a current Arkade address.", new { storeId });
+
+        var wallet = await walletStorage.GetWalletById(config!.WalletId!, ct);
+        if (wallet is null)
+            return RedirectWithError(nameof(StoreOverview), "Wallet not found.", new { storeId });
+
+        await walletStorage.UpsertWallet(wallet with { Destination = destination }, updateIfExists: true, ct);
+
+        return RedirectWithSuccess(nameof(StoreOverview), "Sweep destination re-confirmed.", new { storeId });
+    }
+
+    [HttpGet("stores/{storeId}/enable-ln")]
+    [HttpPost("stores/{storeId}/enable-ln")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> EnableLightning(string storeId)
+    {
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
+        if (errorResult != null) return errorResult;
+
+        var lightningPaymentMethodId = GetLightningPaymentMethod();
+        var lnurlPaymentMethodId = PaymentTypes.LNURL.GetPaymentMethodId("BTC");
+
+        store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[lightningPaymentMethodId], new LightningPaymentMethodConfig
+        {
+            ConnectionString = config!.GeneratedByStore
+                ? await spendKeyService.BuildConnectionStringAsync(config.WalletId)
+                : ArkLightningSpendKeyService.BuildReceiveOnlyConnectionString(config.WalletId),
+        });
+        store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[lnurlPaymentMethodId], new LNURLPaymentMethodConfig
+        {
+            UseBech32Scheme = true,
+            LUD12Enabled = false
+        });
+
+        var blob = store.GetStoreBlob();
+        blob.SetExcluded(lightningPaymentMethodId, false);
+        blob.OnChainWithLnInvoiceFallback = true;
+        store.SetStoreBlob(blob);
+        await storeRepository.UpdateStore(store);
+        return RedirectWithSuccess(nameof(StoreOverview), "Lightning enabled", new { storeId });
+    }
+
+    [HttpPost("stores/{storeId}/disable-ln")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> DisableLightning(string storeId)
+    {
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
+        if (errorResult != null) return errorResult;
+
+        store!.SetPaymentMethodConfig(GetLightningPaymentMethod(), null);
+        await storeRepository.UpdateStore(store);
+        return RedirectWithSuccess(nameof(StoreOverview), "Lightning disabled", new { storeId });
+    }
+
+    [HttpPost("stores/{storeId}/clear-wallet")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> ClearWallet(string storeId)
+    {
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
+        if (errorResult != null) return errorResult;
+
+        var walletId = config!.WalletId;
+
+        var lnConfig = store!.GetPaymentMethodConfig<LightningPaymentMethodConfig>(GetLightningPaymentMethod(), paymentMethodHandlerDictionary);
+        var lnEnabled = lnConfig?.ConnectionString?.StartsWith("type=arkade", StringComparison.InvariantCultureIgnoreCase) is true;
+
+        store.SetPaymentMethodConfig(ArkadePlugin.ArkadePaymentMethodId, null);
+        if (lnEnabled)
+            store.SetPaymentMethodConfig(GetLightningPaymentMethod(), null);
+
+        await storeRepository.UpdateStore(store);
+
+        // Delete wallet from DB if no other store references it
+        // Exclude current store since we just cleared its config above (GetStores may return cached data)
+        if (!string.IsNullOrEmpty(walletId) && !await IsWalletUsedByAnyStore(walletId, excludeStoreId: storeId))
+        {
+            await walletStorage.DeleteWallet(walletId, HttpContext.RequestAborted);
+        }
+
+        return RedirectWithSuccess(nameof(InitialSetup), "Arkade wallet configuration cleared.", new { storeId });
+    }
+
+    [HttpPost("stores/{storeId}/force-refresh")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> ForceRefresh(string storeId, CancellationToken cancellationToken)
+    {
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
+        if (errorResult != null) return errorResult;
+
+        try
+        {
+            var coins = await arkadeSpender.GetAvailableCoins(config!.WalletId!, cancellationToken);
+            if (coins.Count == 0)
+                return RedirectWithError(nameof(StoreOverview), "No VTXOs available to refresh.", new { storeId });
+
+            var refreshWallet = await walletStorage.GetWalletById(config.WalletId!, cancellationToken);
+            if (refreshWallet == null)
+            {
+                TempData[WellKnownTempData.ErrorMessage] = "Wallet not found.";
+                return RedirectToAction(nameof(StoreOverview), new { storeId });
+            }
+
+            // Get destination for refresh (back to same wallet)
+            // Use AwaitingFundsBeforeDeactivate so the contract can be deactivated if the intent fails
+            var destination = await contractService.DeriveContract(
+                refreshWallet.Id,
+                NextContractPurpose.SendToSelf,
+                ContractActivityState.AwaitingFundsBeforeDeactivate,
+                cancellationToken: cancellationToken);
+            var totalAmount = coins.Sum(c => c.TxOut.Value);
+
+
+            // Build ArkIntentSpec for refresh (send back to wallet)
+            var arkIntentSpec = new ArkIntentSpec(
+                [.. coins],
+                [new ArkTxOut(ArkTxOutType.Vtxo, totalAmount, destination.GetArkAddress())],
+                DateTimeOffset.UtcNow,
+                DateTimeOffset.UtcNow.AddMinutes(5)
+            );
+
+            // Create intent via NNark (automatically cancels any overlapping intents)
+            var intentTxId = await intentGenerationService.GenerateManualIntent(
+                config.WalletId,
+                arkIntentSpec,
+                cancellationToken);
+
+            TempData[WellKnownTempData.SuccessMessage] = $"Refresh intent {intentTxId} created with {coins.Count} VTXOs. Intent will be submitted automatically.";
+        }
+        catch (Exception ex)
+        {
+            TempData[WellKnownTempData.ErrorMessage] = DescribeArkError(ex, "Failed to create refresh intent");
+        }
+
+        return RedirectToAction(nameof(StoreOverview), new { storeId });
+    }
+
+    [HttpPost("stores/{storeId}/sync-wallet")]
+    [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
+    public async Task<IActionResult> SyncWallet(string storeId, CancellationToken cancellationToken)
+    {
+        var (store, config, errorResult) = await ValidateStoreAndConfig();
+        if (errorResult != null) return errorResult;
+
+        try
+        {
+            var contracts = await contractStorage.GetContracts(walletIds: [config!.WalletId], cancellationToken: cancellationToken);
+            await vtxoSyncService.PollScriptsForVtxos(contracts.Select(c => c.Script).ToHashSet(), cancellationToken);
+            return RedirectWithSuccess(nameof(StoreOverview), "Wallet synchronized successfully. All contracts and VTXOs have been updated.", new { storeId });
+        }
+        catch (Exception ex)
+        {
+            return RedirectWithError(nameof(StoreOverview), $"Failed to sync wallet: {ex.Message}", new { storeId });
+        }
+    }
+
+[NonAction]
+    public async Task<ArkBalancesViewModel> GetArkBalances(string walletId, CancellationToken cancellationToken)
+    {
+        // Get all contract scripts for the wallet
+        // var contracts = await contractStorage.GetContracts(walletIds: [walletId], cancellationToken: cancellationToken);
+        // var contractScripts = contracts.Select(c => c.Script).ToList();
+
+        // Get unspent VTXOs for those contracts
+        // var vtxos = await vtxoStorage.GetVtxos(scripts: contractScripts, cancellationToken: cancellationToken);
+        var currentTime = await bitcoinTimeChainProvider.GetChainTime(cancellationToken); 
+        var allCoins = await arkadeSpender.GetAvailableCoins(walletId, cancellationToken);
+
+        var coinsByRecoverableStatus = allCoins.ToLookup(coin => coin.IsRecoverable(currentTime));
+        // var spendableOutpoints = coinsByRecoverableStatus[false].Select(coin => coin.Outpoint).ToHashSet();
+        // var recoverableOutpoints = coinsByRecoverableStatus[true].Select(coin => coin.Outpoint).ToHashSet();
+
+        // Available: actually spendable right now (not recoverable, passes contract conditions)
+        // var availableBalance = vtxos
+        //     .Where(vtxo => spendableOutpoints.Contains(vtxo.OutPoint))
+        //     .Sum(vtxo => (long)vtxo.Amount);
+        //
+        // // Recoverable: spendable but marked as recoverable
+        // var recoverableBalance = vtxos
+        //     .Where(vtxo => recoverableOutpoints.Contains(vtxo.OutPoint))
+        //     .Sum(vtxo => (long)vtxo.Amount);
+
+       
+
+        // Unspendable: unspent VTXOs that don't pass contract conditions yet (e.g., HTLC timelock not reached)
+        // These are not recoverable, not locked, but also not spendable
+        var allSpendableOutpoints = allCoins
+            .Select(coin => coin.Outpoint)
+            .ToHashSet();
+
+        var all = (await vtxoStorage
+            .GetVtxos(walletIds: [walletId],
+                includeSpent: false, cancellationToken: cancellationToken));
+        
+        var unspendableBalance =
+            all.Where(vtxo => !allSpendableOutpoints.Contains(vtxo.OutPoint))
+            .Sum(vtxo => (long)vtxo.Amount);
+
+        var availableBalance = coinsByRecoverableStatus[false]
+            .Where(coin => !coin.Unrolled)
+            .Sum(coin => coin.Amount.Satoshi);
+        var recoverableBalance = coinsByRecoverableStatus[true].Sum(coin => coin.Amount.Satoshi);
+        var boardingBalance = allCoins.Where(coin => coin.Unrolled).Sum(coin => coin.Amount.Satoshi);
+
+        // Locked: VTXOs committed to active intents (WaitingToSubmit, WaitingForBatch)
+        var lockedOutpoints = await intentStorage.GetLockedVtxoOutpoints(walletId, cancellationToken);
+        var lockedSet = new HashSet<NBitcoin.OutPoint>(lockedOutpoints);
+        var lockedBalance = coinsByRecoverableStatus[false]
+            .Where(coin => !coin.Unrolled && lockedSet.Contains(coin.Outpoint))
+            .Sum(coin => coin.Amount.Satoshi);
+
+        return new ArkBalancesViewModel
+        {
+            AvailableBalance = availableBalance - lockedBalance,
+            LockedBalance = lockedBalance,
+            RecoverableBalance = recoverableBalance,
+            UnspendableBalance = unspendableBalance,
+            BoardingBalance = boardingBalance,
+        };
+    }
+
+    [HttpGet("blockchain-info")]
+    [AllowAnonymous]
+    public async Task<IActionResult> GetBlockchainInfo(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var (timestamp, height) = await bitcoinTimeChainProvider.GetChainTime(cancellationToken);
+            return Json(new { timestamp, height });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = ex.Message });
+        }
+    }
+
+
+
+    /// <summary>
+    /// BTCPay-specific helper to get all wallets with their related contracts and swaps.
+    /// </summary>
+    private async Task<List<ArkWalletEntity>> GetWalletsWithDetailsAsync(CancellationToken cancellationToken = default)
+    {
+        await using var ctx = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        return await ctx.Wallets
+            .Include(w => w.Contracts)
+            .Include(w => w.Swaps)
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// BTCPay-specific helper to get a wallet with its related contracts and swaps.
+    /// </summary>
+    private async Task<ArkWalletEntity?> GetWalletWithDetailsAsync(string walletId, CancellationToken cancellationToken = default)
+    {
+        await using var ctx = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        return await ctx.Wallets
+            .Include(w => w.Contracts)
+            .Include(w => w.Swaps)
+            .FirstOrDefaultAsync(w => w.Id == walletId, cancellationToken);
+    }
+
+    /// <summary>
+    /// BTCPay-specific helper to check if a wallet has pending swaps.
+    /// </summary>
+    private async Task<bool> HasPendingSwapsAsync(string walletId, CancellationToken cancellationToken = default)
+    {
+        await using var ctx = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        return await ctx.Swaps
+            .AnyAsync(s => s.WalletId == walletId &&
+                          s.Status == ArkSwapStatus.Pending,
+                     cancellationToken);
+    }
+
+    /// <summary>
+    /// BTCPay-specific helper to check if a wallet has pending intents.
+    /// </summary>
+    private async Task<bool> HasPendingIntentsAsync(string walletId, CancellationToken cancellationToken = default)
+    {
+        await using var ctx = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        return await ctx.Intents
+            .AnyAsync(i => i.WalletId == walletId &&
+                          (i.State == ArkIntentState.WaitingToSubmit ||
+                           i.State == ArkIntentState.WaitingForBatch ||
+                           i.State == ArkIntentState.BatchInProgress),
+                     cancellationToken);
+    }
+
+    /// <summary>
+    /// BTCPay-specific helper to update a wallet's destination address.
+    /// </summary>
+    private async Task UpdateWalletDestinationAsync(string walletId, string? destination, CancellationToken cancellationToken = default)
+    {
+        await using var ctx = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var wallet = await ctx.Wallets.FirstOrDefaultAsync(w => w.Id == walletId, cancellationToken);
+        if (wallet != null)
+        {
+            wallet.WalletDestination = destination;
+            await ctx.SaveChangesAsync(cancellationToken);
+        }
+    }
+}

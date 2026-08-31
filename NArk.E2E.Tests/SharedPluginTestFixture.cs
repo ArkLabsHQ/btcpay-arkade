@@ -1,3 +1,4 @@
+using System.Text.Json;
 using BTCPayServer.Tests;
 using Xunit;
 
@@ -37,6 +38,12 @@ public class SharedPluginTestFixture : IDisposable
 
         var testDir = Path.Combine(Directory.GetCurrentDirectory(), "ArkadePluginTests");
         ServerTester = testInstance.CreateServerTester(testDir, newDb: true);
+
+        // After the tester is constructed and before it starts, which is the only window there is:
+        // its constructor deletes the scope directory outright, and StartAsync is what reads the
+        // config. The plugin looks in BTCPay's --datadir, which is the "pay" subdirectory of the
+        // scope rather than the scope itself.
+        WriteSolverConfigIfRequested(Path.Combine(testDir, "pay"));
         // Load plugins in an isolated AssemblyLoadContext — matches the
         // production load model AND matches rockstardev's reference
         // fixture.
@@ -58,6 +65,56 @@ public class SharedPluginTestFixture : IDisposable
                 "BTCPay startup didn't complete within 3 minutes. The plugin's hosted services or IStartupTask are likely blocking. Run the test locally with debugger attached to inspect.");
         }
     }
+
+    /// <summary>
+    /// Points the plugin at a locally-run Arkade swap solver, when one was asked for.
+    /// </summary>
+    /// <param name="dataDir">BTCPay's data directory for this run — where the plugin reads its config.</param>
+    /// <remarks>
+    /// <para>
+    /// Written as <c>ark.json</c> in the data directory because that is where the plugin actually
+    /// reads it from in production; configuring it any other way here would test a path no
+    /// deployment uses. Only the keys the corridors need are written — the plugin merges a partial
+    /// file over its per-network preset, so the operator endpoints keep the regtest defaults.
+    /// </para>
+    /// <para>
+    /// Gated on <see cref="SolverUrlVariable"/> being set, and so a no-op for the rest of the suite.
+    /// The corridors need a solver, a claim daemon and a covenant emulator running alongside the
+    /// regtest stack, none of which CI starts — see <c>ArkadeLightningCorridorTests</c> for how to
+    /// bring them up.
+    /// </para>
+    /// </remarks>
+    private static void WriteSolverConfigIfRequested(string dataDir)
+    {
+        var solverUrl = Environment.GetEnvironmentVariable(SolverUrlVariable);
+        if (string.IsNullOrWhiteSpace(solverUrl)) return;
+
+        Directory.CreateDirectory(dataDir);
+
+        // An http(s) endpoint selects the HTTP transport; a ws(s) one selects the relay, which then
+        // also needs the solver's key to address it on. Both are passed through as given.
+        var config = new Dictionary<string, string?>
+        {
+            ["solver-relay"] = solverUrl,
+            ["solver-pubkey"] = Environment.GetEnvironmentVariable("ARKADE_E2E_SOLVER_PUBKEY"),
+            ["covclaimd"] = Environment.GetEnvironmentVariable("ARKADE_E2E_COVCLAIMD_URL")
+                            ?? "http://localhost:7271",
+            ["emulator"] = Environment.GetEnvironmentVariable("ARKADE_E2E_EMULATOR_URL")
+                           ?? "http://localhost:7073",
+        };
+
+        var json = JsonSerializer.Serialize(
+            config.Where(kv => !string.IsNullOrWhiteSpace(kv.Value)).ToDictionary(kv => kv.Key, kv => kv.Value),
+            new JsonSerializerOptions { WriteIndented = true });
+
+        File.WriteAllText(Path.Combine(dataDir, "ark.json"), json);
+    }
+
+    /// <summary>
+    /// The environment variable naming the solver to trade with. Unset means the Lightning-corridor
+    /// tests do not run.
+    /// </summary>
+    public const string SolverUrlVariable = "ARKADE_E2E_SOLVER_URL";
 
     public void Dispose()
     {
