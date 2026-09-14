@@ -23,6 +23,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NArk.Abstractions.Wallets;
+using NArk.ArkadeIntents;
+using NArk.ArkadeIntents.Models;
+using NBitcoin;
 using Newtonsoft.Json.Linq;
 using Xunit;
 using AuthenticationSchemes = BTCPayServer.Abstractions.Constants.AuthenticationSchemes;
@@ -91,10 +94,16 @@ public partial class ArkEvmSettlementApiTests
     [Fact]
     public async Task SqliteExecutionLockBlocksRouteIssuanceAndReportsCapability()
     {
-        await using var database = await CompositionDatabase.Create();
-        var executor = new PromptExecutor(database.Repository);
-        await using var app = CreateHost(new ArkadePaymentMethodConfig("private-wallet"), repository: database.Repository,
-            prompts: new ArkCompositionPromptService(database.Repository, executor), compositionExecutor: executor,
+        await using var database = await RouteDatabase.Create();
+        var repository = new ArkCompositionRouteRepository(database);
+        var intents = TestProxy.Create<IArkadeIntentStorage>((method, _) => method.Name switch
+        {
+            nameof(IArkadeIntentStorage.GetArkadeSwapIntents) =>
+                Task.FromResult<IReadOnlyCollection<ArkadeSwapIntent>>([]),
+            _ => throw new NotSupportedException(method.Name)
+        });
+        await using var app = CreateHost(new ArkadePaymentMethodConfig("private-wallet"), repository: repository,
+            prompts: new ArkCompositionPromptService(repository, intents),
             executionLock: new ArkCompositionPostgresExecutionLock(database));
         await app.StartAsync();
         using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
@@ -113,26 +122,59 @@ public partial class ArkEvmSettlementApiTests
     }
 
     [Fact]
-    public async Task RouteReportsExecutorReadinessWithoutTreatingIngressAsSettlement()
+    public async Task RouteReportsIntentStateWithoutTreatingIngressAsSettlement()
     {
-        await using var database = await CompositionDatabase.Create();
-        var route = CompositionFixture.Prepared("BTC-LN");
-        route.RecordOutgoingQuote(CompositionFixture.OutgoingQuote(), CompositionFixture.EvmTerms());
-        route.RecordIngressQuote(CompositionFixture.IngressQuote());
-        route.RecordCustomerPrompt("lnbcrt1testpublicquote", 1800000030);
-        await database.Repository.Add("store", route);
-        var executor = new PromptExecutor(database.Repository);
-        await using var app = CreateHost(repository: database.Repository, compositionExecutor: executor,
+        await using var database = await RouteDatabase.Create();
+        var repository = new ArkCompositionRouteRepository(database);
+        var paymentHash = new string('c', 64);
+        var outgoingId = new string('a', 64);
+        var ingressId = new string('b', 64);
+        await repository.Add("store", ArkCompositionRoute.Create("store", null, "BTC-LN", "wallet",
+            outgoingId, ingressId, paymentHash, 1000, "lnbcrt1testpublicquote", 1800000030,
+            DateTimeOffset.FromUnixTimeSeconds(1800000000)));
+        var intents = TestProxy.Create<IArkadeIntentStorage>((method, args) => method.Name switch
+        {
+            nameof(IArkadeIntentStorage.GetArkadeSwapIntents) => Task.FromResult<IReadOnlyCollection<ArkadeSwapIntent>>(
+                IntentById((string?)args![0]!)),
+            _ => throw new NotSupportedException(method.Name)
+        });
+        await using var app = CreateHost(repository: repository, intents: intents,
             executionLock: new SafeExecutionLock());
         await app.StartAsync();
         using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
         client.DefaultRequestHeaders.Add("Test-Permission", Policies.CanViewInvoices);
 
-        var data = JObject.Parse(await client.GetStringAsync($"/api/v1/stores/store/arkade/evm-settlement/routes/{route.RouteId}"));
+        var stored = (await repository.List("store")).Single();
+        var data = JObject.Parse(await client.GetStringAsync($"/api/v1/stores/store/arkade/evm-settlement/routes/{stored.RouteId}"));
 
-        Assert.Equal("IngressQuoted", data.Value<string>("status"));
+        Assert.Equal("Pending", data.Value<string>("status"));
         Assert.False(data.Value<bool>("settlementVerified"));
         Assert.True(data.Value<bool>("executionAvailable"));
+        Assert.Equal(2, data["legs"]!.Count());
+        Assert.Equal(paymentHash, data.Value<string>("paymentHash"));
+
+        IReadOnlyCollection<ArkadeSwapIntent> IntentById(string? id) => id switch
+        {
+            _ when id == outgoingId => [new ArkadeSwapIntent
+            {
+                Id = outgoingId, WalletId = "wallet", Type = ArkadeSwapIntentType.BtcToEvm,
+                OfferAmount = Money.Satoshis(1000), WantAmount = Money.Zero, Status = ArkadeSwapIntentStatus.Pending,
+                CreatedAt = DateTimeOffset.UtcNow, SwapPkScript = "0014", SwapAddress = "ark1",
+                PaymentHash = paymentHash, RefundLocktime = 1800000060,
+                ToAssetId = "eip155:42161/erc20:0x1111111111111111111111111111111111111111"
+            }.WithEvmMetadata(new EvmSwapMetadata(new string('1', 64), "2000000",
+                "0x1111111111111111111111111111111111111111", Destination,
+                "0x3333333333333333333333333333333333333333", "1900000",
+                "0x4444444444444444444444444444444444444444")).WithSolver(new string('7', 64))],
+            _ when id == ingressId => [new ArkadeSwapIntent
+            {
+                Id = ingressId, WalletId = "wallet", Type = ArkadeSwapIntentType.LightningToBtc,
+                OfferAmount = Money.Satoshis(1025), WantAmount = Money.Satoshis(1000),
+                Status = ArkadeSwapIntentStatus.Pending, CreatedAt = DateTimeOffset.UtcNow,
+                SwapPkScript = "0020", SwapAddress = "ark2", PaymentHash = paymentHash, RefundLocktime = 1800000060
+            }.WithSolver(new string('8', 64))],
+            _ => []
+        };
     }
 
     [Theory]
@@ -186,9 +228,9 @@ public partial class ArkEvmSettlementApiTests
     }
 
     private static WebApplication CreateHost(ArkadePaymentMethodConfig? initialConfiguration = null, bool newtonsoft = true,
-        TestLogSink? logSink = null, ArkInvoiceCompositionRepository? repository = null,
+        TestLogSink? logSink = null, ArkCompositionRouteRepository? repository = null,
         ArkCompositionPromptService? prompts = null, bool onchainConfigured = true,
-        IArkCompositionExecutor? compositionExecutor = null, IArkCompositionExecutionLock? executionLock = null,
+        IArkadeIntentStorage? intents = null, IArkCompositionExecutionLock? executionLock = null,
         bool lightningConfigured = true)
     {
         var builder = WebApplication.CreateBuilder();
@@ -197,7 +239,7 @@ public partial class ArkEvmSettlementApiTests
         builder.Services.AddSingleton<ArkEvmGasPayerProtector>();
         if (repository is not null) builder.Services.AddSingleton(repository);
         if (prompts is not null) builder.Services.AddSingleton(prompts);
-        if (compositionExecutor is not null) builder.Services.AddSingleton(compositionExecutor);
+        if (intents is not null) builder.Services.AddSingleton(intents);
         if (executionLock is not null) builder.Services.AddSingleton(executionLock);
         builder.Logging.ClearProviders();
         if (logSink is not null)

@@ -47,7 +47,7 @@ BTCPay Server
         ├── NArk.Core              # Wallet, VTXO logic, HD/SingleKey signers
         ├── NArk.Storage.EfCore    # PostgreSQL persistence (EF Core)
         ├── NArk.ArkadeIntents     # Solver RFQs, covenant and EVM swap execution
-        └── Composition journal    # Crash-safe client-side route orchestration
+        └── Composition index    # Invoice to SDK-swap routing over intent storage
 ```
 
 The plugin persists all state (VTXOs, contracts, swaps, intents, wallets) in BTCPay's existing PostgreSQL database via EF Core migrations.
@@ -328,7 +328,7 @@ The plugin exposes a store-scoped REST API under `/api/v1/stores/{storeId}/arkad
 - `POST /api/v1/stores/{storeId}/arkade/sync` — force a VTXO + boarding sync.
 - `GET|PUT /api/v1/stores/{storeId}/arkade/evm-settlement` — protected EVM route policy and credentials.
 - `GET /api/v1/stores/{storeId}/arkade/evm-settlement/capabilities` — nonsecret readiness and blockers.
-- `GET /api/v1/stores/{storeId}/arkade/evm-settlement/routes` — public composed-route journal.
+- `GET /api/v1/stores/{storeId}/arkade/evm-settlement/routes` — composed routes projected from SDK intent storage.
 
 For a public descriptor import, post `{"mode":"WatchOnly","wallet":"tr(...)"}`
 to the wallet endpoint. This stores no private key and starts SDK restoration/scanning.

@@ -28,10 +28,13 @@ prompt remains independently settleable after a newer prompt is generated.
 
 ## Custody and recovery
 
-The public route journal contains only public quote and proof facts. `P`, wallet
+Quote, funding, proof, and lifecycle state live in the SDK's intent storage,
+which already persists both legs and the route preimage `P`. The plugin keeps
+only a store-scoped routing index (invoice to SDK swap ids) plus the BTCPay
+prompt and payment records; it duplicates no swap state. `P`, wallet
 descriptors, RPC credentials, and gas keys are excluded from route APIs and
-logs. Protected route checkpoints make retries use the same RFQ and prevent a
-crash from silently creating a different quote.
+logs. Retries resume from the persisted SDK intents, so a crash cannot silently
+create a different quote for an indexed route.
 
 A watch-only merchant wallet is sufficient for the composed path: emulator
 non-interactive claims move `M` to `L`, and the same path refunds a funded `L`
@@ -42,8 +45,8 @@ EVM claim.
 
 Route issuance requires PostgreSQL advisory locks. The API reports
 `cross-process-execution-lock-unavailable` and creates no payable prompt when a
-safe lock backend is unavailable. Existing journals are still scanned for
-recovery.
+safe lock backend is unavailable. Existing indexed routes are still advanced
+for recovery.
 
 ## Greenfield API
 

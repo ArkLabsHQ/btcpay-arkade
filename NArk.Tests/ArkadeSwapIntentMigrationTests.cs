@@ -12,8 +12,6 @@ namespace NArk.Tests;
 
 public class ArkadeSwapIntentMigrationTests
 {
-    private const string MigrationId = "20260911120000_UpgradeArkadeSwapIntentStorage";
-
     private static readonly string[] TypeNames =
         ["BtcToAsset", "AssetToBtc", "BtcToLightning", "LightningToBtc", "BtcToOnchain"];
 
@@ -49,9 +47,7 @@ public class ArkadeSwapIntentMigrationTests
         {
             command.CommandText =
                 """
-                SELECT "Metadata", "OfferHex", "MakerDescriptor", "Invoice", "Preimage",
-                       "HtlcPubkey", "HtlcLocktime", "OnchainPayoutAddress", "PaymentHash",
-                       "RefundLocktime", "SpentTxid"
+                SELECT "Metadata", "PaymentHash", "RefundLocktime", "SpentTxid"
                 FROM "ArkadeSwapIntents" WHERE "Id" = 'intent-4'
                 """;
             using var reader = command.ExecuteReader();
@@ -62,23 +58,14 @@ public class ArkadeSwapIntentMigrationTests
             Assert.Equal("maker-secret", metadata["makerDescriptor"]);
             Assert.Equal("invoice-secret", metadata["invoice"]);
             Assert.Equal("preimage-secret", metadata["preimage"]);
-            Assert.Equal("htlc-pubkey", metadata["htlcPubkey"]);
-            Assert.Equal("1700000000", metadata["htlcLocktime"]);
-            Assert.Equal("bc1q-payout", metadata["onchainPayoutAddress"]);
-            Assert.Equal("offer-secret", reader.GetString(1));
-            Assert.Equal("maker-secret", reader.GetString(2));
-            Assert.Equal("invoice-secret", reader.GetString(3));
-            Assert.Equal("preimage-secret", reader.GetString(4));
-            Assert.Equal("htlc-pubkey", reader.GetString(5));
-            Assert.Equal(1700000000, reader.GetInt64(6));
-            Assert.Equal("bc1q-payout", reader.GetString(7));
-            Assert.Equal("payment-history", reader.GetString(8));
-            Assert.Equal(1700000100, reader.GetInt64(9));
-            Assert.Equal("spent-history", reader.GetString(10));
+            Assert.Equal(4, metadata.Count);
+            Assert.Equal("payment-history", reader.GetString(1));
+            Assert.Equal(1700000100, reader.GetInt64(2));
+            Assert.Equal("spent-history", reader.GetString(3));
         }
 
         Assert.Equal(0L, ReadScalar<long>(connection,
-            "SELECT \"notnull\" FROM pragma_table_info('ArkadeSwapIntents') WHERE \"name\" = 'OfferHex'"));
+            "SELECT COUNT(*) FROM pragma_table_info('ArkadeSwapIntents') WHERE \"name\" IN ('OfferHex', 'Preimage', 'Invoice', 'MakerDescriptor')"));
         Assert.Equal("TEXT", ReadScalar<string>(connection,
             "SELECT \"type\" FROM pragma_table_info('ArkadeSwapIntents') WHERE \"name\" = 'Type'"));
 
@@ -96,7 +83,7 @@ public class ArkadeSwapIntentMigrationTests
     }
 
     [Fact]
-    public void DownIsExplicitlyNonDestructive()
+    public void DownDropsOnlyTheRouteIndex()
     {
         using var connection = OpenLegacyDatabase();
         var migration = CreateMigration("Microsoft.EntityFrameworkCore.Sqlite");
@@ -106,15 +93,14 @@ public class ArkadeSwapIntentMigrationTests
 
         ExecuteOperations(connection, migration.DownOperations);
 
-        Assert.Empty(migration.DownOperations);
+        Assert.Single(migration.DownOperations);
+        Assert.Equal("CompositionRoutes", Assert.IsType<DropTableOperation>(migration.DownOperations[0]).Name);
         Assert.Equal(before, ReadScalar<string>(connection,
             "SELECT \"Metadata\" FROM \"ArkadeSwapIntents\" WHERE \"Id\" = 'intent-4'"));
-        Assert.Equal("preimage-secret", ReadScalar<string>(connection,
-            "SELECT \"Preimage\" FROM \"ArkadeSwapIntents\" WHERE \"Id\" = 'intent-4'"));
     }
 
     [Fact]
-    public void PostgreSqlUpgradeIsAdditiveForLegacyColumns()
+    public void PostgreSqlUpgradeFoldsLegacyColumnsAndTranslatesOrdinals()
     {
         using var context = new DesignTimeDbContextFactory().CreateDbContext([]);
         var migration = CreateMigration(context.Database.ProviderName!);
@@ -125,9 +111,10 @@ public class ArkadeSwapIntentMigrationTests
         Assert.Contains("'offerHex', \"OfferHex\"", sql);
         Assert.Contains("WHEN 4 THEN 'BtcToOnchain'", sql);
         Assert.Contains("WHEN 8 THEN 'Resolved'", sql);
-        Assert.Contains("ALTER COLUMN \"OfferHex\" DROP NOT NULL", sql);
-        Assert.DoesNotContain("DROP COLUMN", sql);
+        Assert.Contains("DROP COLUMN", sql);
+        Assert.Contains("CREATE TABLE", sql);
         Assert.DoesNotContain("DROP TABLE", sql);
+        Assert.DoesNotContain("InvoiceCompositions", sql);
     }
 
     private static SqliteConnection OpenLegacyDatabase()
@@ -155,10 +142,7 @@ public class ArkadeSwapIntentMigrationTests
                 "PaymentHash" TEXT NULL,
                 "RefundLocktime" INTEGER NULL,
                 "Preimage" TEXT NULL,
-                "SpentTxid" TEXT NULL,
-                "HtlcLocktime" INTEGER NULL,
-                "HtlcPubkey" TEXT NULL,
-                "OnchainPayoutAddress" TEXT NULL
+                "SpentTxid" TEXT NULL
             );
             CREATE INDEX "IX_ArkadeSwapIntents_PaymentHash" ON "ArkadeSwapIntents" ("PaymentHash");
             CREATE INDEX "IX_ArkadeSwapIntents_SwapPkScript" ON "ArkadeSwapIntents" ("SwapPkScript");
@@ -174,12 +158,11 @@ public class ArkadeSwapIntentMigrationTests
                 INSERT INTO "ArkadeSwapIntents" (
                     "Id", "WalletId", "Type", "OfferAmount", "WantAmount", "Status", "CreatedAt",
                     "SwapPkScript", "SwapAddress", "OfferHex", "MakerDescriptor", "Invoice",
-                    "PaymentHash", "RefundLocktime", "Preimage", "SpentTxid", "HtlcLocktime",
-                    "HtlcPubkey", "OnchainPayoutAddress")
+                    "PaymentHash", "RefundLocktime", "Preimage", "SpentTxid")
                 VALUES (
                     $id, 'wallet', $type, 100, 200, $status, '2026-09-11T12:00:00Z',
                     $script, 'ark1', $offer, $maker, $invoice, $paymentHash, $refundLocktime,
-                    $preimage, $spentTxid, $htlcLocktime, $htlcPubkey, $payout)
+                    $preimage, $spentTxid)
                 """;
             insert.Parameters.AddWithValue("$id", $"intent-{i}");
             insert.Parameters.AddWithValue("$type", i % TypeNames.Length);
@@ -193,9 +176,6 @@ public class ArkadeSwapIntentMigrationTests
             AddNullable(insert, "$refundLocktime", carriesSecrets ? 1700000100L : null);
             AddNullable(insert, "$preimage", carriesSecrets ? "preimage-secret" : null);
             AddNullable(insert, "$spentTxid", carriesSecrets ? "spent-history" : null);
-            AddNullable(insert, "$htlcLocktime", carriesSecrets ? 1700000000L : null);
-            AddNullable(insert, "$htlcPubkey", carriesSecrets ? "htlc-pubkey" : null);
-            AddNullable(insert, "$payout", carriesSecrets ? "bc1q-payout" : null);
             insert.ExecuteNonQuery();
         }
 
@@ -206,7 +186,7 @@ public class ArkadeSwapIntentMigrationTests
     {
         using var context = new DesignTimeDbContextFactory().CreateDbContext([]);
         var assembly = context.GetService<IMigrationsAssembly>();
-        var entry = assembly.Migrations.Single(migration => migration.Key == MigrationId);
+        var entry = assembly.Migrations.Single(migration => migration.Key.EndsWith("_AddComposedEvmSettlement"));
         return assembly.CreateMigration(entry.Value, providerName);
     }
 

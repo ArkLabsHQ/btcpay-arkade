@@ -23,18 +23,13 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
-            modelBuilder.Entity("BTCPayServer.Plugins.ArkPayServer.Data.ArkInvoiceComposition", b =>
+            modelBuilder.Entity("BTCPayServer.Plugins.ArkPayServer.Data.ArkCompositionRoute", b =>
                 {
                     b.Property<Guid>("RouteId")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<string>("AssetId")
-                        .IsRequired()
-                        .HasMaxLength(88)
-                        .HasColumnType("character varying(88)");
-
-                    b.Property<long?>("BaseAmountSats")
+                    b.Property<long>("BaseAmountSats")
                         .HasColumnType("bigint");
 
                     b.Property<long?>("CheckoutExpiresAt")
@@ -47,64 +42,20 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
                         .HasMaxLength(8192)
                         .HasColumnType("character varying(8192)");
 
-                    b.Property<string>("Destination")
-                        .IsRequired()
-                        .HasMaxLength(42)
-                        .HasColumnType("character varying(42)");
-
-                    b.Property<string>("EvmAmount")
-                        .HasMaxLength(78)
-                        .HasColumnType("character varying(78)");
-
-                    b.Property<string>("EvmClaimAddress")
-                        .HasMaxLength(42)
-                        .HasColumnType("character varying(42)");
-
-                    b.Property<string>("EvmClaimTransactionId")
-                        .HasMaxLength(66)
-                        .HasColumnType("character varying(66)");
-
-                    b.Property<string>("EvmLockTransactionId")
-                        .HasMaxLength(66)
-                        .HasColumnType("character varying(66)");
-
-                    b.Property<string>("EvmObservedAtBlock")
-                        .HasMaxLength(78)
-                        .HasColumnType("character varying(78)");
-
-                    b.Property<string>("EvmProvenAtBlock")
-                        .HasMaxLength(78)
-                        .HasColumnType("character varying(78)");
-
-                    b.Property<long?>("EvmProvenBlockTimestamp")
-                        .HasColumnType("bigint");
-
-                    b.Property<string>("EvmRefundAddress")
-                        .HasMaxLength(42)
-                        .HasColumnType("character varying(42)");
-
-                    b.Property<string>("EvmTimeoutBlock")
-                        .HasMaxLength(78)
-                        .HasColumnType("character varying(78)");
-
-                    b.Property<string>("EvmTokenAddress")
-                        .HasMaxLength(42)
-                        .HasColumnType("character varying(42)");
-
-                    b.Property<string>("FailureCode")
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.Property<string>("IngressClaimTransactionId")
+                    b.Property<string>("IngressSwapId")
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
 
                     b.Property<string>("InvoiceId")
-                        .IsConcurrencyToken()
                         .HasColumnType("text");
 
+                    b.Property<string>("OutgoingSwapId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<string>("PaymentHash")
-                        .IsConcurrencyToken()
+                        .IsRequired()
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
 
@@ -113,22 +64,9 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)");
 
-                    b.Property<long>("Revision")
-                        .IsConcurrencyToken()
-                        .HasColumnType("bigint");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
                     b.Property<string>("StoreId")
                         .IsRequired()
                         .HasColumnType("text");
-
-                    b.Property<string>("SwapContractAddress")
-                        .HasMaxLength(42)
-                        .HasColumnType("character varying(42)");
 
                     b.Property<string>("WalletId")
                         .IsRequired()
@@ -136,71 +74,14 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
 
                     b.HasKey("RouteId");
 
-                    b.HasIndex("PaymentHash")
+                    b.HasIndex("OutgoingSwapId")
                         .IsUnique();
+
+                    b.HasIndex("PaymentHash");
 
                     b.HasIndex("StoreId", "InvoiceId", "PaymentMethodId");
 
-                    b.ToTable("InvoiceCompositions", "BTCPayServer.Plugins.Ark");
-                });
-
-            modelBuilder.Entity("BTCPayServer.Plugins.ArkPayServer.Data.ArkInvoiceCompositionLeg", b =>
-                {
-                    b.Property<string>("RfqId")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<string>("FromAmount")
-                        .HasMaxLength(78)
-                        .HasColumnType("character varying(78)");
-
-                    b.Property<long?>("FundedAmountSats")
-                        .HasColumnType("bigint");
-
-                    b.Property<string>("FundingTransactionId")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<string>("Kind")
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("character varying(16)");
-
-                    b.Property<string>("LockupAddress")
-                        .HasMaxLength(512)
-                        .HasColumnType("character varying(512)");
-
-                    b.Property<string>("LockupScript")
-                        .HasMaxLength(68)
-                        .HasColumnType("character varying(68)");
-
-                    b.Property<string>("PayoutScript")
-                        .HasMaxLength(68)
-                        .HasColumnType("character varying(68)");
-
-                    b.Property<long?>("RefundLocktime")
-                        .HasColumnType("bigint");
-
-                    b.Property<Guid>("RouteId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("SolverPubkey")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<string>("ToAmount")
-                        .HasMaxLength(78)
-                        .HasColumnType("character varying(78)");
-
-                    b.Property<long?>("ValidUntil")
-                        .HasColumnType("bigint");
-
-                    b.HasKey("RfqId");
-
-                    b.HasIndex("RouteId", "Kind")
-                        .IsUnique();
-
-                    b.ToTable("InvoiceCompositionLegs", "BTCPayServer.Plugins.Ark");
+                    b.ToTable("CompositionRoutes", "BTCPayServer.Plugins.Ark");
                 });
 
             modelBuilder.Entity("BTCPayServer.Plugins.ArkPayServer.Data.Legacy.LegacySwap", b =>
@@ -546,15 +427,6 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
                     b.ToTable("Vtxos", "BTCPayServer.Plugins.Ark");
                 });
 
-            modelBuilder.Entity("BTCPayServer.Plugins.ArkPayServer.Data.ArkInvoiceCompositionLeg", b =>
-                {
-                    b.HasOne("BTCPayServer.Plugins.ArkPayServer.Data.ArkInvoiceComposition", null)
-                        .WithMany("Legs")
-                        .HasForeignKey("RouteId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
             modelBuilder.Entity("BTCPayServer.Plugins.ArkPayServer.Data.Legacy.LegacySwap", b =>
                 {
                     b.HasOne("NArk.Storage.EfCore.Entities.ArkWalletEntity", "Wallet")
@@ -602,11 +474,6 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Wallet");
-                });
-
-            modelBuilder.Entity("BTCPayServer.Plugins.ArkPayServer.Data.ArkInvoiceComposition", b =>
-                {
-                    b.Navigation("Legs");
                 });
 
             modelBuilder.Entity("NArk.Storage.EfCore.Entities.ArkIntentEntity", b =>

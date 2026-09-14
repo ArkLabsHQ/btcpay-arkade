@@ -10,28 +10,28 @@ namespace NArk.Tests;
 public class ArkPluginMigrationTests
 {
     [Fact]
-    public void RouteJournalMigrationIsAdditiveAndLeavesExistingRoutesInert()
+    public void ComposedSettlementShipsExactlyOneMigrationWithAnIndexNotAJournal()
     {
         using var context = new DesignTimeDbContextFactory().CreateDbContext([]);
         var assembly = context.GetService<IMigrationsAssembly>();
-        var entry = assembly.Migrations.Single(m => m.Key.EndsWith("_AddCompositionRouteJournal"));
+        var entries = assembly.Migrations.Where(m => m.Key.StartsWith("2026091", StringComparison.Ordinal)).ToArray();
+        var entry = Assert.Single(entries);
+        Assert.EndsWith("_AddComposedEvmSettlement", entry.Key);
         var migration = assembly.CreateMigration(entry.Value, context.Database.ProviderName!);
-        var additions = migration.UpOperations.OfType<AddColumnOperation>().ToArray();
-        Assert.Equal(15, additions.Length);
-        Assert.All(additions, operation => Assert.Equal("InvoiceCompositions", operation.Table));
-        Assert.All(additions.Where(operation => operation.Name != "Revision"), operation => Assert.True(operation.IsNullable));
-        Assert.Equal(0L, additions.Single(operation => operation.Name == "Revision").DefaultValue);
-        var legs = Assert.Single(migration.UpOperations.OfType<CreateTableOperation>());
-        Assert.Equal("InvoiceCompositionLegs", legs.Name);
-        Assert.Equal(["RfqId"], legs.PrimaryKey!.Columns);
-        Assert.Single(legs.ForeignKeys);
-        Assert.All(migration.UpOperations, operation =>
-            Assert.True(operation is AddColumnOperation or CreateTableOperation or CreateIndexOperation));
-        var sql = context.GetService<IMigrator>().GenerateScript("20260911052408_AddInvoiceCompositions", entry.Key);
-        Assert.Contains("CREATE TABLE", sql);
-        Assert.DoesNotContain("DROP ", sql);
-        Assert.DoesNotContain("UPDATE ", sql);
-        Assert.DoesNotContain("preimage", sql, StringComparison.OrdinalIgnoreCase);
+
+        var created = Assert.Single(migration.UpOperations.OfType<CreateTableOperation>());
+        Assert.Equal("CompositionRoutes", created.Name);
+        Assert.Equal(["RouteId"], created.PrimaryKey!.Columns);
+        Assert.DoesNotContain(migration.UpOperations, operation =>
+            operation is CreateTableOperation table &&
+            (table.Name == "InvoiceCompositions" || table.Name == "InvoiceCompositionLegs"));
+        var metadata = Assert.Single(migration.UpOperations.OfType<AddColumnOperation>());
+        Assert.Equal("Metadata", metadata.Name);
+        Assert.Equal("ArkadeSwapIntents", metadata.Table);
+        var sql = context.GetService<IMigrator>().GenerateScript("20260814002907_AddArkadeSwapIntents", entry.Key);
+        Assert.Contains("CompositionRoutes", sql);
+        Assert.DoesNotContain("InvoiceCompositions", sql);
+        Assert.DoesNotContain("InvoiceCompositionLegs", sql);
     }
 
     [Fact]

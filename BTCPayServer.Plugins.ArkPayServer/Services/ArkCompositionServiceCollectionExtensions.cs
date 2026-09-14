@@ -14,10 +14,8 @@ public static class ArkCompositionServiceCollectionExtensions
         services.AddHttpClient("ArkCompositionRfq");
         services.Replace(ServiceDescriptor.Singleton<IArkadeIntentStorage>(provider => new ArkProtectedIntentStorage(
             provider.GetRequiredService<EfCoreArkadeIntentStorage>(), provider.GetRequiredService<IDataProtectionProvider>())));
-        services.TryAddSingleton<ArkCompositionPrivateStore>();
         services.TryAddSingleton<ArkCompositionEvmContextFactory>();
         services.TryAddSingleton<ArkCompositionSolverFactory>();
-        services.TryAddSingleton<IArkCompositionExecutor, ArkSdkCompositionExecutor>();
         return services;
     }
 }
