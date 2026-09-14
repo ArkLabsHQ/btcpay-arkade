@@ -5,7 +5,7 @@
 @using NArk.Core.Contracts
 @using NArk.Core.Transport
 @using NArk.Hosting
-@using NArk.Swaps.Models
+@using BTCPayServer.Plugins.ArkPayServer.Data.Legacy
 @using static BTCPayServer.Plugins.ArkPayServer.Helpers.ArkViewHelpers
 @model BTCPayServer.Plugins.ArkPayServer.Models.StoreSwapsViewModel
 @inject IScopeProvider ScopeProvider
@@ -149,15 +149,14 @@
                     var arkContract = contractEntity != null ? ArkContractParser.Parse(contractEntity.Type, contractEntity.AdditionalData, network) : null;
                     var link = arkContract is ArkBoardingContract ? ArkadeLinkHelper.GetScriptLink(ArkNetworkConfig, swap.ContractScript)
                         : arkContract != null ? ArkadeLinkHelper.GetContractLink(ArkNetworkConfig, arkContract) : "#";
-                    var boltzSwapLink = ArkadeLinkHelper.GetSwapLink(ArkNetworkConfig, swap.SwapId);
 
                     <tr id="swap_@swap.SwapId.GetHashCode()">
                         <td class="align-middle date-col">@swap.CreatedAt.ToBrowserDate()</td>
                         <td class="align-middle">
-                            <vc:truncate-center text="@swap.SwapId" link="@boltzSwapLink" classes="truncate-center-id"/>
+                            <vc:truncate-center text="@swap.SwapId" classes="truncate-center-id"/>
                         </td>
                         <td class="align-middle">
-                            @if (swap.SwapType == ArkSwapType.ReverseSubmarine)
+                            @if (swap.SwapType == LegacySwapType.ReverseSubmarine)
                             {
                                 <span class="badge text-bg-primary">Reverse</span>
                             }
@@ -186,17 +185,17 @@
                             @{
                                 var swapclass = swap.Status switch
                                 {
-                                    ArkSwapStatus.Pending => "text-bg-info",
-                                    ArkSwapStatus.Settled => "text-bg-success",
-                                    ArkSwapStatus.Failed => "text-bg-danger",
+                                    LegacySwapStatus.Pending => "text-bg-info",
+                                    LegacySwapStatus.Settled => "text-bg-success",
+                                    LegacySwapStatus.Failed => "text-bg-danger",
                                     _ => "text-bg-warning"
                                 };
                             }
 
-                            <span class="badge @swapclass">@Enum.GetName(typeof(ArkSwapStatus), swap.Status)</span>
+                            <span class="badge @swapclass">@Enum.GetName(typeof(LegacySwapStatus), swap.Status)</span>
 
 
-                            @if (arkContract is VHTLCContract htlcContract && swap.Status != ArkSwapStatus.Settled && swap.Status != ArkSwapStatus.Unknown)
+                            @if (arkContract is VHTLCContract htlcContract && swap.Status != LegacySwapStatus.Settled && swap.Status != LegacySwapStatus.Unknown)
                             {
                                 <div class="htlc-countdown mt-1" data-locktime="@htlcContract.RefundLocktime.Value" data-is-timelock="@htlcContract.RefundLocktime.IsTimeLock.ToString().ToLower()">
                                     <small>Refund: <span class="countdown-value">calculating...</span></small>

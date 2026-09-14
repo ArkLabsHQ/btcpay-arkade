@@ -57,6 +57,7 @@ public class ArkadeCheckoutModelExtension: ICheckoutModelExtension, IGlobalCheck
 
         context.Model.CheckoutBodyComponentName = ArkadePlugin.CheckoutBodyComponentName;
         context.Model.ShowRecommendedFee = false;
+        _serviceProvider.GetService<ArkCompositionCheckoutPolicy>()?.BeginPreload(context.InvoiceEntity, context.Store);
         var paymentLink =
             _arkadePaymentLinkExtension.GetPaymentLink(context.Prompt, context.UrlHelper)
                 ?? throw new Exception("Failed to generate Arkade payment link"); // should not happen
@@ -134,6 +135,11 @@ public class ArkadeCheckoutModelExtension: ICheckoutModelExtension, IGlobalCheck
         // harvest from a tab that was never activated (its plugins didn't run either).
         if (bitcoinPrompt is not { Activated: true, Details: not null } || _bitcoinPaymentLinkExtension is null)
             return ("", "");
+        var compositionPolicy = _serviceProvider.GetService<ArkCompositionCheckoutPolicy>();
+        var composed = compositionPolicy?.RequiresComposition(realCtx.InvoiceEntity, realCtx.Store) ??
+            realCtx.Prompt.Details?["compositionRouteId"] is not null;
+        if (composed && (compositionPolicy?.CanInclude(bitcoinPrompt, true) != true ||
+            bitcoinPrompt.Calculate().Due != realCtx.Prompt.Calculate().Due)) return ("", "");
         var bitcoinHandler = _handlers.TryGet(BitcoinOnchainPmi);
         if (bitcoinHandler is null) return ("", "");
 
@@ -170,8 +176,8 @@ public class ArkadeCheckoutModelExtension: ICheckoutModelExtension, IGlobalCheck
         }
 
         return (
-            DiffAddedQuery(pristineBitcoinUrl, synthetic.InvoiceBitcoinUrl),
-            DiffAddedQuery(pristineBitcoinUrl, synthetic.InvoiceBitcoinUrlQR));
+            DiffAddedQuery(pristineBitcoinUrl, synthetic.InvoiceBitcoinUrl, composed),
+            DiffAddedQuery(pristineBitcoinUrl, synthetic.InvoiceBitcoinUrlQR, composed));
     }
 
     void IGlobalCheckoutModelExtension.ModifyCheckoutModel(CheckoutModelContext context)
@@ -222,7 +228,7 @@ public class ArkadeCheckoutModelExtension: ICheckoutModelExtension, IGlobalCheck
     /// the contributing plugin chose round-trips byte-for-byte into our
     /// final URL.
     /// </summary>
-    private static string DiffAddedQuery(string before, string after)
+    private static string DiffAddedQuery(string before, string after, bool composed)
     {
         if (string.IsNullOrEmpty(after) || ReferenceEquals(before, after)) return "";
 
@@ -238,7 +244,7 @@ public class ArkadeCheckoutModelExtension: ICheckoutModelExtension, IGlobalCheck
         {
             var eq = entry.IndexOf('=');
             var key = eq < 0 ? entry : entry[..eq];
-            if (!beforeKeys.Contains(key))
+            if (!beforeKeys.Contains(key) && !ArkadeBip21Builder.IsReservedQueryKey(key, composed))
                 added.Add(entry);
         }
         return string.Join("&", added);

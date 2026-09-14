@@ -1,0 +1,110 @@
+name: Composed EVM E2E
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  ARKADE_COMPOSED_EVM_E2E: "1"
+  ARKADE_COMPOSED_EVM_REGTEST_ROOT: ${{ github.workspace }}/arkade-regtest
+  INTENT_SOLVER_EVM_IMAGE: intent-solver:evm-policy-ci
+
+jobs:
+  composed-evm-e2e:
+    name: Composed EVM E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout BTCPay Arkade
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Checkout derived arkade-regtest EVM stack
+        uses: actions/checkout@v4
+        with:
+          repository: ArkLabsHQ/arkade-regtest
+          ref: 76572b31a90bfe7daa619a7656bb044bfeade6d6
+          path: arkade-regtest
+
+      - name: Build intent-solver EVM policy image
+        run: docker build -f packages/solver-app/Dockerfile -t intent-solver:evm-policy-ci "https://github.com/arkade-os/intent-solver.git#fe249505fe6d852ffb85db0249640e8b49c33f4e"
+        timeout-minutes: 10
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Restore and build
+        run: |
+          dotnet restore NArk.sln
+          dotnet build NArk.sln --no-restore -m:1
+          dotnet restore NArk.E2E.Tests/NArk.E2E.Tests.csproj
+          dotnet build NArk.E2E.Tests/NArk.E2E.Tests.csproj --no-restore
+        timeout-minutes: 12
+
+      - name: Configure test plugin
+        run: dotnet run --project ConfigBuilder/ConfigBuilder.csproj
+
+      - name: Install Playwright Chromium
+        run: |
+          SCRIPT=$(find NArk.E2E.Tests/bin -name "playwright.ps1" -print -quit)
+          if [ -z "$SCRIPT" ]; then
+            echo "playwright.ps1 not found in NArk.E2E.Tests/bin" >&2
+            exit 1
+          fi
+          pwsh "$SCRIPT" install --with-deps chromium
+        timeout-minutes: 5
+
+      - name: Run the three composed EVM tests
+        run: dotnet test NArk.E2E.Tests/NArk.E2E.Tests.csproj --no-build --verbosity normal --filter "Category=ComposedEvm" --logger "console;verbosity=detailed" --logger "trx;LogFileName=composed-evm.trx" --results-directory NArk.E2E.Tests/TestResults
+        timeout-minutes: 35
+
+      - name: Require all three composed EVM tests to execute and pass
+        if: always()
+        shell: pwsh
+        run: |
+          $trx = Get-ChildItem NArk.E2E.Tests/TestResults -Filter composed-evm.trx -Recurse | Select-Object -First 1
+          if ($null -eq $trx) {
+            throw "The composed EVM test run did not produce a TRX result."
+          }
+
+          [xml]$results = Get-Content -Raw $trx.FullName
+          $counters = $results.SelectSingleNode("//*[local-name()='Counters']")
+          $tests = @($results.SelectNodes("//*[local-name()='UnitTestResult']"))
+          if ($null -eq $counters) {
+            throw "The composed EVM TRX result has no summary counters."
+          }
+
+          $skipped = @($tests | Where-Object outcome -eq "NotExecuted").Count
+          $notPassed = @($tests | Where-Object outcome -ne "Passed").Count
+          $summary = "total=$($counters.total), executed=$($counters.executed), passed=$($counters.passed), failed=$($counters.failed), skipped=$skipped"
+          Write-Host "Composed EVM result: $summary"
+          if ($tests.Count -ne 3 -or [int]$counters.total -ne 3 -or [int]$counters.executed -ne 3 -or
+              [int]$counters.passed -ne 3 -or [int]$counters.failed -ne 0 -or $skipped -ne 0 -or $notPassed -ne 0) {
+            throw "Expected exactly three executed and passing composed EVM tests with zero skipped; got $summary."
+          }
+
+      - name: Upload composed EVM diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: composed-evm-e2e-diagnostics
+          path: |
+            /tmp/nark-composed-evm-*/startup.log
+            /tmp/nark-composed-evm-*/runtime.log
+            /tmp/nark-composed-evm-*/route.json
+            /tmp/nark-composed-evm-*/evm-send-solver-admin.log
+            /tmp/nark-composed-evm-*/ingress-solver-admin.log
+            /tmp/nark-composed-evm-*/lightning-payment.log
+          if-no-files-found: warn

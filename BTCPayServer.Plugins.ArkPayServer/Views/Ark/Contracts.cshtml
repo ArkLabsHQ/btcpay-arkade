@@ -10,7 +10,7 @@
 @using NArk.Abstractions.Contracts
 @using NArk.Core.Transport
 @using NArk.Hosting
-@using NArk.Swaps.Models
+@using BTCPayServer.Plugins.ArkPayServer.Data.Legacy
 @using static BTCPayServer.Plugins.ArkPayServer.Helpers.ArkViewHelpers
 @model BTCPayServer.Plugins.ArkPayServer.Models.StoreContractsViewModel
 @inject IScopeProvider ScopeProvider
@@ -205,7 +205,7 @@
                         var hasUnspentVtxos = hasVtxos && vtxos.Any(v => !v.IsSpent());
                         var hasRecoverableVtxos = hasVtxos && vtxos.Any(v => v.CanSpendOffchain(chainTime) || !v.IsSpent());
 
-                        ArkSwap[]? swaps = [];
+                        LegacySwap[]? swaps = [];
                         var hasSwaps = Model.ContractSwaps.TryGetValue(contract.Script, out swaps) && swaps.Any();
 
                         var sublistColspan = Model.Debug ? 11 : 9;

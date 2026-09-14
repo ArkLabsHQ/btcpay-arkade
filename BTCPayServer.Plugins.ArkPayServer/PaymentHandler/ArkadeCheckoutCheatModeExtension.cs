@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using BTCPayServer.Payments;
 using BTCPayServer.Services;
 using NBitcoin;
@@ -10,8 +9,6 @@ namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler
 {
     public class ArkadeCheckoutCheatModeExtension(Cheater cheater) : ICheckoutCheatModeExtension
     {
-        private static bool IsWindows => RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
-
         // The arkd container provides the in-container ark CLI used by cheat mode.
         // Nigiri's own `ark` subcommand hardcodes a container literally named "ark",
         // which no longer matches the v0.9-split topology (daemon container is "arkd",
@@ -29,19 +26,13 @@ namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler
         private async Task<string> BitcoinCli(string bitcoinCliArgs)
         {
             var dockerArgs = $"exec bitcoin bitcoin-cli -regtest -rpcuser=admin1 -rpcpassword=123 {bitcoinCliArgs}";
-            var (fileName, arguments) = IsWindows
-                ? ("wsl", $"docker {dockerArgs}")
-                : ("docker", dockerArgs);
-            return await RunProcess(fileName, arguments, $"docker {dockerArgs}");
+            return await RunProcess("docker", dockerArgs, $"docker {dockerArgs}");
         }
 
         private async Task<string> ExecuteArk(string arkSubcommand)
         {
             var dockerArgs = $"exec {ArkContainer} ark {arkSubcommand}";
-            var (fileName, arguments) = IsWindows
-                ? ("wsl", $"docker {dockerArgs}")
-                : ("docker", dockerArgs);
-            return await RunProcess(fileName, arguments, $"docker {dockerArgs}");
+            return await RunProcess("docker", dockerArgs, $"docker {dockerArgs}");
         }
 
         private static async Task<string> RunProcess(string fileName, string arguments, string display)

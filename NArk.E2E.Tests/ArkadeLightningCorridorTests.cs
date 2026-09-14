@@ -307,8 +307,9 @@ public class ArkadeLightningCorridorTests : PlaywrightBaseTest
 
         // Before anybody pays: the swap exists, knows its invoice, and holds the preimage.
         var recorded = Assert.Single(await ReadIntentsAsync(walletId!, ArkadeSwapIntentType.LightningToBtc));
-        Assert.Equal(bolt11, recorded.Invoice);
-        Assert.False(string.IsNullOrEmpty(recorded.Preimage), "the preimage must be stored before the invoice is payable");
+        var metadata = recorded.LightningMetadata();
+        Assert.Equal(bolt11, metadata.Invoice);
+        Assert.False(string.IsNullOrEmpty(metadata.Preimage), "the preimage must be stored before the invoice is payable");
         Assert.NotEqual(ArkadeSwapIntentStatus.Fulfilled, recorded.Status);
 
         await DockerHelper.Exec("lnd", ["lncli", "--network=regtest", "payinvoice", "--force", bolt11]);

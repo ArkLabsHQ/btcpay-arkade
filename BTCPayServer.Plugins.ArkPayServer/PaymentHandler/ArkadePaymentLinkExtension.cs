@@ -11,13 +11,16 @@ public class ArkadePaymentLinkExtension : IPaymentLinkExtension
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ArkadeLightningAvailabilityService _availability;
+    private readonly ArkCompositionCheckoutPolicy? _compositionPolicy;
 
     public ArkadePaymentLinkExtension(
         IServiceProvider serviceProvider,
-        ArkadeLightningAvailabilityService availability)
+        ArkadeLightningAvailabilityService availability,
+        ArkCompositionCheckoutPolicy? compositionPolicy = null)
     {
         _serviceProvider = serviceProvider;
         _availability = availability;
+        _compositionPolicy = compositionPolicy;
     }
     public PaymentMethodId PaymentMethodId { get; } = ArkadePlugin.ArkadePaymentMethodId;
 
@@ -29,6 +32,15 @@ public class ArkadePaymentLinkExtension : IPaymentLinkExtension
         var lnurl = prompt.ParentEntity.GetPaymentPrompt(PaymentTypes.LNURL.GetPaymentMethodId("BTC"));
 
         var amount = prompt.Calculate().Due;
+        var composed = _compositionPolicy?.RequiresComposition(prompt.ParentEntity) ??
+            prompt.Details?["compositionRouteId"] is not null;
+        if (composed)
+        {
+            if (_compositionPolicy?.CanInclude(onchain, true) != true || onchain!.Calculate().Due != amount)
+                onchain = null;
+            if (_compositionPolicy?.CanInclude(ln, true) != true) ln = null;
+            lnurl = null;
+        }
 
         // Build BIP21 URI using the helper
         var builder = ArkadeBip21Builder.Create()
@@ -52,10 +64,10 @@ public class ArkadePaymentLinkExtension : IPaymentLinkExtension
                 var upstream = onchainLink.GetPaymentLink(onchain, urlHelper);
                 var qIdx = upstream?.IndexOf('?') ?? -1;
                 if (qIdx >= 0)
-                    builder.WithExtraQuery(upstream![(qIdx + 1)..]);
+                    builder.WithExtraQuery(upstream![(qIdx + 1)..], composed);
             }
         }
-        else if (prompt.Details is not null)
+        else if (!composed && prompt.Details is not null)
         {
             var handler = _serviceProvider.GetRequiredService<ArkadePaymentMethodHandler>();
             var details = handler.ParsePaymentPromptDetails(prompt.Details);
@@ -66,7 +78,7 @@ public class ArkadePaymentLinkExtension : IPaymentLinkExtension
         }
         
         // Add lightning invoice if available and within Boltz limits (prefer LN over LNURL)
-        if (ShouldIncludeLightning(prompt).Result)
+        if (composed ? ln is not null : ShouldIncludeLightning(prompt).GetAwaiter().GetResult())
         {
             if (ln is not null)
             {

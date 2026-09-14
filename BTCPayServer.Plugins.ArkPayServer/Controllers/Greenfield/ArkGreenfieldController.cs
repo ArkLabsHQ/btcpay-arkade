@@ -31,9 +31,7 @@ using NArk.Core.Services;
 using NArk.Core.Transport;
 using NArk.Core.Wallet;
 using NArk.Hosting;
-using NArk.Swaps.Abstractions;
-using NArk.Swaps.Boltz;
-using NArk.Swaps.Models;
+using BTCPayServer.Plugins.ArkPayServer.Data.Legacy;
 using NBitcoin;
 using NBitcoin.Scripting;
 
@@ -59,13 +57,14 @@ public class ArkGreenfieldController(
     IBitcoinBlockchain bitcoinTimeChainProvider,
     VtxoSynchronizationService vtxoSyncService,
     IContractStorage contractStorage,
-    ISwapStorage swapStorage,
+    LegacySwapRepository swapStorage,
     IVtxoStorage vtxoStorage,
     IWalletStorage walletStorage,
     ArkLightningSpendKeyService spendKeyService,
     IWalletProvider walletProvider,
     IIntentStorage intentStorage,
     BoardingUtxoSyncService boardingUtxoSyncService,
+    ArkWalletRecoveryDispatcher walletRecovery,
     IHttpClientFactory httpClientFactory,
     ArkadeSolverService arkadeSolver) : ControllerBase
 {
@@ -84,7 +83,7 @@ public class ArkGreenfieldController(
         if (error != null) return error;
 
         var wallet = await walletStorage.GetWalletById(config!.WalletId!, cancellationToken);
-        var signerAvailable = await walletProvider.GetAddressProviderAsync(config.WalletId!, cancellationToken) != null;
+        var signerAvailable = await walletProvider.GetSignerAsync(config.WalletId!, cancellationToken) != null;
 
         string? defaultAddress = null;
         if (wallet?.WalletType == WalletType.SingleKey)
@@ -136,7 +135,7 @@ public class ArkGreenfieldController(
         try
         {
             var (walletInfo, walletId, isNew, mnemonic) = await ResolveWalletInput(
-                request.Wallet, request.Destination, cancellationToken);
+                request.Wallet, request.Destination, request.Mode, cancellationToken);
 
             if (walletInfo != null)
             {
@@ -177,6 +176,7 @@ public class ArkGreenfieldController(
             }
 
             await storeRepository.UpdateStore(store);
+            walletRecovery.Start(walletId!);
 
             return Ok(new ArkWalletSetupResponse
             {
@@ -998,8 +998,8 @@ public class ArkGreenfieldController(
 
         take = Math.Min(take, 500);
 
-        ArkSwapStatus[]? statusFilter = null;
-        if (!string.IsNullOrEmpty(status) && Enum.TryParse<ArkSwapStatus>(status, true, out var parsedStatus))
+        LegacySwapStatus[]? statusFilter = null;
+        if (!string.IsNullOrEmpty(status) && Enum.TryParse<LegacySwapStatus>(status, true, out var parsedStatus))
             statusFilter = [parsedStatus];
 
         var swaps = await swapStorage.GetSwaps(
@@ -1296,9 +1296,28 @@ public class ArkGreenfieldController(
     /// Returns: (walletInfo if new wallet needs creating, walletId, isNewlyGenerated, mnemonic if generated).
     /// </summary>
     private async Task<(ArkWalletInfo? WalletInfo, string? WalletId, bool IsNew, string? Mnemonic)> ResolveWalletInput(
-        string? wallet, string? destination, CancellationToken cancellationToken)
+        string? wallet, string? destination, WalletSetupMode mode, CancellationToken cancellationToken)
     {
         var serverInfo = await clientTransport.GetServerInfoAsync(cancellationToken);
+
+        if (!Enum.IsDefined(mode))
+            throw new InvalidOperationException("Unsupported wallet setup mode.");
+
+        // A public account descriptor is deliberately accepted only in explicit watch-only mode;
+        // auto-detecting descriptor-looking strings would turn a typo in secret-wallet input into
+        // a successfully configured but unspendable merchant wallet.
+        if (mode == WalletSetupMode.WatchOnly)
+        {
+            if (string.IsNullOrWhiteSpace(wallet))
+                throw new InvalidOperationException("Account descriptor is required for watch-only import.");
+            var descriptor = wallet.Trim();
+            var existing = await walletStorage.GetWalletById(descriptor, cancellationToken);
+            if (existing is not null)
+                return (null, descriptor, false, null);
+            var watchOnly = await WalletFactory.CreateWatchOnlyWallet(descriptor, destination, serverInfo,
+                metadata: null, cancellationToken);
+            return (watchOnly, watchOnly.Id, false, null);
+        }
 
         // Empty input → generate a new wallet
         if (string.IsNullOrWhiteSpace(wallet))
@@ -1362,7 +1381,7 @@ public class ArkGreenfieldController(
             return (null, wallet, false, null);
 
         throw new InvalidOperationException(
-            "Unsupported wallet input. Provide a BIP-39 mnemonic (12/24 words), nsec key, Ark address, or existing wallet ID.");
+            "Unsupported wallet input. Provide a BIP-39 mnemonic (12/24 words), nsec key, Ark address, existing wallet ID, or select WatchOnly for an account descriptor.");
     }
 
     private async Task<bool> ConfigureLightning(StoreData store, string walletId, bool generatedByStore,
@@ -1378,8 +1397,8 @@ public class ArkGreenfieldController(
         var lnConfig = new LightningPaymentMethodConfig
         {
             ConnectionString = generatedByStore
-                ? await spendKeyService.BuildConnectionStringAsync(walletId, cancellationToken)
-                : ArkLightningSpendKeyService.BuildReceiveOnlyConnectionString(walletId),
+                ? await spendKeyService.BuildConnectionStringAsync(walletId, cancellationToken, store.Id)
+                : ArkLightningSpendKeyService.BuildReceiveOnlyConnectionString(walletId, store.Id),
         };
 
         store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[lightningPaymentMethodId], lnConfig);

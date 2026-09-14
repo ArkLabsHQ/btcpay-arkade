@@ -1,8 +1,7 @@
 # NArk Repo Guide
 A BTCPayServer plugin that lets merchants accept Bitcoin through Arkade — a
 self-custodial, offchain protocol built directly on Bitcoin. The plugin and its
-test project target **.NET 10**; the NNark SDK libraries (in the submodule)
-target **.NET 8**.
+test project and NNark SDK libraries (in the submodule) target **.NET 10**.
 
 ## Structure
 - `BTCPayServer.Plugins.ArkPayServer`: the plugin. Payment handlers, store UI
@@ -10,11 +9,15 @@ target **.NET 8**.
   NNark SDK and BTCPayServer's payment pipeline.
 - `submodules/NNark`: the Arkade .NET SDK (GitHub `arkade-os/dotnet-sdk`).
   Key projects: `NArk.Core` (contracts/scripts, gRPC + REST transport),
-  `NArk.Abstractions` (interfaces/base types), `NArk.Swaps` (Boltz swap
-  providers + management), `NArk.Storage.EfCore` (EF persistence).
+  `NArk.Abstractions` (interfaces/base types), `NArk.ArkadeIntents` (solver
+  swaps), `NArk.Storage.EfCore` (core EF persistence), and
+  `NArk.Storage.EfCore.ArkadeIntents` (opt-in swap persistence).
 - `submodules/btcpayserver`: BTCPayServer source, pulled as a submodule.
 - `NArk.E2E.Tests`: Playwright + BTCPayServer `ServerTester` end-to-end suite.
   Not part of `NArk.sln` (runs in the `e2e` CI workflow, not the `build` one).
+- `NArk.PluginHost.Tests`: loads the Release `.btcpay` from
+  `ARKADE_PLUGIN_PACKAGE` against BTCPay 2.4.2's dependencies. It references
+  only BTCPayServer and runs after packaging in the `.NET` CI workflow.
 - `NArk.sln`: the solution — the plugin plus the BTCPayServer and NNark
   library projects it references.
 
@@ -64,8 +67,9 @@ The plugin supports these key flows:
   claiming one the solver funded. Configured under `solver-relay`,
   `solver-pubkey` and `emulator` in `ark.json`; `covclaimd` is optional and adds
   a daemon that can finish a claim while this server is down.
-  Boltz swaps predate this and are no longer created — the old table and its
-  pages remain read-only so existing swaps stay visible and refundable.
+  Boltz swaps predate this and are no longer created. The plugin's read-only
+  legacy repository retains the old table and pages; the SDK core VHTLC
+  transformer and sweep policy retain timed refund support.
 - **Boarding Address Flow**: users enter the Ark system by funding a Taproot
   "boarding address," which is converted into a VTXO with help from the Arkade
   Operator. If the Operator is unresponsive, users can reclaim funds

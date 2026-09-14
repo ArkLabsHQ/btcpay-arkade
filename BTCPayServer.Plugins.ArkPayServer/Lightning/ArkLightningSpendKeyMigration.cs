@@ -10,14 +10,8 @@ using Microsoft.Extensions.Logging;
 namespace BTCPayServer.Plugins.ArkPayServer.Lightning;
 
 /// <summary>
-/// Backfills the spend capability into Arkade Lightning connection strings written before
-/// capabilities existed, so stores configured earlier keep working.
-///
-/// A store is backfilled only when it owns the wallet it is configured against. Stores
-/// configured against a wallet they do not own are left receive-only.
-///
-/// Runs in the background rather than in <c>StartAsync</c> so a slow or failing pass never
-/// blocks host startup.
+/// Backfills store identity for matching wallets and missing spend capabilities for owning stores.
+/// Existing capabilities and explicit store bindings are preserved.
 /// </summary>
 public class ArkLightningSpendKeyMigration(
     StoreRepository storeRepository,
@@ -43,22 +37,18 @@ public class ArkLightningSpendKeyMigration(
                 var connectionString = lnConfig?.ConnectionString;
                 if (connectionString?.StartsWith("type=arkade", StringComparison.InvariantCultureIgnoreCase) is not true)
                     continue;
-                if (connectionString.Contains("spend-key=", StringComparison.InvariantCultureIgnoreCase))
-                    continue;
-
                 var arkConfig = store.GetPaymentMethodConfig<ArkadePaymentMethodConfig>(
                     ArkadePlugin.ArkadePaymentMethodId, paymentMethodHandlerDictionary);
                 if (arkConfig?.WalletId is null)
                     continue;
 
-                if (!arkConfig.GeneratedByStore)
-                {
-                    leftReceiveOnly++;
+                var updated = await spendKeyService.BackfillConnectionStringAsync(
+                    connectionString, arkConfig.WalletId, store.Id, arkConfig.GeneratedByStore, stoppingToken);
+                if (updated is null || updated == connectionString)
                     continue;
-                }
-
-                lnConfig!.ConnectionString = await spendKeyService.BuildConnectionStringAsync(
-                    arkConfig.WalletId, stoppingToken);
+                if (!arkConfig.GeneratedByStore && !updated.Contains("spend-key=", StringComparison.OrdinalIgnoreCase))
+                    leftReceiveOnly++;
+                lnConfig!.ConnectionString = updated;
                 store.SetPaymentMethodConfig(
                     paymentMethodHandlerDictionary[lightningPaymentMethodId], lnConfig);
                 await storeRepository.UpdateStore(store);
@@ -67,16 +57,16 @@ public class ArkLightningSpendKeyMigration(
 
             if (backfilled > 0 || leftReceiveOnly > 0)
                 logger.LogInformation(
-                    "Arkade Lightning spend capability backfill complete: {Backfilled} store(s) " +
+                    "Arkade Lightning connection backfill complete: {Backfilled} store(s) " +
                     "updated, {ReceiveOnly} left receive-only.", backfilled, leftReceiveOnly);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
             // Host shutting down.
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            logger.LogError(ex, "Arkade Lightning spend capability backfill failed.");
+            logger.LogError("Arkade Lightning connection backfill failed.");
         }
     }
 }

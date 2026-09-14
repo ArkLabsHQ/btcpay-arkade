@@ -1,6 +1,7 @@
 using BTCPayServer.Data;
 using BTCPayServer.Payments;
 using BTCPayServer.Services;
+using BTCPayServer.Plugins.ArkPayServer.Services;
 using NArk.Core;
 using NArk.Abstractions.Wallets;
 using NArk.Core.Contracts;
@@ -17,13 +18,28 @@ public class ArkadePaymentMethodHandler(
     IContractService contractService,
     IClientTransport clientTransport,
     BoardingUtxoSyncService boardingUtxoSyncService,
-    IWalletStorage walletStorage
+    IWalletStorage walletStorage,
+    ArkCompositionPromptService? compositionPrompts = null
 ) : IPaymentMethodHandler
 {
     public PaymentMethodId PaymentMethodId => ArkadePlugin.ArkadePaymentMethodId;
 
     public async Task ConfigurePrompt(PaymentMethodContext context)
     {
+        if (ArkCompositionPromptService.Enabled(context.Store, "ARKADE"))
+        {
+            if (compositionPrompts is null) throw new PaymentMethodUnavailableException("The composed-swap SDK adapter is not configured.");
+            var route = (await compositionPrompts.TryCreateAsync(context.Store, context.InvoiceEntity, "ARKADE",
+                Money.Coins(context.Prompt.Calculate().Due).Satoshi, context.InvoiceEntity.ExpirationTime))!;
+            context.Prompt.Destination = route.CustomerDestination!;
+            context.Prompt.PaymentMethodFee = 0m;
+            context.Prompt.Details = JObject.FromObject(new ArkadePromptDetails
+            {
+                WalletId = route.WalletId, CompositionRouteId = route.RouteId, PaymentHash = route.PaymentHash,
+                CheckoutExpiresAt = route.CheckoutExpiresAt
+            }, Serializer);
+            return;
+        }
         ArkServerInfo serverInfo;
         try
         {
@@ -129,8 +145,9 @@ public class ArkadePaymentMethodHandler(
 
     public object ParsePaymentMethodConfig(JToken config)
     {
-        return config.ToObject<ArkadePaymentMethodConfig>(Serializer) ??
-               throw new FormatException($"Invalid {nameof(ArkadePaymentMethodHandler)}");
+        var parsed = config.ToObject<ArkadePaymentMethodConfig>(Serializer) ??
+                     throw new FormatException($"Invalid {nameof(ArkadePaymentMethodHandler)}");
+        return parsed with { EvmSettlement = parsed.EvmSettlement?.Validate() };
     }
 
     public ArkadePaymentData ParsePaymentDetails(JToken details)

@@ -1,5 +1,7 @@
 using System.Text.Json;
+using System.Reflection;
 using BTCPayServer.Tests;
+using Microsoft.Extensions.Hosting;
 using Xunit;
 
 namespace NArk.E2E.Tests;
@@ -66,6 +68,44 @@ public class SharedPluginTestFixture : IDisposable
         }
     }
 
+    public async Task RestartAsync(Func<CancellationToken, Task> whileStopped,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(whileStopped);
+        var payTester = ServerTester?.PayTester
+            ?? throw new InvalidOperationException("BTCPay has not started.");
+        var hostField = typeof(BTCPayServerTester).GetField("_Host",
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("BTCPay's test host field is unavailable.");
+        var host = hostField.GetValue(payTester) as IHost
+            ?? throw new InvalidOperationException("BTCPay's test host is not running.");
+
+        await host.StopAsync(cancellationToken);
+        host.Dispose();
+        hostField.SetValue(payTester, null);
+
+        Exception? stoppedFailure = null;
+        try
+        {
+            await whileStopped(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            stoppedFailure = ex;
+        }
+
+        try
+        {
+            await payTester.StartAsync().WaitAsync(TimeSpan.FromMinutes(3), cancellationToken);
+        }
+        catch (Exception restartFailure) when (stoppedFailure is not null)
+        {
+            throw new AggregateException(stoppedFailure, restartFailure);
+        }
+
+        if (stoppedFailure is not null) throw stoppedFailure;
+    }
+
     /// <summary>
     /// Points the plugin at a locally-run Arkade swap solver, when one was asked for.
     /// </summary>
@@ -95,6 +135,12 @@ public class SharedPluginTestFixture : IDisposable
         // also needs the solver's key to address it on. Both are passed through as given.
         var config = new Dictionary<string, string?>
         {
+            ["ark"] = Environment.GetEnvironmentVariable("ARKADE_E2E_ARK_URL"),
+            ["arkade-wallet"] = Environment.GetEnvironmentVariable("ARKADE_E2E_ARKADE_WALLET_URL"),
+            ["explorer"] = Environment.GetEnvironmentVariable("ARKADE_E2E_EXPLORER_URL"),
+            ["esplora"] = Environment.GetEnvironmentVariable("ARKADE_E2E_ESPLORA_URL"),
+            ["electrum-ws"] = Environment.GetEnvironmentVariable("ARKADE_E2E_ELECTRUM_WS_URL"),
+            ["electrum-tcp"] = Environment.GetEnvironmentVariable("ARKADE_E2E_ELECTRUM_TCP_URL"),
             ["solver-relay"] = solverUrl,
             ["solver-pubkey"] = Environment.GetEnvironmentVariable("ARKADE_E2E_SOLVER_PUBKEY"),
             ["covclaimd"] = Environment.GetEnvironmentVariable("ARKADE_E2E_COVCLAIMD_URL")

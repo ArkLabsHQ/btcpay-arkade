@@ -29,8 +29,6 @@ using Microsoft.Extensions.Logging;
 using NArk.Abstractions;
 using NArk.Abstractions.Fees;
 using NArk.Abstractions.Intents;
-using NArk.Swaps.Boltz;
-using NArk.Swaps.Boltz.Client;
 using NArk.Core.Contracts;
 using NArk.Hosting;
 using NArk.Core.Services;
@@ -39,9 +37,8 @@ using NArk.Abstractions.Blockchain;
 using NArk.Abstractions.Contracts;
 using NArk.Abstractions.Extensions;
 using NArk.Abstractions.VTXOs;
-using NArk.Swaps.Abstractions;
 using NArk.Abstractions.Wallets;
-using NArk.Swaps.Models;
+using BTCPayServer.Plugins.ArkPayServer.Data.Legacy;
 using NArk.Storage.EfCore.Entities;
 using NArk.Core.Wallet;
 using LNURL;
@@ -165,11 +162,11 @@ public partial class ArkController
         }
 
         // Get recent swaps (latest 5)
-        IReadOnlyCollection<NArk.Swaps.Models.ArkSwap> recentSwaps = [];
+        IReadOnlyCollection<LegacySwap> recentSwaps = [];
         try
         {
             recentSwaps = await swapStorage.GetSwaps(
-                walletIds: [config.WalletId!], take: 5, status: [ArkSwapStatus.Pending , ArkSwapStatus.Settled], cancellationToken: cancellationToken);
+                walletIds: [config.WalletId!], take: 5, status: [LegacySwapStatus.Pending , LegacySwapStatus.Settled], cancellationToken: cancellationToken);
         }
         catch (Exception)
         {
@@ -371,8 +368,8 @@ public partial class ArkController
         store!.SetPaymentMethodConfig(paymentMethodHandlerDictionary[lightningPaymentMethodId], new LightningPaymentMethodConfig
         {
             ConnectionString = config!.GeneratedByStore
-                ? await spendKeyService.BuildConnectionStringAsync(config.WalletId)
-                : ArkLightningSpendKeyService.BuildReceiveOnlyConnectionString(config.WalletId),
+                ? await spendKeyService.BuildConnectionStringAsync(config.WalletId, storeId: store!.Id)
+                : ArkLightningSpendKeyService.BuildReceiveOnlyConnectionString(config.WalletId, store!.Id),
         });
         store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[lnurlPaymentMethodId], new LNURLPaymentMethodConfig
         {
@@ -589,9 +586,10 @@ public partial class ArkController
     private async Task<List<ArkWalletEntity>> GetWalletsWithDetailsAsync(CancellationToken cancellationToken = default)
     {
         await using var ctx = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        ViewData["LegacySwapCounts"] = await ctx.Swaps.GroupBy(s => s.WalletId)
+            .ToDictionaryAsync(g => g.Key, g => g.Count(), cancellationToken);
         return await ctx.Wallets
             .Include(w => w.Contracts)
-            .Include(w => w.Swaps)
             .ToListAsync(cancellationToken);
     }
 
@@ -603,7 +601,6 @@ public partial class ArkController
         await using var ctx = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         return await ctx.Wallets
             .Include(w => w.Contracts)
-            .Include(w => w.Swaps)
             .FirstOrDefaultAsync(w => w.Id == walletId, cancellationToken);
     }
 
@@ -615,7 +612,7 @@ public partial class ArkController
         await using var ctx = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         return await ctx.Swaps
             .AnyAsync(s => s.WalletId == walletId &&
-                          s.Status == ArkSwapStatus.Pending,
+                          s.Status == LegacySwapStatus.Pending,
                      cancellationToken);
     }
 

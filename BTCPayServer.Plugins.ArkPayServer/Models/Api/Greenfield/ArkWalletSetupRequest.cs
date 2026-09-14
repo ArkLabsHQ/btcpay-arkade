@@ -1,3 +1,6 @@
+using Newtonsoft.Json;
+using Newtonsoft.Json.Converters;
+
 namespace BTCPayServer.Plugins.ArkPayServer.Models.Api.Greenfield;
 
 /// <summary>
@@ -6,12 +9,20 @@ namespace BTCPayServer.Plugins.ArkPayServer.Models.Api.Greenfield;
 public class ArkWalletSetupRequest
 {
     /// <summary>
+    /// How <see cref="Wallet"/> is interpreted. Use <c>WatchOnly</c> when Wallet is a public
+    /// Taproot account descriptor. The default preserves the existing content-detected behavior.
+    /// </summary>
+    [JsonConverter(typeof(StringEnumConverter))]
+    public WalletSetupMode Mode { get; set; } = WalletSetupMode.Auto;
+
+    /// <summary>
     /// Wallet secret or identifier. Supports:
     /// - null/empty: generates a new 12-word BIP-39 mnemonic
     /// - nsec private key: imports as single-key wallet
     /// - 12 or 24 word BIP-39 mnemonic: imports as HD wallet
     /// - Ark address: generates a new wallet and sets it as the destination
     /// - Existing wallet ID: links the wallet to this store (no new wallet created)
+    /// - account descriptor: imports without signing material when Mode is WatchOnly
     /// </summary>
     public string? Wallet { get; set; }
 

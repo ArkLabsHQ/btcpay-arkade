@@ -9,7 +9,7 @@ using NArk.Abstractions.Contracts;
 using NArk.Abstractions.VTXOs;
 using NArk.ArkadeIntents;
 using NArk.ArkadeIntents.Models;
-using NArk.Swaps.Models;
+using BTCPayServer.Plugins.ArkPayServer.Data.Legacy;
 using NBitcoin;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Controllers;
@@ -61,7 +61,7 @@ public partial class ArkController
         }
 
         // Always load swaps
-        var contractSwaps = new Dictionary<string, NArk.Swaps.Models.ArkSwap[]>();
+        var contractSwaps = new Dictionary<string, LegacySwap[]>();
         if (contracts.Any())
         {
             var contractScripts = contracts.Select(c => c.Script).ToArray();
@@ -176,19 +176,19 @@ public partial class ArkController
             return RedirectToAction(nameof(LightningSwaps), new { storeId });
 
         // Get status filter using helper
-        var statusFilter = ParseEnumFilter<ArkSwapStatus>(searchTerm, "status", s => s switch
+        var statusFilter = ParseEnumFilter<LegacySwapStatus>(searchTerm, "status", s => s switch
         {
-            "pending" => ArkSwapStatus.Pending,
-            "settled" => ArkSwapStatus.Settled,
-            "failed" => ArkSwapStatus.Failed,
+            "pending" => LegacySwapStatus.Pending,
+            "settled" => LegacySwapStatus.Settled,
+            "failed" => LegacySwapStatus.Failed,
             _ => null
         });
 
         // Get type filter using helper
-        var typeFilter = ParseEnumFilter<ArkSwapType>(searchTerm, "type", t => t switch
+        var typeFilter = ParseEnumFilter<LegacySwapType>(searchTerm, "type", t => t switch
         {
-            "reverse" => ArkSwapType.ReverseSubmarine,
-            "submarine" => ArkSwapType.Submarine,
+            "reverse" => LegacySwapType.ReverseSubmarine,
+            "submarine" => LegacySwapType.Submarine,
             _ => null
         });
 
@@ -513,7 +513,7 @@ public partial class ArkController
                 return RedirectWithError(nameof(Contracts), "Contract not found.", new { storeId });
 
             // Check if contract has any pending swaps
-            var swaps = await swapStorage.GetSwaps(walletIds: [config.WalletId!], contractScripts: [script], status: [ArkSwapStatus.Pending], cancellationToken: cancellationToken);
+            var swaps = await swapStorage.GetSwaps(walletIds: [config.WalletId!], contractScripts: [script], status: [LegacySwapStatus.Pending], cancellationToken: cancellationToken);
             if (swaps.Any())
                 return RedirectWithError(nameof(Contracts), "Cannot delete contract: It has pending swaps.", new { storeId });
 

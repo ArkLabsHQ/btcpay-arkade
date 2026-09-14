@@ -11,3 +11,5 @@ nul
 .claude/*
 !.claude/skills/
 btcpay-run*.log
+.plugin-host-root/
+**/TestResults/

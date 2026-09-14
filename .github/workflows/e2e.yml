@@ -44,13 +44,19 @@ jobs:
           node-version: '20'
 
       - name: Start Ark regtest stack (denigiri)
-        # Provides bitcoin (18443), nbxplorer (32838), arkd (7070), boltz,
-        # lnd, fulmine via the NNark regtest submodule's denigiri Node
-        # orchestrator (replaces the old nigiri binary + shell scripts).
+        # Provides bitcoin (18443), nbxplorer (32838), and arkd (7070) via the
+        # NNark regtest submodule's denigiri Node orchestrator.
         # BTCPay's test ServerTester is pointed at the bitcoin/nbxplorer
         # endpoints via TESTS_BTCRPCCONNECTION and TESTS_BTCNBXPLORERURL
         # below; the GHA postgres service container supplies BTCPay's DB.
-        run: node submodules/NNark/regtest/regtest.mjs start --profile boltz,delegate
+        env:
+          # Keep the CLI float spendable and all delay values time-based.
+          ARKD_VTXO_TREE_EXPIRY: "21600"
+          ARKD_UNILATERAL_EXIT_DELAY: "512"
+          ARKD_PUBLIC_UNILATERAL_EXIT_DELAY: "512"
+          ARKD_BOARDING_EXIT_DELAY: "2048"
+          ARKD_CHECKPOINT_EXIT_DELAY: "1536"
+        run: node submodules/NNark/regtest/regtest.mjs start --profile ark
         timeout-minutes: 20
 
       - name: Resolve arkd container name
@@ -128,7 +134,7 @@ jobs:
         if: failure()
         run: |
           mkdir -p /tmp/e2e-logs
-          for c in bitcoin nbxplorer arkd arkd-wallet lnd boltz boltz-lnd boltz-fulmine; do
+          for c in bitcoin nbxplorer arkd arkd-wallet arkade-wallet arkade-explorer; do
             docker logs "$c" > /tmp/e2e-logs/${c}.log 2>&1 || true
           done
 

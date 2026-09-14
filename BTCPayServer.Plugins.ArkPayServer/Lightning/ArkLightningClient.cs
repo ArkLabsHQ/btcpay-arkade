@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using BTCPayServer.Lightning;
 using BTCPayServer.Payments.Lightning;
+using BTCPayServer.Plugins.ArkPayServer.Services;
 using Microsoft.Extensions.Logging;
 using NArk.Abstractions.Blockchain;
 using NArk.Abstractions.VTXOs;
@@ -44,7 +45,9 @@ public class ArkLightningClient(
     ArkLightningSpendKeyService spendKeyService,
     ArkadeIntentsService? intents = null,
     ArkadeSolverService? solver = null,
-    IArkadeIntentStorage? intentStorage = null) : IExtendedLightningClient
+    IArkadeIntentStorage? intentStorage = null,
+    ArkLightningStoreContext? storeContext = null,
+    ArkCompositionPromptService? compositionPrompts = null) : IExtendedLightningClient
 {
     /// <summary>
     /// Wallet-level metadata key holding the Lightning spend capability.
@@ -105,8 +108,11 @@ public class ArkLightningClient(
 
     public async Task<LightningInvoice?> GetInvoice(string invoiceId, CancellationToken cancellation = default)
     {
+        if (compositionPrompts is not null && await compositionPrompts.FindLightningAsync(storeContext?.StoreId, walletId, invoiceId, cancellation) is { } composed)
+            return composed;
         var intent = await GetIntentAsync(invoiceId, cancellation);
         return intent is { Type: ArkadeSwapIntentType.LightningToBtc } && intent.WalletId == walletId
+            && !await IsCompositionIntent(intent, cancellation)
             ? ArkadeIntentLightningMapper.ToInvoice(intent, network)
             : null;
     }
@@ -118,11 +124,13 @@ public class ArkLightningClient(
         // small and this is off the checkout path, so the scan is worth less than widening the SDK's
         // interface for one caller.
         var hash = paymentHash.ToString();
+        if (compositionPrompts is not null && await compositionPrompts.FindLightningAsync(storeContext?.StoreId, walletId, hash, cancellation) is { } composed)
+            return composed;
         var intents = await GetIntentsAsync(ArkadeSwapIntentType.LightningToBtc, cancellation);
         var match = intents.FirstOrDefault(i =>
             string.Equals(i.PaymentHash, hash, StringComparison.OrdinalIgnoreCase));
 
-        return match is null ? null : ArkadeIntentLightningMapper.ToInvoice(match, network);
+        return match is null || await IsCompositionIntent(match, cancellation) ? null : ArkadeIntentLightningMapper.ToInvoice(match, network);
     }
 
     public Task<LightningInvoice[]> ListInvoices(CancellationToken cancellation = default) =>
@@ -132,13 +140,17 @@ public class ArkLightningClient(
         ListInvoicesParams request, CancellationToken cancellation = default)
     {
         var intents = await GetIntentsAsync(ArkadeSwapIntentType.LightningToBtc, cancellation);
+        var visible = new List<ArkadeSwapIntent>();
+        foreach (var intent in intents)
+            if (!await IsCompositionIntent(intent, cancellation)) visible.Add(intent);
+        var composed = compositionPrompts is null ? [] : await compositionPrompts.ListLightningAsync(storeContext?.StoreId, walletId, cancellation);
 
         return
         [
-            .. intents
-                .Skip((int)request.OffsetIndex.GetValueOrDefault(0))
+            .. composed.Concat(visible
                 .Select(i => ArkadeIntentLightningMapper.ToInvoice(i, network))
-                .OfType<LightningInvoice>()
+                .OfType<LightningInvoice>())
+                .Skip((int)request.OffsetIndex.GetValueOrDefault(0))
                 .Where(i => request.PendingOnly != true || i.Status == LightningInvoiceStatus.Unpaid)
         ];
     }
@@ -173,8 +185,17 @@ public class ArkLightningClient(
     public async Task<LightningInvoice> CreateInvoice(
         CreateInvoiceParams createInvoiceRequest, CancellationToken cancellation = default)
     {
-        await EnsureSpendAuthorized(cancellation);
+        var milliSatoshis = createInvoiceRequest.Amount.MilliSatoshi;
+        if (milliSatoshis % 1000 != 0)
+            throw new InvalidOperationException("Arkade Lightning receive amounts must be whole satoshis.");
+        var amountSats = checked(milliSatoshis / 1000);
 
+        if (storeContext?.StoreId is { } storeId && compositionPrompts is not null &&
+            await compositionPrompts.TryCreateLightningAsync(storeId, walletId,
+                amountSats, createInvoiceRequest.Expiry, cancellation) is { } composed)
+            return compositionPrompts.ToLightningInvoice(composed);
+
+        await EnsureSpendAuthorized(cancellation);
         var (intents, solver, _) = Corridors;
 
         var terms = await clientTransport.GetServerInfoAsync(cancellation);
@@ -183,7 +204,6 @@ public class ArkLightningClient(
             throw new InvalidOperationException("Sub-dust amounts are not supported");
         }
 
-        var amountSats = (long)createInvoiceRequest.Amount.ToUnit(LightMoneyUnit.Satoshi);
         var claimRecipient = await solver.ResolveClaimRecipientAsync(cancellation);
 
         var pending = await solver.WithTransportAsync(amountSats, transport =>
@@ -204,8 +224,11 @@ public class ArkLightningClient(
     {
         var (_, _, storage) = Corridors;
         return Task.FromResult<ILightningInvoiceListener>(
-            new ArkLightningInvoiceListener(walletId, logger, storage, network, cancellation));
+            new ArkLightningInvoiceListener(walletId, logger, storage, network, cancellation, compositionPrompts));
     }
+
+    private Task<bool> IsCompositionIntent(ArkadeSwapIntent intent, CancellationToken cancellation) => compositionPrompts is null
+        ? Task.FromResult(false) : compositionPrompts.IsCompositionIntentAsync(walletId, intent.Id, intent.PaymentHash, cancellation);
 
     // ─── Paying ───────────────────────────────────────────────────────
 
@@ -347,5 +370,5 @@ public class ArkLightningClient(
     public string DisplayName => "Arkade Lightning";
     public Uri? ServerUri => null;
 
-    public override string ToString() => $"type=arkade;wallet-id={walletId}";
+    public override string ToString() => ArkLightningSpendKeyService.BuildReceiveOnlyConnectionString(walletId, storeContext?.StoreId);
 }

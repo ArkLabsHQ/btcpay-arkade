@@ -21,11 +21,14 @@ Payments are settled through **Virtual UTXOs (VTXOs)**, Arkade's off-chain Bitco
 ### 1. Arkade Native
 Direct VTXO-to-VTXO off-chain payments within the Arkade network. Instant settlement, zero routing fees. Payers need an Arkade-compatible wallet.
 
-### 2. Lightning via Boltz
-Payers with Lightning wallets pay a BOLT11 invoice. The plugin uses Boltz's trustless submarine swap to convert the Lightning payment into a VTXO in your Arkade wallet. No Lightning node needed on the merchant side.
+### 2. Lightning via Arkade solver
+Payers receive an ordinary BOLT11 invoice quoted by an Arkade swap solver. The solver funds a covenant that the plugin claims non-interactively, so the merchant does not need a Lightning node.
 
 ### 3. Boarding Address
 Payers send on-chain Bitcoin to a Taproot "boarding address." The Arkade operator batches this into the next batch, converting the on-chain UTXO into a VTXO. If the operator is unresponsive, the payer can reclaim funds unilaterally after a timelock.
+
+### 4. Client-composed EVM settlement
+An opt-in store can turn Arkade, Lightning, or onchain BTC receipts into an exact ERC20 delivery. The plugin composes two ordinary solver quotes around one payment hash; no solver owns the combined route. Only the verified EVM claim settles the BTCPay invoice. See [Client-composed EVM settlement](docs/composition-prompts.md).
 
 The checkout page presents all applicable methods in a single BIP-21 QR code, letting any wallet pay automatically.
 
@@ -43,7 +46,8 @@ BTCPay Server
     └── NNark (submodule)          # .NET Arkade SDK
         ├── NArk.Core              # Wallet, VTXO logic, HD/SingleKey signers
         ├── NArk.Storage.EfCore    # PostgreSQL persistence (EF Core)
-        └── NArk.Swaps             # Boltz submarine/reverse swap client
+        ├── NArk.ArkadeIntents     # Solver RFQs, covenant and EVM swap execution
+        └── Composition index    # Invoice to SDK-swap routing over intent storage
 ```
 
 The plugin persists all state (VTXOs, contracts, swaps, intents, wallets) in BTCPay's existing PostgreSQL database via EF Core migrations.
@@ -105,7 +109,8 @@ The setup script will:
 
 1. Go to **Store Settings → Payment Methods**
 2. Enable **Arkade** as a payment method
-3. Optionally enable **Lightning (via Boltz)** if you have a Boltz instance configured
+3. Optionally enable **Lightning via Arkade** and configure a solver/emulator endpoint
+4. Optionally configure **EVM settlement** and its enabled source rails through Greenfield
 
 ### 3. Store Settings
 
@@ -146,6 +151,9 @@ The setup script will:
   a paired device the wallet is still useful for monitoring; signing
   calls fail with a descriptive `"install the App companion plugin"`
   error scoped to the operation, not to startup.
+- Client-composed receive-to-EVM routes do not require that signer: emulator
+  non-interactive covenant paths claim and refund the quoted lockups while the
+  server verifies and submits the EVM leg.
 - Setup: in the initial-setup wizard, pick **Pair a watch-only wallet**
   under *I have a wallet* and paste the descriptor. Example:
   ```
@@ -180,10 +188,16 @@ The setup script will:
 - Unified Send wizard: QR scanning, BIP-21 parsing, multi-output, manual coin selection
 
 ### Swaps (Lightning ↔ Arkade)
-- Boltz submarine swaps for incoming Lightning payments
-- Boltz reverse swaps for outgoing Lightning payments
+- Per-payment RFQs against Arkade swap solvers
+- Incoming and outgoing Lightning corridors
 - Real-time swap lifecycle monitoring
 - LNURL-pay destination support
+
+### Composed EVM settlement
+- Independent Arkade, Lightning, and onchain receive prompts
+- Watch-only merchant wallets using emulator non-interactive claims and refunds
+- Exact ERC20 receipt verification before BTCPay settlement
+- Protected RPC/gas-payer configuration and crash-safe route recovery
 
 ### Payouts
 - Process Arkade payouts through BTCPay's native payout system
@@ -204,9 +218,9 @@ The setup script will:
 
 ### Running Tests
 
-After running `setup.sh`, start the local regtest environment (Bitcoin + arkd + Boltz/Fulmine) — a cross-platform Node CLI, no WSL required:
+After running `setup.sh`, start the local regtest environment (Bitcoin, arkd, emulator, covclaimd, solver, and optional EVM services) — a cross-platform Node CLI, no WSL required:
 ```bash
-node submodules/NNark/regtest/regtest.mjs start --profile boltz,delegate
+node submodules/NNark/regtest/regtest.mjs start --profile covclaimd,intent-solver,evm-e2e
 ```
 
 On Windows (wraps the same CLI; extra arguments pass through, e.g. `start-test-env stop`):
@@ -310,8 +324,14 @@ The plugin exposes a store-scoped REST API under `/api/v1/stores/{storeId}/arkad
 - `GET /api/v1/stores/{storeId}/arkade/swaps` — list Lightning / chain swaps.
 - `GET /api/v1/stores/{storeId}/arkade/server-info` — Ark operator info.
 - `GET /api/v1/stores/{storeId}/arkade/status` — overall service status.
-- `GET /api/v1/stores/{storeId}/arkade/boltz-limits` — Boltz swap limits and fees.
+- `GET /api/v1/stores/{storeId}/arkade/lightning-solver` — configured solver readiness.
 - `POST /api/v1/stores/{storeId}/arkade/sync` — force a VTXO + boarding sync.
+- `GET|PUT /api/v1/stores/{storeId}/arkade/evm-settlement` — protected EVM route policy and credentials.
+- `GET /api/v1/stores/{storeId}/arkade/evm-settlement/capabilities` — nonsecret readiness and blockers.
+- `GET /api/v1/stores/{storeId}/arkade/evm-settlement/routes` — composed routes projected from SDK intent storage.
+
+For a public descriptor import, post `{"mode":"WatchOnly","wallet":"tr(...)"}`
+to the wallet endpoint. This stores no private key and starts SDK restoration/scanning.
 
 ### Send example
 
@@ -353,7 +373,6 @@ Pull requests are welcome. For significant changes, open an issue first to discu
 - [Arkade](https://arkadeos.com) — the Ark protocol implementation
 - [Ark Labs](https://arklabs.to) — the team building Arkade
 - [BTCPay Server](https://btcpayserver.org) — the self-hosted payment processor
-- [Boltz Exchange](https://boltz.exchange) — trustless Lightning ↔ on-chain swaps
 
 ---
 

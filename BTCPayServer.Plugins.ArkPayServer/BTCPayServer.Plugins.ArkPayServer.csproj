@@ -21,7 +21,6 @@
     </PropertyGroup>
     <ItemDefinitionGroup>
         <ProjectReference>
-            <Properties>StaticWebAssetsEnabled=false</Properties>
             <Private>false</Private>
             <Private Condition="'$(Configuration)' == 'Debug'">true</Private>
             <ExcludeAssets>runtime;native;build;buildTransitive;contentFiles</ExcludeAssets>
@@ -41,9 +40,6 @@
         <ProjectReference Include="..\submodules\NNark\NArk.Core\NArk.Core.csproj">
             <Private>true</Private>
         </ProjectReference>
-        <ProjectReference Include="..\submodules\NNark\NArk.Swaps\NArk.Swaps.csproj">
-            <Private>true</Private>
-        </ProjectReference>
         <ProjectReference Include="..\submodules\NNark\NArk.Arkade\NArk.Arkade.csproj">
             <Private>true</Private>
         </ProjectReference>
@@ -53,19 +49,24 @@
         <ProjectReference Include="..\submodules\NNark\NArk.Storage.EfCore\NArk.Storage.EfCore.csproj">
             <Private>true</Private>
         </ProjectReference>
+        <ProjectReference Include="..\submodules\NNark\NArk.Storage.EfCore.ArkadeIntents\NArk.Storage.EfCore.ArkadeIntents.csproj">
+            <Private>true</Private>
+        </ProjectReference>
         <!-- NNark transitive dependencies (must be explicit for plugin publish) -->
         <PackageReference Include="AsyncKeyedLock" Version="8.0.2" />
         <PackageReference Include="BTCPayServer.Lightning.Common" Version="1.7.1" />
         <PackageReference Include="Cel" Version="0.3.2" />
         <PackageReference Include="Google.Api.CommonProtos" Version="2.17.0" />
         <PackageReference Include="Grpc.Net.Client" Version="2.76.0" />
-        <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.6" />
-        <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.6" />
-        <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.6" />
-        <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
-        <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.10" />
+        <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.11" />
+        <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.11" />
+        <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.11" />
+        <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.11" />
+        <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.11" />
         <PackageReference Include="NBitcoin" Version="10.0.8" />
         <PackageReference Include="NBitcoin.Secp256k1" Version="4.0.0" />
+        <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
+        <PackageReference Include="Nethereum.Signer" Version="6.1.0" />
         <PackageReference Include="NBXplorer.Client" Version="5.0.8" />
         <!-- Additional packages -->
         <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
@@ -73,7 +74,7 @@
         <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.6.0" />
         <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.6"/>
         <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
-        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.11" />
         <EmbeddedResource Include="Resources\**" />
         <EmbeddedResource Include="arkade.svg" />
     </ItemGroup>

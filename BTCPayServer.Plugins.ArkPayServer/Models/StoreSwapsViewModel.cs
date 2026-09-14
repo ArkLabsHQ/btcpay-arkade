@@ -1,11 +1,11 @@
 using NArk.Abstractions.Contracts;
-using NArk.Swaps.Models;
+using BTCPayServer.Plugins.ArkPayServer.Data.Legacy;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Models;
 
 public class StoreSwapsViewModel : StoreCollectionViewModelBase
 {
-    public IReadOnlyCollection<ArkSwap> Swaps { get; set; } = [];
+    public IReadOnlyCollection<LegacySwap> Swaps { get; set; } = [];
     public Dictionary<string, ArkContractEntity> SwapContracts { get; set; } = new();
     public bool Debug { get; set; }
 

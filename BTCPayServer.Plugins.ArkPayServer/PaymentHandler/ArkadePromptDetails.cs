@@ -38,6 +38,9 @@ public record ArkadePromptDetails
     public string ContractString { get; init; }
     public string? BoardingAddress { get; init; }
     public string? BoardingContractString { get; init; }
+    public Guid? CompositionRouteId { get; init; }
+    public string? PaymentHash { get; init; }
+    public long? CheckoutExpiresAt { get; init; }
 
     /// <summary>
     /// Parses the contract with the specified network.

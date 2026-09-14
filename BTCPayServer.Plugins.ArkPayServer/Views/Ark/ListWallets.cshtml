@@ -4,6 +4,8 @@
 @model IEnumerable<ArkWalletEntity>
 
 @{
+    var legacySwapCounts = ViewData["LegacySwapCounts"] as IReadOnlyDictionary<string, int>
+        ?? new Dictionary<string, int>();
     ViewData.SetActivePage(category: "Server", activePage: "ArkWallets", title: "Arkade - Wallets");
 }
 
@@ -55,9 +57,9 @@
                             }
                         </td>
                         <td>
-                            @if (wallet.Swaps?.Any() == true)
+                            @if (legacySwapCounts.GetValueOrDefault(wallet.Id) > 0)
                             {
-                                <span class="badge text-bg-warning">@wallet.Swaps.Count</span>
+                                <span class="badge text-bg-warning">@legacySwapCounts.GetValueOrDefault(wallet.Id)</span>
                             }
                             else
                             {
@@ -113,7 +115,7 @@
                                         <p class="mb-2"><strong>This will delete:</strong></p>
                                         <ul>
                                             <li>@(wallet.Contracts?.Count ?? 0) contract(s)</li>
-                                            <li>@(wallet.Swaps?.Count ?? 0) swap(s)</li>
+                                            <li>@legacySwapCounts.GetValueOrDefault(wallet.Id) swap(s)</li>
                                             <li>All associated VTXOs and intents</li>
                                             <li>All wallet configuration data</li>
                                         </ul>

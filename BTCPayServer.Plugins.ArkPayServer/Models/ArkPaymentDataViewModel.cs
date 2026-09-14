@@ -9,6 +9,7 @@ public class ArkPaymentDataViewModel
     public DateTimeOffset ReceivedTime { get; set; }
     public string Currency { get; set; }
     public bool IsBoarding { get; set; }
+    public bool IsEvmSettlement { get; set; }
 
     /// <summary>
     /// True for a boarding payment whose on-chain funding tx is still

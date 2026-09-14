@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
+using BTCPayServer.Lightning;
 using NArk.Abstractions.Wallets;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Lightning;
@@ -68,15 +69,36 @@ public class ArkLightningSpendKeyService(IWalletStorage walletStorage)
     /// to an owner for adding the wallet to another store they control.
     /// </summary>
     public async Task<string> BuildConnectionStringAsync(string walletId,
-        CancellationToken cancellationToken = default)
-        => $"{BuildReceiveOnlyConnectionString(walletId)};spend-key={await GetOrCreateAsync(walletId, cancellationToken)}";
+        CancellationToken cancellationToken = default, string? storeId = null)
+        => $"{BuildReceiveOnlyConnectionString(walletId, storeId)};spend-key={await GetOrCreateAsync(walletId, cancellationToken)}";
 
     /// <summary>
     /// Builds a connection string without a capability. Such a client can watch and receive
     /// but not spend.
     /// </summary>
-    public static string BuildReceiveOnlyConnectionString(string walletId)
-        => $"type=arkade;wallet-id={walletId}";
+    public static string BuildReceiveOnlyConnectionString(string walletId, string? storeId = null)
+    {
+        if (storeId is not null && !ArkLightningStoreContext.IsValid(storeId))
+            throw new ArgumentException("Invalid store identifier.", nameof(storeId));
+        return $"type=arkade;wallet-id={walletId}" + (storeId is null ? "" : $";store-id={storeId}");
+    }
+
+    /// <summary>Scopes only a matching wallet, preserving existing capabilities and explicit store bindings.</summary>
+    public async Task<string?> BackfillConnectionStringAsync(string connectionString, string walletId, string storeId,
+        bool generatedByStore, CancellationToken cancellationToken = default)
+    {
+        if (!ArkLightningStoreContext.IsValid(storeId)) return null;
+        var values = LightningConnectionStringHelper.ExtractValues(connectionString, out var type);
+        if (type != "arkade" || !values.TryGetValue("wallet-id", out var configuredWallet) || configuredWallet != walletId)
+            return null;
+        if (values.TryGetValue("store-id", out var configuredStore) && configuredStore != storeId)
+            return null;
+
+        var scoped = configuredStore is null ? $"{connectionString.TrimEnd(';')};store-id={storeId}" : connectionString;
+        if (generatedByStore && !values.ContainsKey("spend-key"))
+            scoped += $";spend-key={await GetOrCreateAsync(walletId, cancellationToken)}";
+        return scoped;
+    }
 
     private async Task<string?> ReadStoredAsync(string walletId, CancellationToken cancellationToken)
     {

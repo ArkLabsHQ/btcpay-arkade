@@ -7,6 +7,7 @@ using BTCPayServer.Payments;
 using BTCPayServer.PayoutProcessors;
 using BTCPayServer.Payouts;
 using BTCPayServer.Plugins.ArkPayServer.Data;
+using BTCPayServer.Plugins.ArkPayServer.Data.Legacy;
 using BTCPayServer.Plugins.ArkPayServer.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.Notifications;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
@@ -32,9 +33,6 @@ using NArk.Storage.EfCore.Hosting;
 using NArk.Swaps.Policies;
 using NArk.Swaps.Transformers;
 using NArk.ArkadeIntents.Services;
-using NArk.Swaps.Boltz;
-using NArk.Swaps.Boltz.Client;
-using NArk.Swaps.Services;
 using NBitcoin;
 using System.Text.Json;
 using BTCPayServer.Plugins.ArkPayServer.Services.Policies;
@@ -85,7 +83,11 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         RegisterArkadeIntentServices(services, pluginServices);
 
         // Pre-ArkadeIntents Boltz swaps, kept resolvable so their history stays readable.
-        RegisterLegacySwapServices(services, networkConfig);
+        RegisterLegacySwapServices(services);
+
+        // Compose ordinary solver quotes at the client boundary and replace the Bitcoin handler
+        // only for stores that explicitly enable a composed BTC-CHAIN rail.
+        services.AddArkCompositionOnchainPrompts();
 
     }
 
@@ -120,6 +122,9 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         
         services.AddSingleton<ArkPluginDbContextFactory>();
         services.AddSingleton<IDbContextFactory<ArkPluginDbContext>>(sp => sp.GetRequiredService<ArkPluginDbContextFactory>());
+        services.AddSingleton<ArkCompositionRouteRepository>();
+        services.AddSingleton<IArkCompositionContextSource, ArkCompositionContextSource>();
+        services.AddSingleton<ArkCompositionPromptService>();
 
         services.AddStartupTask<ArkPluginMigrationRunner>();
     }
@@ -138,6 +143,7 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
                     Microsoft.EntityFrameworkCore.EF.Functions.ILike(c.MetadataJson ?? "", pattern));
             };
         });
+        services.AddArkadeEfCoreStorage();
     }
 
     private static void RegisterNArkCore(IServiceCollection services, ArkNetworkConfig networkConfig)
@@ -255,8 +261,13 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
     private static void RegisterPluginServices(IServiceCollection services)
     {
+        services.AddSingleton<IArkEvmSettlementStore, ArkEvmSettlementStore>();
+        services.AddSingleton<ArkEvmRpcEndpointProtector>();
+        services.AddSingleton<ArkEvmGasPayerProtector>();
+
         // Tracks the background wallet-recovery job per wallet (import-triggered + manual Rescan).
         services.AddSingleton<RecoveryStatusTracker>();
+        services.AddSingleton<ArkWalletRecoveryDispatcher>();
 
         // Per-wallet diagnostic log store. Captures NArk + plugin log
         // entries that carry a `WalletId` (either via BeginScope or the
@@ -390,44 +401,16 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
         services.AddArkadeEmulator(o => o.ServerUrl = solverOptions.EmulatorUri!);
         services.AddArkadeIntentsServices();
+        services.AddArkCompositionSdk();
+        services.AddArkCompositionExecution();
     }
 
-    /// <summary>
-    /// Registers the pre-ArkadeIntents Boltz swap services.
-    /// </summary>
-    /// <remarks>
-    /// Nothing creates a Boltz swap any more — the Lightning client negotiates with an Arkade solver
-    /// instead. This stays for the swaps that already exist: their rows are still rendered on the
-    /// swaps and contracts pages, and <c>VHTLCContractTransformer</c> is what keeps a VHTLC from a
-    /// pre-migration swap spendable, so dropping it would strand any in-flight refund. The same call
-    /// also provides wallet recovery and the swap sweep policy, neither of which is Boltz-specific.
-    /// </remarks>
-    private static void RegisterLegacySwapServices(IServiceCollection services, ArkNetworkConfig networkConfig)
+    private static void RegisterLegacySwapServices(IServiceCollection services)
     {
-        // Registered on both branches: the legacy page is hidden or shown by whether rows exist,
-        // which is a question about the database, not about whether Boltz is still reachable.
+        services.AddSingleton<LegacySwapRepository>();
         services.AddSingleton<ArkadeLegacySwapsService>();
-
-        if (!string.IsNullOrWhiteSpace(networkConfig.BoltzUri))
-        {
-            services.AddHttpClient<BoltzClient>();
-            services.AddHttpClient<CachedBoltzClient>();
-            services.AddArkSwapServices();
-        }
-        else
-        {
-            // Draining old swaps does not need Boltz, and must not be gated on it. An operator who
-            // finishes migrating and deletes `boltz` from ark.json is doing the obvious thing; if
-            // that also unregistered these two, every VHTLC still holding sats would stop being
-            // swept and stop being spendable, silently. Neither touches Boltz: the policy selects
-            // VHTLC coins and the transformer opens whichever leaf is available — the claim when we
-            // hold the preimage, the refund once the chain's clock passes the locktime.
-            //
-            // Registered only on this branch because AddArkSwapServices already includes both, and
-            // a second registration would run the policy twice.
-            services.AddSingleton<ISweepPolicy, SwapSweepPolicy>();
-            services.AddSingleton<IContractTransformer, VHTLCContractTransformer>();
-        }
+        services.AddSingleton<ISweepPolicy, SwapSweepPolicy>();
+        services.AddSingleton<IContractTransformer, VHTLCContractTransformer>();
     }
 
     #endregion
@@ -457,7 +440,6 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         return new ArkNetworkConfig(
             ArkUri: !string.IsNullOrEmpty(fileConfig?.ArkUri) ? fileConfig.ArkUri : preset.ArkUri,
             ArkadeWalletUri: !string.IsNullOrEmpty(fileConfig?.ArkadeWalletUri) ? fileConfig.ArkadeWalletUri : preset.ArkadeWalletUri,
-            BoltzUri: !string.IsNullOrEmpty(fileConfig?.BoltzUri) ? fileConfig.BoltzUri : preset.BoltzUri,
             ExplorerUri: !string.IsNullOrEmpty(fileConfig?.ExplorerUri) ? fileConfig.ExplorerUri : preset.ExplorerUri,
             // EsploraUri / ElectrumWsUri / ElectrumTcpUri arrived in
             // ArkNetworkConfig via NNark dotnet-sdk#96. They MUST be carried
@@ -509,7 +491,6 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
             return new ArkNetworkConfig(
                 ArkUri: "https://signet.arkade.sh",
                 ArkadeWalletUri: "https://signet.arkade.money",
-                BoltzUri: null,
                 ExplorerUri: "https://explorer.signet.arkade.sh",
                 // Signet endpoints mirror the canonical ts-sdk defaults
                 // (https://github.com/arkade-os/ts-sdk/blob/main/src/providers/onchain.ts

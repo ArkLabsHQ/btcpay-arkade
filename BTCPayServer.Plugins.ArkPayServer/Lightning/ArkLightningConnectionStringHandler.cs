@@ -24,9 +24,15 @@ public class ArkLightningConnectionStringHandler(IServiceProvider serviceProvide
         // Optional. Absence yields a receive-only client rather than an error.
         kv.TryGetValue("spend-key", out var spendKey);
 
+        if (kv.TryGetValue("store-id", out var storeId) && !ArkLightningStoreContext.IsValid(storeId))
+        {
+            error = "The key 'store-id' must contain a valid store identifier";
+            return null;
+        }
+
         error = null;
         return ActivatorUtilities.CreateInstance<ArkLightningClient>(
-            serviceProvider, network, walletId, new ArkLightningSpendCapability(spendKey));
+            serviceProvider, network, walletId, new ArkLightningSpendCapability(spendKey), new ArkLightningStoreContext(storeId));
     }
 }
 

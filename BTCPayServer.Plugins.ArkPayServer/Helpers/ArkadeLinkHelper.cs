@@ -12,15 +12,6 @@ namespace BTCPayServer.Plugins.ArkPayServer.Helpers;
 public static class ArkadeLinkHelper
 {
 
-    /// <summary>
-    /// Gets a link to Boltz for a specific swap.
-    /// Returns null if Boltz URI is not configured.
-    /// </summary>
-    public static string? GetSwapLink(ArkNetworkConfig config, string swapId)
-    {
-        return string.IsNullOrWhiteSpace(config.BoltzUri) ? null : $"{config.BoltzUri.TrimEnd('/')}/v2/swap/{swapId}";
-    }
-
     public static string GetTransactionLink(ArkNetworkConfig config, string txId)
     {
         return config.ExplorerUri is not null ? $"{config.ExplorerUri.TrimEnd('/')}/tx/{txId}" : $"{config.ArkUri.TrimEnd('/')}/indexer/v1/tx/{txId}";

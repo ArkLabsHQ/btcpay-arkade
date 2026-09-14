@@ -1,5 +1,6 @@
 using System.Threading.Channels;
 using BTCPayServer.Lightning;
+using BTCPayServer.Plugins.ArkPayServer.Services;
 using Microsoft.Extensions.Logging;
 using NArk.ArkadeIntents;
 using NArk.ArkadeIntents.Models;
@@ -24,6 +25,7 @@ public class ArkLightningInvoiceListener : ILightningInvoiceListener
     private readonly Network _network;
     private readonly CancellationToken _cancellationToken;
     private readonly IArkadeIntentStorage _intentStorage;
+    private readonly ArkCompositionPromptService? _compositionPrompts;
 
     private readonly Channel<LightningInvoice> _paidInvoicesChannel = Channel.CreateUnbounded<LightningInvoice>();
 
@@ -32,18 +34,20 @@ public class ArkLightningInvoiceListener : ILightningInvoiceListener
         ILogger<ArkLightningInvoiceListener> logger,
         IArkadeIntentStorage intentStorage,
         Network network,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ArkCompositionPromptService? compositionPrompts = null)
     {
         _walletId = walletId;
         _logger = logger;
         _network = network;
         _cancellationToken = cancellationToken;
         _intentStorage = intentStorage;
+        _compositionPrompts = compositionPrompts;
 
         _intentStorage.SwapsChanged += OnSwapChanged;
     }
 
-    private void OnSwapChanged(object? sender, ArkadeSwapIntent intent)
+    private async void OnSwapChanged(object? sender, ArkadeSwapIntent intent)
     {
         try
         {
@@ -54,6 +58,10 @@ public class ArkLightningInvoiceListener : ILightningInvoiceListener
                 return;
 
             if (intent.Status != ArkadeSwapIntentStatus.Fulfilled)
+                return;
+
+            if (_compositionPrompts is not null && await _compositionPrompts.IsCompositionIntentAsync(
+                    _walletId, intent.Id, intent.PaymentHash, _cancellationToken))
                 return;
 
             // Mapped rather than trusted: the same status rule that decides an invoice is paid lives

@@ -4,7 +4,6 @@ on:
   push:
     branches: [ "master" ]
   pull_request:
-    branches: [ "master" ]
 
 jobs:
   build:
@@ -27,3 +26,11 @@ jobs:
       run: dotnet build --no-restore -m:1
     - name: Test
       run: dotnet test --no-build --verbosity normal
+    - name: Verify packaged plugin against BTCPay 2.4.2
+      run: |
+        dotnet publish BTCPayServer.Plugins.ArkPayServer -c Release -m:1 -o BTCPayServer.Plugins.ArkPayServer/bin/plugin-host/publish
+        dotnet build submodules/btcpayserver/BTCPayServer.PluginPacker -c Release -m:1
+        dotnet run --project submodules/btcpayserver/BTCPayServer.PluginPacker -c Release --no-build -- BTCPayServer.Plugins.ArkPayServer/bin/plugin-host/publish BTCPayServer.Plugins.ArkPayServer BTCPayServer.Plugins.ArkPayServer/bin/plugin-host/packages
+        PACKAGE="$(find BTCPayServer.Plugins.ArkPayServer/bin/plugin-host/packages -name '*.btcpay' -print -quit)"
+        export ARKADE_PLUGIN_PACKAGE="$(realpath "$PACKAGE")"
+        dotnet test NArk.PluginHost.Tests -c Release -m:1 --logger 'console;verbosity=normal'

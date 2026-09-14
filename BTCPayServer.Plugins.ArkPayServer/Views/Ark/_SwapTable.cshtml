@@ -1,9 +1,9 @@
 @using BTCPayServer.Abstractions.Extensions
 @using BTCPayServer.Plugins.ArkPayServer.Helpers
-@using NArk.Swaps.Models
+@using BTCPayServer.Plugins.ArkPayServer.Data.Legacy
 @using NBitcoin
 @inject ArkNetworkConfig ArkNetworkConfig
-@model IEnumerable<ArkSwap>
+@model IEnumerable<LegacySwap>
 
 @if (Model.Any())
 {
@@ -21,14 +21,13 @@
             <tbody>
                 @foreach (var swap in Model)
                 {
-                    var boltzSwapLink = ArkadeLinkHelper.GetSwapLink(ArkNetworkConfig, swap.SwapId);
 
                     <tr>
                         <td>
-                            <vc:truncate-center text="@swap.SwapId" link="@boltzSwapLink" classes="truncate-center-id"/>
+                            <vc:truncate-center text="@swap.SwapId" classes="truncate-center-id"/>
                         </td>
                         <td>
-                            @if (swap.SwapType == ArkSwapType.ReverseSubmarine)
+                            @if (swap.SwapType == LegacySwapType.ReverseSubmarine)
                             {
                                 <span class="badge text-bg-primary">Reverse</span>
                             }
@@ -52,14 +51,14 @@
                             @{
                                 var swapclass = swap.Status switch
                                 {
-                                    ArkSwapStatus.Pending => "text-bg-info",
-                                    ArkSwapStatus.Settled => "text-bg-success",
-                                    ArkSwapStatus.Failed => "text-bg-danger",
+                                    LegacySwapStatus.Pending => "text-bg-info",
+                                    LegacySwapStatus.Settled => "text-bg-success",
+                                    LegacySwapStatus.Failed => "text-bg-danger",
                                     _ => "text-bg-warning"
                                 };
                             }
 
-                            <span class="badge @swapclass">@Enum.GetName(typeof(ArkSwapStatus), swap.Status)</span>
+                            <span class="badge @swapclass">@Enum.GetName(typeof(LegacySwapStatus), swap.Status)</span>
                         </td>
                     </tr>
                 }

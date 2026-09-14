@@ -22,6 +22,7 @@
 		if (!handlers.TryGetValue(payment.PaymentMethodId, out var h) || h is not ArkadePaymentMethodHandler handler)
 			return null;
 		var paymentData = handler.ParsePaymentDetails(payment.Details);
+		var proof = ArkPaymentProofDisplay.From(paymentData, payment.Details);
 		var promptDetails = handler.ParsePaymentPromptDetails(Model.Entity.GetPaymentPrompt(payment.PaymentMethodId)?.Details);
 
 		// Boarding payments come from an on-chain BTC tx funding the P2TR
@@ -50,11 +51,12 @@
 		{
 			Address = address,
 			Amount = payment.Value.ToString(CultureInfo.InvariantCulture),
-			Outpoint = paymentData.Outpoint,
+			Outpoint = proof.Identifier,
 			ReceivedTime = payment.ReceivedTime,
 			Contract = contractString,
 			Currency = payment.Currency,
 			IsBoarding = isBoarding,
+			IsEvmSettlement = proof.IsEvmSettlement,
 			// Boarding payment stays Processing until its on-chain funding tx confirms.
 			IsUnconfirmed = isBoarding && payment.Status == PaymentStatus.Processing,
 		};
@@ -71,7 +73,7 @@
             <tr>
 				<th text-translate="true">Type</th>
 				<th text-translate="true">Address</th>
-				<th text-translate="true">Outpoint</th>
+				<th text-translate="true">Payment proof</th>
 				<th text-translate="true">Received Time</th>
 				<th text-translate="true">Contract</th>
 				<th text-translate="true" class="text-end">Amount</th>
@@ -83,7 +85,12 @@
             {
 	            string addrLink;
 	            string? outpointLink;
-	            if (payment.IsBoarding)
+	            if (payment.IsEvmSettlement)
+	            {
+		            addrLink = string.Empty;
+		            outpointLink = null;
+	            }
+	            else if (payment.IsBoarding)
 	            {
 		            // On-chain BTC tx: link the txid via the BTC-CHAIN payment-method
 		            // explorer (BTCPay's TransactionLinkProviders), and use a
@@ -100,7 +107,11 @@
 	            }
                 <tr >
 	                <td class="align-middle">
-		                @if (payment.IsBoarding)
+		                @if (payment.IsEvmSettlement)
+		                {
+			                <span class="badge text-bg-success" title="Verified EVM settlement claim transaction">EVM settlement</span>
+		                }
+		                else if (payment.IsBoarding)
 		                {
 			                <span class="badge text-bg-info" title="On-chain boarding payment to the P2TR boarding address">Boarding</span>
 			                @if (payment.IsUnconfirmed)

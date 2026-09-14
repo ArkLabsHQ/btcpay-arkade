@@ -108,6 +108,77 @@ public class ArkLightningSpendKeyServiceTests
 
         var full = await service.BuildConnectionStringAsync(WalletId);
         Assert.Contains($"spend-key={await service.GetOrCreateAsync(WalletId)}", full);
+        Assert.DoesNotContain("store-id", full, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task StoreScopedBuildersKeepTheSameWalletCapability()
+    {
+        var service = NewService();
+        var capability = await service.GetOrCreateAsync(WalletId);
+
+        Assert.Equal($"type=arkade;wallet-id={WalletId};store-id=store-A",
+            ArkLightningSpendKeyService.BuildReceiveOnlyConnectionString(WalletId, "store-A"));
+        Assert.Equal($"type=arkade;wallet-id={WalletId};store-id=store-A;spend-key={capability}",
+            await service.BuildConnectionStringAsync(WalletId, storeId: "store-A"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BackfillScopesTheExactWalletAndPreservesExistingCapability(bool owned)
+    {
+        var service = NewService();
+        var input = $"type=arkade;wallet-id={WalletId};spend-key=existing-capability";
+
+        var updated = await service.BackfillConnectionStringAsync(input, WalletId, "store-A", owned);
+
+        Assert.Equal(input + ";store-id=store-A", updated);
+        Assert.Equal(updated, await service.BackfillConnectionStringAsync(updated!, WalletId, "store-A", owned));
+    }
+
+    [Fact]
+    public async Task BackfillNeverGrantsSpendCapabilityToReceiveOnlyWallet()
+    {
+        var updated = await NewService().BackfillConnectionStringAsync(
+            $"type=arkade;wallet-id={WalletId}", WalletId, "store-A", false);
+
+        Assert.Equal($"type=arkade;wallet-id={WalletId};store-id=store-A", updated);
+    }
+
+    [Fact]
+    public async Task BackfillRetainsExistingOwnedWalletCapabilityUpgrade()
+    {
+        var service = NewService();
+        var capability = await service.GetOrCreateAsync(WalletId);
+
+        var updated = await service.BackfillConnectionStringAsync(
+            $"type=arkade;wallet-id={WalletId}", WalletId, "store-A", true);
+
+        Assert.Equal($"type=arkade;wallet-id={WalletId};store-id=store-A;spend-key={capability}", updated);
+    }
+
+    [Theory]
+    [InlineData("type=arkade;wallet-id=another-wallet")]
+    [InlineData("type=arkade;wallet-id=wallet-under-test;store-id=another-store")]
+    [InlineData("type=arkade;wallet-id=wallet-under-test;store-id=")]
+    [InlineData("type=other;wallet-id=wallet-under-test")]
+    public async Task BackfillDoesNotRewriteOtherWalletsOrExplicitStoreBindings(string input)
+    {
+        Assert.Null(await NewService().BackfillConnectionStringAsync(input, WalletId, "store-A", true));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("store;spend-key=injected")]
+    [InlineData("store\nsecret")]
+    public void StoreScopedBuilderRejectsInvalidIdentityWithoutEchoingInput(string storeId)
+    {
+        var error = Assert.Throws<ArgumentException>(() =>
+            ArkLightningSpendKeyService.BuildReceiveOnlyConnectionString(WalletId, storeId));
+
+        Assert.DoesNotContain("secret", error.Message);
+        Assert.DoesNotContain("injected", error.Message);
     }
 
     /// <summary>

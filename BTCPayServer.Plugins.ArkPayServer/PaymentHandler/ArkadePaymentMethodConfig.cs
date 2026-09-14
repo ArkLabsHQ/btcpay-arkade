@@ -7,6 +7,8 @@ public record ArkadePaymentMethodConfig(
     bool BoardingEnabled = true,
     long MinBoardingAmountSats = ArkadePaymentMethodConfig.DefaultMinBoardingAmountSats)
 {
+    public ArkEvmSettlementSettings? EvmSettlement { get; init; }
+
     public const long P2trDustLimitSats = 330L;
 
     public const long DefaultMinBoardingAmountSats = 5000L;

@@ -88,7 +88,7 @@ public class ArkadeBip21Builder
     /// <c>?</c>. Entries are forwarded verbatim (no decode/re-encode), so
     /// whatever URL-encoding the upstream chose round-trips byte-for-byte.
     /// </param>
-    public ArkadeBip21Builder WithExtraQuery(string? rawQuery)
+    public ArkadeBip21Builder WithExtraQuery(string? rawQuery, bool composed = false)
     {
         if (string.IsNullOrEmpty(rawQuery)) return this;
         var trimmed = rawQuery.TrimStart('?');
@@ -101,13 +101,21 @@ public class ArkadeBip21Builder
             // Keys we set ourselves win — skip duplicates from upstream so
             // the wallet doesn't see two `amount=`s or pick up someone else's
             // ark/lightning value over the one we just computed.
-            if (string.Equals(key, "amount", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(key, "ark", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(key, "lightning", StringComparison.OrdinalIgnoreCase))
+            if (IsReservedQueryKey(key, composed))
                 continue;
             _passthroughEntries.Add(pair);
         }
         return this;
+    }
+
+    internal static bool IsReservedQueryKey(string key, bool composed)
+    {
+        key = HttpUtility.UrlDecode(key);
+        return key.Equals("amount", StringComparison.OrdinalIgnoreCase) ||
+            key.Equals("ark", StringComparison.OrdinalIgnoreCase) ||
+            key.Equals("lightning", StringComparison.OrdinalIgnoreCase) ||
+            composed && (key.Equals("pj", StringComparison.OrdinalIgnoreCase) ||
+                key.Equals("pjos", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>

@@ -32,10 +32,9 @@ using NArk.Abstractions.Blockchain;
 using NArk.Abstractions.Contracts;
 using NArk.Abstractions.Extensions;
 using NArk.Abstractions.VTXOs;
-using NArk.Swaps.Abstractions;
 using NArk.Abstractions.Wallets;
 using NArk.ArkadeIntents;
-using NArk.Swaps.Models;
+using BTCPayServer.Plugins.ArkPayServer.Data.Legacy;
 using NArk.Core.Wallet;
 using NBitcoin;
 
@@ -69,7 +68,7 @@ public partial class ArkController(
     IBitcoinBlockchain bitcoinTimeChainProvider,
     VtxoSynchronizationService vtxoSyncService,
     IContractStorage contractStorage,
-    ISwapStorage swapStorage,
+    LegacySwapRepository swapStorage,
     ArkadeLegacySwapsService legacySwaps,
     IVtxoStorage vtxoStorage,
     IWalletStorage walletStorage,
@@ -78,8 +77,7 @@ public partial class ArkController(
     BoardingUtxoSyncService boardingUtxoSyncService,
     IWalletLogStore walletLogStore,
     RecoveryStatusTracker recoveryStatusTracker,
-    IServiceProvider serviceProvider,
-    ILogger<ArkController> logger) : Controller
+    ArkWalletRecoveryDispatcher walletRecovery) : Controller
 {
     // Post-operation VTXO refresh only needs to catch updates since the operation
     // started. A 5-minute buffer absorbs clock skew and batch-round latency while
@@ -128,7 +126,7 @@ public partial class ArkController(
         if (lnConfig?.ConnectionString?.StartsWith("type=arkade", StringComparison.InvariantCultureIgnoreCase) is true)
         {
             lnConfig.ConnectionString = await spendKeyService.BuildConnectionStringAsync(
-                config.WalletId, HttpContext.RequestAborted);
+                config.WalletId, HttpContext.RequestAborted, store.Id);
             store.SetPaymentMethodConfig(paymentMethodHandlerDictionary[lightningPaymentMethodId], lnConfig);
             await storeRepository.UpdateStore(store);
         }
@@ -142,48 +140,10 @@ public partial class ArkController(
     /// Starts unified wallet recovery for <paramref name="walletId"/> on a background
     /// thread (a gap-limit scan polls arkd per index), tracking status for the overview.
     /// Discovers contracts (incl. legacy deprecated-signer scripts) + the derivation
-    /// index, restores swaps, finalizes pending txs and resyncs offchain funds, then
-    /// syncs boarding (on-chain) UTXOs. <c>IWalletRecoveryService</c> is only registered
-    /// when swaps (Boltz) are configured; without it this degrades to a boarding-only sync.
+    /// index, finalizes pending txs and resyncs offchain funds, then syncs boarding UTXOs.
     /// </summary>
     private void StartBackgroundRecovery(string walletId)
-    {
-        var recoveryService = serviceProvider.GetService<NArk.Swaps.Recovery.IWalletRecoveryService>();
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                recoveryStatusTracker.SetRunning(walletId);
-
-                var contractsRecovered = 0;
-                var swapsAudited = 0;
-                var fundsSynced = 0;
-                if (recoveryService is not null)
-                {
-                    var report = await recoveryService.RecoverAsync(walletId, cancellationToken: CancellationToken.None);
-                    contractsRecovered = report.ContractsRecovered;
-                    swapsAudited = report.SwapAudit.Count;
-                    fundsSynced = report.FundsScriptsSynced;
-                }
-
-                // Boarding (on-chain) UTXOs aren't covered by offchain recovery.
-                var boardingContracts = (await contractStorage.GetContracts(
-                        walletIds: [walletId], scope: ContractScope.Onchain,
-                        cancellationToken: CancellationToken.None)).ToList();
-                if (boardingContracts.Count > 0)
-                    await boardingUtxoSyncService.SyncAsync(boardingContracts, CancellationToken.None);
-
-                recoveryStatusTracker.SetCompleted(walletId,
-                    recoveryService is not null ? contractsRecovered : boardingContracts.Count,
-                    swapsAudited, fundsSynced);
-            }
-            catch (Exception ex)
-            {
-                recoveryStatusTracker.SetFailed(walletId, ex.Message);
-                logger.LogWarning(ex, "Background wallet recovery failed for wallet {WalletId}", walletId);
-            }
-        });
-    }
+        => walletRecovery.Start(walletId);
     
     private bool IsArkadeLightningEnabled()
     {

@@ -1,5 +1,5 @@
+using BTCPayServer.Plugins.ArkPayServer.Data.Legacy;
 using Microsoft.Extensions.Caching.Memory;
-using NArk.Swaps.Abstractions;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
 
@@ -20,7 +20,7 @@ namespace BTCPayServer.Plugins.ArkPayServer.Services;
 /// there are no new swaps.
 /// </para>
 /// </remarks>
-public class ArkadeLegacySwapsService(ISwapStorage swapStorage, IMemoryCache memoryCache)
+public class ArkadeLegacySwapsService(LegacySwapRepository swapStorage, IMemoryCache memoryCache)
 {
     private static readonly TimeSpan CacheExpiry = TimeSpan.FromMinutes(30);
 
