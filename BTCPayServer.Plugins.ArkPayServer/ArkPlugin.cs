@@ -122,7 +122,7 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         
         services.AddSingleton<ArkPluginDbContextFactory>();
         services.AddSingleton<IDbContextFactory<ArkPluginDbContext>>(sp => sp.GetRequiredService<ArkPluginDbContextFactory>());
-        services.AddSingleton<ArkInvoiceCompositionRepository>();
+        services.AddSingleton<ArkCompositionRouteRepository>();
         services.AddSingleton<IArkCompositionContextSource, ArkCompositionContextSource>();
         services.AddSingleton<ArkCompositionPromptService>();
 

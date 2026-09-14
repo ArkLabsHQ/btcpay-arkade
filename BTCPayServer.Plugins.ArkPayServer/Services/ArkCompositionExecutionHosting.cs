@@ -10,22 +10,40 @@ using Microsoft.Extensions.Logging;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Services;
 
-public sealed class ArkCompositionExecutionJournal(IDbContextFactory<ArkPluginDbContext> factory,
-    ArkInvoiceCompositionRepository repository) : IArkCompositionExecutionJournal
+public sealed record ArkCompositionRouteKey(string StoreId, Guid RouteId);
+
+public interface IArkCompositionExecutionJournal
 {
-    public async Task<IReadOnlyList<ArkCompositionRouteKey>> ListAsync(int skip, int take, CancellationToken cancellationToken)
+    Task<IReadOnlyList<ArkCompositionRouteKey>> ListAsync(int skip, int take, CancellationToken cancellationToken);
+    Task<ArkCompositionRoute?> GetAsync(string storeId, Guid routeId, CancellationToken cancellationToken);
+}
+
+public interface IArkCompositionExecutionLock
+{
+    bool SupportsCrossProcessExecution => false;
+    ValueTask<IAsyncDisposable> AcquireAsync(string scope, CancellationToken cancellationToken);
+}
+
+public interface IArkCompositionPaymentSink
+{
+    Task SettleAsync(ArkCompositionRoute route, NArk.ArkadeIntents.Composition.ComposedSwapExecutionResult result,
+        CancellationToken cancellationToken);
+}
+
+public sealed class ArkCompositionExecutionJournal(ArkCompositionRouteRepository repository)
+    : IArkCompositionExecutionJournal
+{
+    public async Task<IReadOnlyList<ArkCompositionRouteKey>> ListAsync(int skip, int take,
+        CancellationToken cancellationToken)
     {
-        await using var context = await factory.CreateDbContextAsync(cancellationToken);
-        return await context.InvoiceCompositions.AsNoTracking().Where(r => r.CustomerDestination != null)
-            .OrderBy(r => r.RouteId).Skip(skip).Take(take)
-            .Select(r => new ArkCompositionRouteKey(r.StoreId, r.RouteId)).ToArrayAsync(cancellationToken);
+        // The journal is the route index; swap state is read live from SDK intent storage
+        // by the execution service. Only rows with a customer prompt need advancing.
+        var page = await repository.ListAllWithPrompts(skip, take, cancellationToken);
+        return page.Select(r => new ArkCompositionRouteKey(r.StoreId, r.RouteId)).ToArray();
     }
 
-    public Task<ArkInvoiceComposition?> GetAsync(string storeId, Guid routeId, CancellationToken cancellationToken) =>
+    public Task<ArkCompositionRoute?> GetAsync(string storeId, Guid routeId, CancellationToken cancellationToken) =>
         repository.Get(storeId, routeId, cancellationToken);
-
-    public Task SaveAsync(ArkInvoiceComposition route, long expectedRevision, CancellationToken cancellationToken) =>
-        repository.Save(route.StoreId, route, expectedRevision, cancellationToken);
 }
 
 public sealed class ArkCompositionPostgresExecutionLock(IDbContextFactory<ArkPluginDbContext> factory)
@@ -62,7 +80,7 @@ public sealed class ArkCompositionPostgresExecutionLock(IDbContextFactory<ArkPlu
 }
 
 public sealed class ArkCompositionExecutionHostedService(IArkCompositionExecutionJournal journal,
-    ArkCompositionExecutionService execution, ILogger<ArkCompositionExecutionHostedService> logger)
+    ArkComposedSwapExecutionService execution, ILogger<ArkCompositionExecutionHostedService> logger)
     : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -87,7 +105,7 @@ public sealed class ArkCompositionExecutionHostedService(IArkCompositionExecutio
             }
             catch (Exception) when (!stoppingToken.IsCancellationRequested)
             {
-                logger.LogWarning("Composition execution could not read the route journal.");
+                logger.LogWarning("Composition execution could not read the route index.");
             }
             await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
         }
@@ -100,10 +118,9 @@ public static class ArkCompositionExecutionRegistration
     {
         services.TryAddSingleton<IArkCompositionExecutionJournal, ArkCompositionExecutionJournal>();
         services.TryAddSingleton<IArkCompositionExecutionLock, ArkCompositionPostgresExecutionLock>();
-        services.TryAddSingleton<IArkCompositionExecutionBackend, ArkSdkCompositionExecutionBackend>();
+        services.TryAddSingleton<ArkComposedSwapExecutionService>();
         services.TryAddSingleton<ArkCompositionSourceEvidence>();
         services.TryAddSingleton<IArkCompositionPaymentSink, ArkCompositionPaymentSink>();
-        services.TryAddSingleton<ArkCompositionExecutionService>();
         services.AddHostedService<ArkCompositionExecutionHostedService>();
         return services;
     }

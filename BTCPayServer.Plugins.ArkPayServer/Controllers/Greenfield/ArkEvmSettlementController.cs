@@ -19,7 +19,7 @@ namespace BTCPayServer.Plugins.ArkPayServer.Controllers;
 [EnableCors(CorsPolicies.All)]
 public class ArkEvmSettlementController(IArkEvmSettlementStore settlementStore, IWalletProvider walletProvider,
     ArkEvmRpcEndpointProtector rpcProtector, ArkEvmGasPayerProtector gasPayerProtector,
-    IArkCompositionExecutor? compositionExecutor = null, IArkCompositionExecutionLock? executionLock = null) : ControllerBase
+    ArkCompositionPromptService? compositionPrompts = null, IArkCompositionExecutionLock? executionLock = null) : ControllerBase
 {
     [HttpGet("~/api/v1/stores/{storeId}/arkade/evm-settlement")]
     [Authorize(Policy = Policies.CanViewStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Greenfield)]
@@ -108,7 +108,7 @@ public class ArkEvmSettlementController(IArkEvmSettlementStore settlementStore, 
         return Ok(new ArkEvmSettlementCapabilitiesData(walletConfigured, signerAvailable, settings?.Enabled == true,
             data?.ConfigurationComplete == true, settings?.RoutePolicy?.EnabledSourceRails ?? [],
             data?.RpcEndpointConfigured == true, data?.RpcEndpointOrigin, data?.GasPayerConfigured == true,
-            missing, compositionExecutor is not null, lockAvailable));
+            missing, compositionPrompts is not null, lockAvailable));
     }
 
     private ArkEvmSettlementData ToData(StoreData store, ArkEvmSettlementSettings settings, bool walletConfigured = true)

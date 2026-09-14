@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging;
 namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 
 public sealed class ArkCompositionCheckoutPolicy(IArkCompositionContextSource contextSource,
-    ArkInvoiceCompositionRepository repository, IMemoryCache cache, TimeProvider? timeProvider = null,
+    ArkCompositionRouteRepository repository, IMemoryCache cache, TimeProvider? timeProvider = null,
     ILogger<ArkCompositionCheckoutPolicy>? logger = null)
 {
     private readonly ConcurrentDictionary<string, Lazy<Task>> _preloads = new(StringComparer.Ordinal);
@@ -76,9 +76,9 @@ public sealed class ArkCompositionCheckoutPolicy(IArkCompositionContextSource co
         cache.Set(StoreKey(store.Id), enabled, TimeSpan.FromMinutes(10));
     }
 
-    public void RememberRoute(ArkInvoiceComposition route)
+    public void RememberRoute(ArkCompositionRoute route)
     {
-        if (route.CheckoutExpiresAt is not { } expiresAt || route.CustomerDestination is null || route.PaymentHash is null)
+        if (route.CheckoutExpiresAt is not { } expiresAt || route.CustomerDestination is null)
             return;
         var expiry = DateTimeOffset.FromUnixTimeSeconds(expiresAt);
         if (expiry <= (timeProvider ?? TimeProvider.System).GetUtcNow()) return;

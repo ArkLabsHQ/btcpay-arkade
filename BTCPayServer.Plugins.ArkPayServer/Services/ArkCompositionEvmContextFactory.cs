@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Numerics;
-using System.Text.Json;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using NArk.ArkadeIntents.Evm;
 using NArk.ArkadeIntents.SolverRegistry;
@@ -10,35 +9,47 @@ namespace BTCPayServer.Plugins.ArkPayServer.Services;
 public sealed class ArkCompositionEvmContextFactory(IArkCompositionContextSource source,
     ArkEvmRpcEndpointProtector endpoints, ArkEvmGasPayerProtector keys, IHttpClientFactory http)
 {
-    public Task<ArkCompositionEvmContext> OpenAsync(ArkCompositionExecutionRequest request,
-        CancellationToken cancellationToken = default) => OpenCoreAsync(request, false, cancellationToken);
+    public Task<ArkCompositionEvmContext> OpenAsync(string storeId, string walletId, string assetId,
+        string destination, ArkEvmRoutePolicy policy, CancellationToken cancellationToken = default) =>
+        OpenCoreAsync(storeId, walletId, assetId, destination, policy, cancellationToken);
 
-    public Task<ArkCompositionEvmContext> OpenForRecoveryAsync(ArkCompositionExecutionRequest request,
-        CancellationToken cancellationToken = default) => OpenCoreAsync(request, true, cancellationToken);
+    /// <summary>
+    /// Opens execution against the live store policy. Proof bounds come from current
+    /// configuration; the asset, destination, wallet and contract match below still
+    /// bind execution to this route.
+    /// </summary>
+    public Task<ArkCompositionEvmContext> OpenForExecutionAsync(string storeId, string walletId, string assetId,
+        string destination, string rail, string swapContractAddress,
+        CancellationToken cancellationToken = default) =>
+        OpenCoreAsync(storeId, walletId, assetId, destination,
+            new ArkEvmRoutePolicy
+            {
+                EnabledSourceRails = [rail], SwapContractAddress = swapContractAddress
+            }, cancellationToken);
 
-    private async Task<ArkCompositionEvmContext> OpenCoreAsync(ArkCompositionExecutionRequest request,
-        bool recovery, CancellationToken cancellationToken)
+    private async Task<ArkCompositionEvmContext> OpenCoreAsync(string storeId, string walletId, string assetId,
+        string destination, ArkEvmRoutePolicy policy, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var store = await source.FindStoreAsync(request.StoreId)
+        var store = await source.FindStoreAsync(storeId)
             ?? throw new InvalidOperationException("The composition store is unavailable.");
         var configuration = ArkCompositionPromptService.Configuration(store);
         var settings = configuration?.EvmSettlement?.Validate();
-        if (settings is null || !recovery && (configuration?.WalletId != request.WalletId || settings is not { Enabled: true, RoutePolicy: not null }
-            || settings.AssetId != request.AssetId || settings.Destination != request.Destination
-            || JsonSerializer.Serialize(settings.RoutePolicy) != JsonSerializer.Serialize(request.Policy)
-            || !settings.RoutePolicy.EnabledSourceRails.Contains(request.SourceRail)))
+        if (settings is null || configuration?.WalletId != walletId || settings is not { Enabled: true, RoutePolicy: not null }
+            || settings.AssetId != assetId || settings.Destination != destination
+            || !settings.RoutePolicy.EnabledSourceRails.Contains(policy.EnabledSourceRails.Single())
+            || settings.RoutePolicy.SwapContractAddress != policy.SwapContractAddress)
             throw new InvalidOperationException("The route differs from the store's settlement configuration.");
-        var endpoint = endpoints.TryUnprotect(request.StoreId, settings.ProtectedRpcUri)
+        var endpoint = endpoints.TryUnprotect(storeId, settings.ProtectedRpcUri)
             ?? throw new InvalidOperationException("The store's EVM RPC configuration is unavailable.");
-        if (!keys.IsAvailable(request.StoreId, settings.ProtectedGasPayerPrivateKey, settings.ExpectedSenderAddress)
+        if (!keys.IsAvailable(storeId, settings.ProtectedGasPayerPrivateKey, settings.ExpectedSenderAddress)
             || settings.MaxFeePerGasWei is null || settings.MaxPriorityFeePerGasWei is null || settings.MaxGasLimit is null)
             throw new InvalidOperationException("The store's EVM gas-payer configuration is unavailable.");
         var client = http.CreateClient("ArkCompositionEvm");
         try
         {
             var rpc = new EvmJsonRpcClient(client, endpoint);
-            var sender = keys.UseKey(request.StoreId, settings.ProtectedGasPayerPrivateKey!, settings.ExpectedSenderAddress,
+            var sender = keys.UseKey(storeId, settings.ProtectedGasPayerPrivateKey!, settings.ExpectedSenderAddress,
                 key => new EvmLocalTransactionSender(rpc, key.Span, new EvmTransactionSenderOptions
                 {
                     ExpectedSenderAddress = settings.ExpectedSenderAddress!,
@@ -46,7 +57,7 @@ public sealed class ArkCompositionEvmContextFactory(IArkCompositionContextSource
                     MaxPriorityFeePerGasWei = BigInteger.Parse(settings.MaxPriorityFeePerGasWei, CultureInfo.InvariantCulture),
                     MaxGasLimit = BigInteger.Parse(settings.MaxGasLimit, CultureInfo.InvariantCulture)
                 }));
-            return new ArkCompositionEvmContext(client, rpc, sender, Policy(request.AssetId, request.Policy));
+            return new ArkCompositionEvmContext(client, rpc, sender, Policy(assetId, policy));
         }
         catch { client.Dispose(); throw; }
     }

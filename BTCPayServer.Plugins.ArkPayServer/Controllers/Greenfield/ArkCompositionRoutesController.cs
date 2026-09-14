@@ -7,16 +7,17 @@ using BTCPayServer.Plugins.ArkPayServer.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Cors;
 using Microsoft.AspNetCore.Mvc;
+using NArk.ArkadeIntents;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Controllers;
 
-/// <summary>Owner-authorized public recovery journal; no route execution or secret endpoints.</summary>
-/// <param name="repository">Store-scoped route persistence.</param>
+/// <summary>Owner-authorized public route index; swap state is projected live from SDK intent storage.</summary>
+/// <param name="repository">Store-scoped route index.</param>
 [ApiController]
 [Authorize(Policy = Policies.CanViewInvoices, AuthenticationSchemes = AuthenticationSchemes.Greenfield)]
 [EnableCors(CorsPolicies.All)]
-public sealed class ArkCompositionRoutesController(ArkInvoiceCompositionRepository repository,
-    IArkCompositionExecutor? executor = null, IArkCompositionExecutionLock? executionLock = null) : ControllerBase
+public sealed class ArkCompositionRoutesController(ArkCompositionRouteRepository repository,
+    IArkadeIntentStorage intents, IArkCompositionExecutionLock? executionLock = null) : ControllerBase
 {
     /// <summary>Reads one route without revealing whether another store owns it.</summary>
     [HttpGet("~/api/v1/stores/{storeId}/arkade/evm-settlement/routes/{routeId:guid}")]
@@ -24,7 +25,7 @@ public sealed class ArkCompositionRoutesController(ArkInvoiceCompositionReposito
     {
         if (!OwnsStore(storeId)) return NotFound();
         var route = await repository.Get(storeId, routeId, cancellationToken);
-        return route is null ? NotFound() : Ok(ArkCompositionRouteData.From(route, ExecutionAvailable));
+        return route is null ? NotFound() : Ok(await ProjectAsync(route, cancellationToken));
     }
 
     /// <summary>Lists bounded independent routes, including unattached prompts and renewals.</summary>
@@ -37,10 +38,18 @@ public sealed class ArkCompositionRoutesController(ArkInvoiceCompositionReposito
         if (paymentMethodId is not (null or "ARKADE" or "BTC-LN" or "BTC-CHAIN"))
             return BadRequest(new { code = "invalid-payment-method", message = "Specify a supported source payment method." });
         var routes = await repository.List(storeId, invoiceId, paymentMethodId, skip, take, cancellationToken);
-        return Ok(routes.Select(route => ArkCompositionRouteData.From(route, ExecutionAvailable)).ToArray());
+        var projected = new List<ArkCompositionRouteData>();
+        foreach (var route in routes) projected.Add(await ProjectAsync(route, cancellationToken));
+        return Ok(projected.ToArray());
     }
 
+    private async Task<ArkCompositionRouteData> ProjectAsync(ArkCompositionRoute route,
+        CancellationToken cancellationToken) => ArkCompositionRouteData.From(route,
+        await intents.GetArkadeSwapIntent(route.OutgoingSwapId, cancellationToken),
+        route.IngressSwapId is null ? null : await intents.GetArkadeSwapIntent(route.IngressSwapId, cancellationToken),
+        ExecutionAvailable);
+
     private bool OwnsStore(string storeId) => HttpContext.GetStoreDataOrNull() is { } store &&
-                                             string.Equals(store.Id, storeId, StringComparison.Ordinal);
-    private bool ExecutionAvailable => executor is not null && executionLock?.SupportsCrossProcessExecution == true;
+                                              string.Equals(store.Id, storeId, StringComparison.Ordinal);
+    private bool ExecutionAvailable => executionLock?.SupportsCrossProcessExecution == true;
 }

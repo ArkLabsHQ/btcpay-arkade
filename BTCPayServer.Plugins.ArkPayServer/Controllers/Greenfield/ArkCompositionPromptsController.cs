@@ -7,6 +7,7 @@ using BTCPayServer.Payments;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Cors;
 using Microsoft.AspNetCore.Mvc;
+using NArk.ArkadeIntents;
 using NBitcoin;
 
 namespace BTCPayServer.Plugins.ArkPayServer.Controllers;
@@ -15,7 +16,8 @@ namespace BTCPayServer.Plugins.ArkPayServer.Controllers;
 [ApiController]
 [Authorize(Policy = Policies.CanCreateInvoice, AuthenticationSchemes = AuthenticationSchemes.Greenfield)]
 [EnableCors(CorsPolicies.All)]
-public sealed class ArkCompositionPromptsController(ArkCompositionPromptService prompts) : ControllerBase
+public sealed class ArkCompositionPromptsController(ArkCompositionPromptService prompts,
+    IArkadeIntentStorage intents) : ControllerBase
 {
     [HttpPost("~/api/v1/stores/{storeId}/arkade/evm-settlement/invoices/{invoiceId}/onchain-prompt")]
     public async Task<IActionResult> CreateOnchain(string storeId, string invoiceId, CancellationToken cancellationToken)
@@ -38,7 +40,13 @@ public sealed class ArkCompositionPromptsController(ArkCompositionPromptService 
             var route = await prompts.TryCreateAsync(store, invoice, paymentMethodId.ToString(), amountSats,
                 invoice.ExpirationTime, cancellationToken: cancellationToken);
             if (route is null) return Conflict(new { code = "rail-not-enabled", message = "Onchain composition is not enabled for this store." });
-            return Created($"/api/v1/stores/{storeId}/arkade/evm-settlement/routes/{route.RouteId}", ArkCompositionRouteData.From(route, prompts.ExecutionAvailable));
+            return Created($"/api/v1/stores/{storeId}/arkade/evm-settlement/routes/{route.RouteId}",
+                ArkCompositionRouteData.From(await prompts.FindRouteAsync(storeId, route.RouteId, cancellationToken)
+                    ?? throw new InvalidOperationException("The composed route was not indexed."),
+                    await intents.GetArkadeSwapIntent(route.OutgoingSwapId, cancellationToken),
+                    route.IngressSwapId is null ? null
+                        : await intents.GetArkadeSwapIntent(route.IngressSwapId, cancellationToken),
+                    prompts.ExecutionAvailable));
         }
         catch (ArkCompositionUnavailableException unavailable)
         {

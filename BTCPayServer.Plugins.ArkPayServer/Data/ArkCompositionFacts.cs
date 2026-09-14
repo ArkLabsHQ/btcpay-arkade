@@ -8,12 +8,12 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data;
 /// <param name="ToAmount">Canonical integer atomic output amount.</param>
 /// <param name="LockupScript">L or M P2TR scriptPubKey.</param>
 /// <param name="LockupAddress">Arkade address encoding that script.</param>
-/// <param name="ValidUntil">Quote funding deadline, Unix seconds.</param>
+/// <param name="ValidUntil">Quote funding deadline, Unix seconds, when the SDK persisted it.</param>
 /// <param name="RefundLocktime">Arkade refund deadline, Unix seconds.</param>
 /// <param name="PayoutScript">Ingress non-interactive claim payout, exactly L.</param>
 public sealed record ArkCompositionQuote(string RfqId, string PaymentHash, string SolverPubkey,
-    string FromAmount, string ToAmount, string LockupScript, string LockupAddress, long ValidUntil,
-    long RefundLocktime, string? PayoutScript = null);
+    string FromAmount, string ToAmount, string LockupScript, string LockupAddress, long? ValidUntil,
+    long? RefundLocktime, string? PayoutScript = null);
 
 /// <summary>Exact six-value ERC20Swap tuple plus the allowed contract that interprets it.</summary>
 /// <param name="PaymentHash">Route SHA-256 hash.</param>
