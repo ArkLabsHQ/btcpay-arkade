@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+### Features
+- **Lightning is back, settled over the Arkade intent corridors.** 2.4.4 removed the Lightning surface along with the Boltz client it was built on; this restores it against an Arkade swap solver instead. Both directions settle into a covenant: receiving takes delivery of one the solver funded, sending funds a lockup the solver takes by revealing the preimage. Terms are quoted per payment over RFQ rather than read from a provider's published limits, so nothing is vetted against a fixed band before the quote. The LN and LNURL setup tabs return, the Arkade wallet accepts a BOLT11, LNURL or Lightning Address as a send destination again, and a store's `type=arkade` connection string — which 2.4.4 left in place with no handler to claim it — is handled once more.
+- **A solver per payment, from the public registry.** `solver-relay` and `solver-pubkey` in `ark.json` pin one counterparty; left out, a solver is chosen per payment from the network's registry. A development stack has to pin one, since its solver mints a fresh identity per run and nothing can list it. The corridors need a covenant emulator (`emulator`), whose key the lockup script commits to; `covclaimd` optionally names a claim daemon that can finish a receive while this server is down. See the README's *Lightning configuration*.
+- **The Swaps page returns**, reading intent storage directly rather than going through the Lightning client, and the store overview reports the solver in place of the Boltz service-connection panel. "Configured" is the strongest claim either makes: both sides of the transport dial out and neither listens, so the first evidence a solver is there is a quote coming back.
+- **An on-chain swap path at checkout, off by default.** A store can enable it on the overview (`OnchainSwapEnabled`), and an invoice then offers a swap address the solver pays out against, alongside boarding. The solver looks for one output of exactly the quoted value, so the checkout page says to send exactly that amount in a single transaction — the BIP21 amount is invisible to anyone copying the address alone.
+
+### API
+- `GET /arkade/lightning-solver` replaces the removed `GET /arkade/boltz-limits`, reporting the solver this store trades Lightning corridors with.
+- Back on the Greenfield surface: `lightningEnabled` on the wallet and wallet-setup responses, `enableLightning` on the wallet-setup request, and `isLightning` / `feePercentage` / `minerFeeSats` on a fee estimate. A fee estimate for a Lightning destination quotes the solver's spread again instead of returning `lightning-not-supported`.
+
+### Database
+- **`AddArkadeSwapIntents`** creates the `ArkadeSwapIntents` table the corridors keep their swap bookkeeping in. Additive, and it lands after `DropSwaps` — no pre-existing rows to convert, since the Boltz `Swaps` table 2.4.4 dropped is not its ancestor.
+
+### SDK (NNark)
+- **No bump** — this builds on the `4544eda` that 2.4.4 already pins. The corridors were developed against the SDK's `feat/arkade-script`, but `#81` squash-merged that line into master, so everything the plugin reaches for is on master already: the RFQ transport and solver discovery, both corridors, and the on-board's `payoutContract`.
+- **Arkade swap persistence lives in its own package**, `NArk.Storage.EfCore.ArkadeIntents`, which the plugin is the first thing here to consume: the core EF Core mappings do not carry `ArkadeSwapIntents`, so the plugin references the package, calls `ConfigureArkadeEntities` on its context and registers `AddArkadeEfCoreStorage`.
+
 ## [2.4.4] - 2026-09-15
 
 ### Breaking Changes

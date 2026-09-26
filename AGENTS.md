@@ -57,6 +57,13 @@ anchored onchain for finality.
 The plugin supports these key flows:
 
 - **Ark-native**: direct offchain VTXO-to-VTXO payments within the Ark network.
+- **Lightning↔Arkade**: trustless swaps against an Arkade swap solver, negotiated
+  per request over RFQ (see `Lightning/ArkadeSolverService.cs` and the SDK's
+  `NArk.ArkadeIntents`). Both directions settle into a covenant; sending funds a
+  lockup the solver takes by revealing the preimage, receiving takes delivery by
+  claiming one the solver funded. Configured under `solver-relay`,
+  `solver-pubkey` and `emulator` in `ark.json`; `covclaimd` is optional and adds
+  a daemon that can finish a claim while this server is down.
 - **Auto-sweep**: a store's balance is forwarded to its configured destination
   by the SDK's settlement subsystem (`ISettlementConfigProvider` +
   `DestinationSweepSettlementService`), not by a plugin-owned sweep policy.

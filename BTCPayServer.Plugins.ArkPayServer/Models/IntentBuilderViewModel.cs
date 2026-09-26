@@ -43,6 +43,11 @@ public class IntentBuilderViewModel
     public string VtxoOutpointsRaw { get; set; } = "";
 
     /// <summary>
+    /// Whether Lightning is available for single-output payments.
+    /// </summary>
+    public bool LightningAvailable { get; set; }
+
+    /// <summary>
     /// Validation errors.
     /// </summary>
     public List<string> Errors { get; set; } = [];

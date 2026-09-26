@@ -1,3 +1,4 @@
+using System.Text.Json;
 using BTCPayServer.Tests;
 using Xunit;
 
@@ -37,6 +38,10 @@ public class SharedPluginTestFixture : IDisposable
 
         var testDir = Path.Combine(Directory.GetCurrentDirectory(), "ArkadePluginTests");
         ServerTester = testInstance.CreateServerTester(testDir, newDb: true);
+
+        // Only window: the constructor wipes the scope dir and StartAsync reads config. The plugin reads
+        // BTCPay's --datadir, the scope's "pay" subdirectory.
+        WriteSolverConfigIfRequested(Path.Combine(testDir, "pay"));
         // Load plugins in an isolated AssemblyLoadContext — matches the
         // production load model AND matches rockstardev's reference
         // fixture.
@@ -58,6 +63,33 @@ public class SharedPluginTestFixture : IDisposable
                 "BTCPay startup didn't complete within 3 minutes. The plugin's hosted services or IStartupTask are likely blocking. Run the test locally with debugger attached to inspect.");
         }
     }
+
+    // Written as ark.json in the datadir, the path production reads; a no-op unless SolverUrlVariable is set.
+    private static void WriteSolverConfigIfRequested(string dataDir)
+    {
+        var solverUrl = Environment.GetEnvironmentVariable(SolverUrlVariable);
+        if (string.IsNullOrWhiteSpace(solverUrl)) return;
+
+        Directory.CreateDirectory(dataDir);
+
+        var config = new Dictionary<string, string?>
+        {
+            ["solver-relay"] = solverUrl,
+            ["solver-pubkey"] = Environment.GetEnvironmentVariable("ARKADE_E2E_SOLVER_PUBKEY"),
+            ["covclaimd"] = Environment.GetEnvironmentVariable("ARKADE_E2E_COVCLAIMD_URL")
+                            ?? "http://localhost:7271",
+            ["emulator"] = Environment.GetEnvironmentVariable("ARKADE_E2E_EMULATOR_URL")
+                           ?? "http://localhost:7073",
+        };
+
+        var json = JsonSerializer.Serialize(
+            config.Where(kv => !string.IsNullOrWhiteSpace(kv.Value)).ToDictionary(kv => kv.Key, kv => kv.Value),
+            new JsonSerializerOptions { WriteIndented = true });
+
+        File.WriteAllText(Path.Combine(dataDir, "ark.json"), json);
+    }
+
+    public const string SolverUrlVariable = "ARKADE_E2E_SOLVER_URL";
 
     public void Dispose()
     {

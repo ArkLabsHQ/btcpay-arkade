@@ -1,4 +1,5 @@
 using BTCPayServer.Payments;
+using BTCPayServer.Plugins.ArkPayServer.Lightning;
 using BTCPayServer.Services.Invoices;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
@@ -6,9 +7,18 @@ using NBitcoin;
 
 namespace BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 
-public class ArkadePaymentLinkExtension(IServiceProvider serviceProvider) : IPaymentLinkExtension
+public class ArkadePaymentLinkExtension : IPaymentLinkExtension
 {
-    private readonly IServiceProvider _serviceProvider = serviceProvider;
+    private readonly IServiceProvider _serviceProvider;
+    private readonly ArkadeLightningAvailabilityService _availability;
+
+    public ArkadePaymentLinkExtension(
+        IServiceProvider serviceProvider,
+        ArkadeLightningAvailabilityService availability)
+    {
+        _serviceProvider = serviceProvider;
+        _availability = availability;
+    }
     public PaymentMethodId PaymentMethodId { get; } = ArkadePlugin.ArkadePaymentMethodId;
 
     public string GetPaymentLink(PaymentPrompt prompt, IUrlHelper? urlHelper)
@@ -49,15 +59,29 @@ public class ArkadePaymentLinkExtension(IServiceProvider serviceProvider) : IPay
         {
             var handler = _serviceProvider.GetRequiredService<ArkadePaymentMethodHandler>();
             var details = handler.ParsePaymentPromptDetails(prompt.Details);
-            if (!string.IsNullOrEmpty(details.BoardingAddress))
+
+            if (!string.IsNullOrEmpty(details.SwapHtlcAddress))
+            {
+                builder.WithOnchainAddress(details.SwapHtlcAddress);
+
+                // The solver's number rather than the invoice's, though a swap is only offered when the
+                // two agree: the HTLC takes one output of exactly this value or the swap is dead and the
+                // money waits for a refund.
+                if (details.SwapFundAmountSats is { } exact)
+                {
+                    builder.WithAmount(Money.Satoshis(exact).ToUnit(MoneyUnit.BTC));
+                }
+            }
+            else if (!string.IsNullOrEmpty(details.BoardingAddress))
             {
                 builder.WithOnchainAddress(details.BoardingAddress);
             }
         }
         
-        // Prefer LN over LNURL. Arkade no longer provides Lightning itself, so this prompt
-        // belongs to another backend and carries its own limits.
-        if (ln is not null)
+        // Add the Lightning invoice when there is one (preferred over LNURL). A store with no Lightning
+        // method has no prompt to read: the availability check answers for the corridor, not for whether
+        // this invoice was offered one.
+        if (ln is not null && ShouldIncludeLightning(prompt).Result)
         {
             builder.WithLightning(ln.Destination);
         }
@@ -71,5 +95,11 @@ public class ArkadePaymentLinkExtension(IServiceProvider serviceProvider) : IPay
         }
 
         return builder.Build();
+    }
+
+    private async Task<bool> ShouldIncludeLightning(PaymentPrompt prompt)
+    {
+        return await _availability.ShouldOfferLightningAsync(
+            prompt.ParentEntity.StoreId, CancellationToken.None);
     }
 }

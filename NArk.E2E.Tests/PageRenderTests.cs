@@ -27,6 +27,8 @@ public class PageRenderTests : PlaywrightBaseTest
     [InlineData("send")]
     [InlineData("spend")]
     [InlineData("contracts")]
+    [InlineData("swaps")]
+    [InlineData("lightning-swaps")]
     public async Task PluginPage_Returns200(string subpath)
     {
         _fixture.Initialize(this);

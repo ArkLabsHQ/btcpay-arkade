@@ -9,6 +9,8 @@ using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NArk.Abstractions.VTXOs;
+using NArk.ArkadeIntents;
+using NArk.ArkadeIntents.Models;
 using NArk.Core.Transport;
 using NBitcoin;
 using NBXplorer;
@@ -29,7 +31,8 @@ public class ArkContractInvoiceListener(
     IContractStorage contractStorage,
     PaymentService paymentService,
     IVtxoStorage vtxoStorage,
-    ILogger<ArkContractInvoiceListener> logger)
+    ILogger<ArkContractInvoiceListener> logger,
+    IArkadeIntentStorage? intentStorage = null)
     : IHostedService
 {
     private readonly Channel<string> _checkInvoices = Channel.CreateUnbounded<string>();
@@ -44,8 +47,10 @@ public class ArkContractInvoiceListener(
         // Subscribe to NNark's storage events directly
         vtxoStorage.VtxosChanged += OnVtxoChanged;
 
+
         _ = PollAllInvoices(cancellationToken);
     }
+
 
     private async Task OnInvoiceEvent(InvoiceEvent invoiceEvent)
     {
@@ -111,7 +116,8 @@ public class ArkContractInvoiceListener(
                 Script = vtxo.Script,
                 SeenAt = vtxo.CreatedAt
             };
-            await HandlePaymentData(vtxoEntity, inv, arkadePaymentMethodHandler, paymentDestination, isConfirmed, isBoarding);
+            await HandlePaymentData(vtxoEntity, inv, arkadePaymentMethodHandler, paymentDestination, isConfirmed, isBoarding,
+                await SwapCreditSatsAsync(inv, vtxo));
         }
         catch (Exception ex)
         {
@@ -129,10 +135,26 @@ public class ArkContractInvoiceListener(
         return Task.CompletedTask;
     }
     
-    private async Task HandlePaymentData(VtxoEntity vtxo, InvoiceEntity invoice, ArkadePaymentMethodHandler handler, string? destination = null, bool isConfirmed = true, bool isBoarding = false)
+    // What the payer sent, when this VTXO is a swap's claim: the solver's fee came out of it, so the
+    // amount that lands is short of the order by that fee. Mirrors the Lightning corridor, where BTCPay
+    // credits the invoice the payer paid rather than what reaches the wallet.
+    private async Task<long?> SwapCreditSatsAsync(InvoiceEntity invoice, ArkVtxo vtxo)
+    {
+        if (intentStorage is null
+            || GetListenedArkadeInvoice(invoice)?.Details is not { SwapId: { } swapId } details
+            || await intentStorage.GetArkadeSwapIntent(swapId) is not { } swap
+            || (long)vtxo.Amount != swap.WantAmount.Satoshi)
+            return null;
+
+        return swap.OfferAmount.Satoshi;
+    }
+
+    private async Task HandlePaymentData(VtxoEntity vtxo, InvoiceEntity invoice, ArkadePaymentMethodHandler handler, string? destination = null, bool isConfirmed = true, bool isBoarding = false, long? creditSats = null)
     {
         var pmi = ArkadePlugin.ArkadePaymentMethodId;
-        var details = new ArkadePaymentData($"{vtxo.TransactionId}:{vtxo.TransactionOutputIndex}", destination, isBoarding);
+        var details = new ArkadePaymentData(
+            $"{vtxo.TransactionId}:{vtxo.TransactionOutputIndex}", destination, isBoarding,
+            OnchainSwapInvoicePolicy.SolverFee(creditSats, vtxo.Amount));
         var status = isConfirmed ? PaymentStatus.Settled : PaymentStatus.Processing;
 
         // Serialize payment registration to prevent duplicate inserts from concurrent VTXO events
@@ -147,7 +169,7 @@ public class ArkContractInvoiceListener(
             var paymentData = new PaymentData
             {
                 Status = status,
-                Amount = Money.Satoshis(vtxo.Amount).ToDecimal(MoneyUnit.BTC),
+                Amount = Money.Satoshis(creditSats ?? vtxo.Amount).ToDecimal(MoneyUnit.BTC),
                 Created = vtxo.SeenAt,
                 Id = details.Outpoint,
                 Currency = "BTC",
@@ -222,16 +244,36 @@ public class ArkContractInvoiceListener(
         // the Payment one (derived from the prompt's details), so the
         // boarding contract stayed Active forever after settlement. Find every
         // contract carrying this invoice's source tag and toggle them all.
+        // Pre-migration HTLC contracts carry a different "swap:{id}" Source tag. Nothing drives
+        // their activity state any more — the swaps package that did is gone — so they are left to
+        // the sweeper, which finds them by contract type rather than by tag.
         var walletId = listenedContract.Details.WalletId;
         var invoiceSource = $"invoice:{invoice.Id}";
+        var payoutScript = await SwapPayoutScriptAsync(listenedContract.Details);
+        var payoutActivity = payoutScript is null
+            ? activityState
+            : OnchainSwapInvoicePolicy.PayoutActivity(invoice.Status, await SwapStatusAsync(listenedContract.Details));
         var contracts = await contractStorage.GetContracts(
             walletIds: [walletId],
             cancellationToken: CancellationToken.None);
         foreach (var c in contracts.Where(c => c.Metadata?.GetValueOrDefault("Source") == invoiceSource))
         {
-            await contractStorage.UpdateContractActivityState(walletId, c.Script, activityState);
+            await contractStorage.UpdateContractActivityState(
+                walletId, c.Script, c.Script == payoutScript ? payoutActivity : activityState);
         }
     }
+
+    private async Task<string?> SwapPayoutScriptAsync(ArkadePromptDetails details)
+    {
+        if (details.SwapId is null) return null;
+        var network = (await clientTransport.GetServerInfoAsync()).Network;
+        return details.GetContract(network)?.GetScriptPubKey().ToHex();
+    }
+
+    private async Task<ArkadeSwapIntentStatus?> SwapStatusAsync(ArkadePromptDetails details) =>
+        details.SwapId is { } id && intentStorage is not null
+            ? (await intentStorage.GetArkadeSwapIntent(id))?.Status
+            : null;
 
     private ArkadeListenedContract? GetListenedArkadeInvoice(InvoiceEntity invoice)
     {

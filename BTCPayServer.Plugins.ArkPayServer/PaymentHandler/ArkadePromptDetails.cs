@@ -39,6 +39,13 @@ public record ArkadePromptDetails
     public string? BoardingAddress { get; init; }
     public string? BoardingContractString { get; init; }
 
+    public string? SwapHtlcAddress { get; init; }
+
+    // Exactly this, in one output: the solver can't combine a top-up, and overfunding is only returned via L1 refund.
+    public long? SwapFundAmountSats { get; init; }
+
+    public string? SwapId { get; init; }
+
     /// <summary>
     /// Parses the contract with the specified network.
     /// </summary>

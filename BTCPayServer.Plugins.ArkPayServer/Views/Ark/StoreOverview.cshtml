@@ -97,6 +97,43 @@
 
                 <!-- Right Column: Features -->
                 <div class="col-md-6">
+                    @if (Model.SolverConfigured)
+                    {
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="text-muted">Lightning</span>
+                            <form asp-action="@(Model.IsLightningEnabled ? "DisableLightning" : "EnableLightning")" method="post" asp-route-storeId="@storeId" class="d-inline">
+                                <button type="submit" class="btn btn-sm  badge  text-primary @(Model.IsLightningEnabled ? "btn-outline-secondary" : "btn-outline-primary")">
+                                    @(Model.IsLightningEnabled ? "Disable" : "Enable")
+                                </button>
+                            </form>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="text-muted">Lightning</span>
+                            <span class="badge text-bg-secondary" title="Requires an Arkade swap solver — configure solver-relay and solver-pubkey in ark.json">Unavailable</span>
+                        </div>
+                    }
+
+                    @if (Model.SolverConfigured)
+                    {
+                        var senderPays = Model.SwapFeePayer == ArkadeSwapFeePayer.Sender;
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="text-muted">Swap Fee</span>
+                            <form asp-action="UpdateWalletConfig" method="post" asp-route-storeId="@storeId" class="d-inline">
+                                <button type="submit" name="command" value="toggle-swap-fee-payer"
+                                        class="btn btn-sm badge text-primary @(senderPays ? "btn-outline-warning" : "btn-outline-secondary")"
+                                        data-testid="toggle-swap-fee-payer-btn"
+                                        title="@(senderPays
+                                                   ? "The sender pays the solver's fee: Lightning invoices exceed the order amount, which LNURL and checkout wallets (LUD-06) may refuse, and the onchain swap is not offered — onchain payers board instead. Click to pay it yourself."
+                                                   : "You pay the solver's fee: payers are billed the order amount on every rail and the fee comes out of what you receive. Click to bill the sender instead.")">
+                                    @(senderPays ? "Sender pays" : "Store pays")
+                                </button>
+                            </form>
+                        </div>
+                    }
+
                     <div class="d-flex justify-content-between align-items-center mb-2">
                         <span class="text-muted">Auto-Sweep</span>
                         @if (Model.CanManagePrivateKeys)
@@ -147,6 +184,15 @@
                                     data-bs-toggle="modal" data-bs-target="#boardingModal"
                                     title="Include a P2TR on-chain boarding address on invoices when no BTC on-chain payment method is configured">
                                 @(Model.BoardingEnabled ? "Enabled" : "Disabled")
+                            </button>
+                        </div>
+
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="text-muted">Onchain swap</span>
+                            <button type="button" class="btn btn-sm badge btn-outline-secondary text-primary"
+                                    data-bs-toggle="modal" data-bs-target="#boardingModal"
+                                    title="Settle onchain payments through a solver instead of waiting for a batch. Faster, and the payer must send the exact amount in one transaction.">
+                                @(Model.OnchainSwapEnabled ? "Enabled" : "Disabled")
                             </button>
                         </div>
                     }
@@ -422,6 +468,43 @@
                             <div class="form-text">Invoices below this amount will not include a boarding address. Minimum: @ArkadePaymentMethodConfig.P2trDustLimitSats sats (P2TR dust threshold).</div>
                         </div>
                     </div>
+                        <hr />
+                        <div class="mb-3">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <strong>Onchain swap</strong>
+                                    <div class="form-text mb-0">
+                                        Settles through a solver instead of waiting for a batch, so the payment
+                                        confirms in Arkade far sooner. The payer must send the <strong>exact</strong>
+                                        amount in a single transaction — anything else is returned by refund rather
+                                        than settled. Offered only when a solver quotes the pair; otherwise the
+                                        invoice boards as usual.
+                                    </div>
+                                </div>
+                                <div class="ms-3 flex-shrink-0">
+                                    @if (Model.OnchainSwapEnabled)
+                                    {
+                                        <button type="submit" name="command" value="disable-onchain-swap" class="btn btn-sm btn-outline-danger">
+                                            Disable
+                                        </button>
+                                    }
+                                    else
+                                    {
+                                        <button type="submit" name="command" value="enable-onchain-swap" class="btn btn-sm btn-outline-primary">
+                                            Enable
+                                        </button>
+                                    }
+                                </div>
+                            </div>
+                            @if (Model.OnchainSwapEnabled)
+                            {
+                                <div class="form-text text-warning mt-2">
+                                    Disabling boarding also disables this: a swap that never settles refunds to the
+                                    invoice's boarding address, so it cannot run without one.
+                                </div>
+                            }
+                        </div>
+
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                         @if (Model.BoardingEnabled)

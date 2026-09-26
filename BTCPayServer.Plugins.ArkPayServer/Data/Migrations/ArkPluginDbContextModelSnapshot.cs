@@ -189,6 +189,72 @@ namespace BTCPayServer.Plugins.ArkPayServer.Data.Migrations
                     b.ToTable("Wallets", "BTCPayServer.Plugins.Ark");
                 });
 
+            modelBuilder.Entity("NArk.Storage.EfCore.Entities.ArkadeSwapIntentEntity", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("FromAssetId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Metadata")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<long>("OfferAmount")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("PaymentHash")
+                        .HasColumnType("text");
+
+                    b.Property<long?>("RefundLocktime")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("SpentTxid")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("SwapAddress")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("SwapPkScript")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ToAssetId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("WalletId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<long>("WantAmount")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PaymentHash");
+
+                    b.HasIndex("SwapPkScript");
+
+                    b.HasIndex("WalletId", "Status");
+
+                    b.ToTable("ArkadeSwapIntents", "BTCPayServer.Plugins.Ark");
+                });
+
             modelBuilder.Entity("NArk.Storage.EfCore.Entities.VtxoEntity", b =>
                 {
                     b.Property<string>("TransactionId")

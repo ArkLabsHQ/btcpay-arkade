@@ -1,5 +1,13 @@
 @using BTCPayServer.Plugins.ArkPayServer
+@using BTCPayServer.Plugins.ArkPayServer.Lightning
+@inject ArkadeLightningAvailabilityService Availability
 @model BTCPayServer.Models.InvoicingModels.CheckoutModel
+
+@{
+    // Whether to offer Lightning here at all: the store's own configuration, plus whether a solver
+    // is listed to settle it. The amount is not vetted — a solver quotes its terms per request.
+    var shouldShowLightning = await Availability.ShouldOfferLightningAsync(Model.StoreId, CancellationToken.None);
+}
 
 <template id="@ArkadePlugin.CheckoutBodyComponentName">
     <div class="payment-box">
@@ -18,10 +26,17 @@
         <div v-if="onchainAddress" class="input-group mt-3" data-testid="onchain-address">
             <div class="form-floating" id="OnchainAddress_@Model.PaymentMethodId">
                 <vc:truncate-center text="onchainAddress" is-vue="true" padding="15" elastic="true" classes="form-control-plaintext" />
-                <label>{{ hasBoardingAddress ? 'Bitcoin Address (Boarding)' : 'Bitcoin Address' }}</label>
+                <label>{{ onchainLabel }}</label>
             </div>
         </div>
-        <div v-if="lightning" class="input-group mt-3" data-testid="bolt11-invoice">
+        @* The swap will not accept a near miss: the solver looks for one output of exactly this
+           value, so an amount typed by hand is the difference between a payment and a wait for a
+           refund. Said here because the BIP21 amount is invisible to anyone copying the address. *@
+        <div v-if="hasSwapAddress" class="alert alert-warning mt-3 mb-0 py-2 px-3" data-testid="swap-exact-amount">
+            <small v-if="swapFundAmountBtc">Send exactly <strong class="font-monospace">{{ swapFundAmountBtc }} BTC</strong> to this address, in a single transaction. It includes the swap fee.</small>
+            <small v-else v-t="'arkade_swap_exact_amount'">Send exactly this amount, in a single transaction.</small>
+        </div>
+        <div v-if="lightning && shouldShowLightning" class="input-group mt-3" data-testid="bolt11-invoice">
             <div class="form-floating" id="Lightning_@Model.PaymentMethodId">
                 <vc:truncate-center text="lightning" is-vue="true" padding="15" elastic="true" classes="form-control-plaintext" />
                 <label v-t="'lightning'"></label>
@@ -53,10 +68,19 @@
                 nfcUrl: @Safe.Json(Url.ActionAbsolute(Context.Request, "SubmitLNURLWithdrawForInvoice", "NFC").ToString()),
                 nfcAmount: 0,
                 nfcSubmitting: false,
-                hasBoardingAddress: @Safe.Json(Model.AdditionalData.ContainsKey("hasBoardingAddress") && (bool)Model.AdditionalData["hasBoardingAddress"])
+                shouldShowLightning: @Safe.Json(shouldShowLightning),
+                hasBoardingAddress: @Safe.Json(Model.AdditionalData.ContainsKey("hasBoardingAddress") && (bool)Model.AdditionalData["hasBoardingAddress"]),
+                hasSwapAddress: @Safe.Json(Model.AdditionalData.ContainsKey("hasSwapAddress") && (bool)Model.AdditionalData["hasSwapAddress"]),
+                swapFundAmountBtc: @Safe.Json(Model.AdditionalData.TryGetValue("swapFundAmountBtc", out var swapFund) ? swapFund.ToString() : null)
             };
         },
         computed: {
+            onchainLabel () {
+                // Three different things arrive at this field, and which one it is changes how long
+                // the payer waits and how exact they have to be.
+                if (this.hasSwapAddress) return 'Bitcoin Address (Swap)';
+                return this.hasBoardingAddress ? 'Bitcoin Address (Boarding)' : 'Bitcoin Address';
+            },
             onchainAddress () {
                 // Extract onchain address from bitcoin: URI (bitcoin:ADDRESS?...)
                 const match = this.model.invoiceBitcoinUrl?.match(/^bitcoin:([a-zA-Z0-9]+)/i);

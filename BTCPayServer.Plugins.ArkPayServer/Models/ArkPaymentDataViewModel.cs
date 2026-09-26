@@ -10,6 +10,8 @@ public class ArkPaymentDataViewModel
     public string Currency { get; set; }
     public bool IsBoarding { get; set; }
 
+    public long? SolverFeeSats { get; set; }
+
     /// <summary>
     /// True for a boarding payment whose on-chain funding tx is still
     /// unconfirmed (payment status Processing). Such a payment is not yet

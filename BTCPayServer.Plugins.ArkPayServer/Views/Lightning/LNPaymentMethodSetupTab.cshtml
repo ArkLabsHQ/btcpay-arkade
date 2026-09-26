@@ -1,0 +1,39 @@
+@model BTCPayServer.Models.StoreViewModels.LightningNodeViewModel
+@{
+    if (Model.CryptoCode != "BTC")
+    {
+        return;
+    }
+}
+
+<script>
+    document.addEventListener("DOMContentLoaded", function () {
+       
+       const customNodeAccordian = document.getElementById("CustomNodeSupport");
+       const template = document.getElementById("arkade");
+       customNodeAccordian.appendChild(template.content.cloneNode(true));
+        
+    });
+</script>
+
+<template id="arkade">
+    <div class="accordion-item">
+        <h2 class="accordion-header" id="CustomArkadeHeader">
+            <button type="button" class="accordion-button collapsed" data-bs-toggle="collapse" data-bs-target="#CustomArkadeContent" aria-controls="CustomArkadeContent" aria-expanded="false">
+                <span><strong>Arkade</strong> via Arkade intents</span>
+                <vc:icon symbol="caret-down"/>
+            </button>
+        </h2>
+        <div id="CustomArkadeContent" class="accordion-collapse collapse" aria-labelledby="CustomArkadeHeader" data-bs-parent="#CustomNodeSupport">
+            <div class="accordion-body">
+                <ul class="pb-2">
+                    <li>
+                        <code><b>type=</b>arkade;<b>wallet-id=</b>xxx...</code>
+                    </li>
+                </ul>
+                <p class="my-2">Ensure you have first created an Arkade wallet in your store</p>
+            </div>
+        </div>
+    </div>
+</template>
+

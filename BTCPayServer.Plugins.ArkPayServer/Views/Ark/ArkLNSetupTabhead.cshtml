@@ -1,0 +1,49 @@
+﻿@using BTCPayServer.Models.StoreViewModels
+@model BTCPayServer.Models.StoreViewModels.LightningNodeViewModel
+
+@{
+       var storeId = Model.StoreId;
+       var url = Url.Action("EnableLightning", "Ark", new
+       {
+           storeId,
+           ConfigureLN = true
+       });
+       var isSelected = Model.LightningNodeType is LightningNodeType.Custom && Model.ConnectionString?.StartsWith("type=arkade", StringComparison.InvariantCultureIgnoreCase) is true;
+}
+
+
+<input asp-for="LightningNodeType" value="LightningNodeType-Arkade" type="radio" id="LightningNodeType-Arkade" data-bs-toggle="pill"
+       data-bs-target="#CustomSetup" role="tab" aria-controls="ArkadeSetup"
+       aria-selected="@(isSelected ? "true" : "false")"
+       onclick="location.href='@url'"
+       class="@(Model.LightningNodeType == LightningNodeType.Custom ? "active" : "")">
+<label asp-for="LightningNodeType" for="@($"LightningNodeType-Arkade")" text-translate="true">Use Arkade</label>
+
+
+@{
+       <script>
+    const triggerEl = document.getElementById('LightningNodeType-Arkade')
+
+    
+    if (@isSelected) {
+        
+        // deactivate currently active tab and activate this tab
+        const activeEl = document.querySelector('input[name="LightningNodeType"]:checked')
+        if (activeEl) {
+            activeEl.removeAttribute('checked')
+            activeEl.setAttribute('aria-selected', 'false')
+            document.querySelector('#LightningNodeTypeTabs .tab-pane.active').classList.remove('active', 'show')
+            triggerEl.setAttribute('checked', 'checked')
+            triggerEl.setAttribute('aria-selected', 'true')
+           
+        }
+    }
+    
+    // document.addEventListener('DOMContentLoaded', () => {
+    //     triggerEl.addEventListener('click', () => {
+    //         //if our new input is now checked, 
+    //        
+    //     })
+    // })
+</script>
+}

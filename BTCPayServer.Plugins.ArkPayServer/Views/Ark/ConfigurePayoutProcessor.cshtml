@@ -5,7 +5,7 @@
 @model BTCPayServer.Plugins.ArkPayServer.Models.ConfigureArkPayoutProcessorViewModel
 @{
     Layout = "_Layout";
-    var storeId = Context.GetStoreData().Id;
+    var storeId = Context.GetStoreDataOrNull()?.Id;
     ViewData.SetActivePage(StoreNavPages.PayoutProcessors, "Arkade Payout Processor", storeId);
 }
 

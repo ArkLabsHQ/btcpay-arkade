@@ -99,7 +99,7 @@ public enum SpendType
 {
     Offchain,  // Direct VTXO transfer (Ark to Ark, non-recoverable)
     Batch,     // Join Ark batch (onchain output or recoverable coins)
-    Swap       // Lightning swap via Boltz
+    Swap       // Lightning swap through a solver
 }
 
 public enum DestinationType

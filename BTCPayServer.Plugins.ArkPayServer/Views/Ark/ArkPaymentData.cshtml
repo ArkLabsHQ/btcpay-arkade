@@ -39,9 +39,18 @@
 		                 || (!string.IsNullOrEmpty(promptDetails.BoardingAddress)
 		                     && string.Equals(paymentDestination, promptDetails.BoardingAddress, StringComparison.OrdinalIgnoreCase));
 
-		var address = isBoarding && !string.IsNullOrEmpty(promptDetails.BoardingAddress)
-			? promptDetails.BoardingAddress
-			: paymentDestination;
+		// A swap's L1 HTLC is a third destination this invoice can legitimately be paid at, and it
+		// belongs to neither of the two above: not the Arkade contract, and not the boarding
+		// address — which on that path is only where a failed swap's refund lands. Without this the
+		// payment renders as an unrecognised destination.
+		var isSwap = !string.IsNullOrEmpty(promptDetails.SwapHtlcAddress)
+		             && string.Equals(paymentDestination, promptDetails.SwapHtlcAddress, StringComparison.OrdinalIgnoreCase);
+
+		var address = isSwap
+			? promptDetails.SwapHtlcAddress
+			: isBoarding && !string.IsNullOrEmpty(promptDetails.BoardingAddress)
+				? promptDetails.BoardingAddress
+				: paymentDestination;
 		var contractString = isBoarding && !string.IsNullOrEmpty(promptDetails.BoardingContractString)
 			? promptDetails.BoardingContractString
 			: promptDetails.ContractString;
@@ -57,6 +66,7 @@
 			IsBoarding = isBoarding,
 			// Boarding payment stays Processing until its on-chain funding tx confirms.
 			IsUnconfirmed = isBoarding && payment.Status == PaymentStatus.Processing,
+			SolverFeeSats = paymentData.SolverFeeSats,
 		};
 		return vm;
 	}).Where(c => c != null).ToList();
@@ -124,6 +134,14 @@
 
                     <td class="payment-value text-end text-nowrap">
                         <span data-sensitive class="text-success">@DisplayFormatter.Currency(payment.Amount, payment.Currency)</span>
+                        @if (payment.SolverFeeSats is { } feeSats)
+                        {
+                            <br />
+                            <span class="text-secondary small" data-sensitive
+                                  title="The invoice is credited what the payer sent; the solver kept this much, so the wallet received the remainder.">
+                                &minus;@feeSats.ToString("N0") sats swap fee
+                            </span>
+                        }
                     </td>
                 </tr>
             }

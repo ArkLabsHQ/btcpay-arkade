@@ -83,5 +83,5 @@ First launch builds the whole BTCPay solution — allow ~5 minutes before the po
   `ARKD_VTXO_TREE_EXPIRY=7200 ARKD_UNILATERAL_EXIT_DELAY=512 ARKD_PUBLIC_UNILATERAL_EXIT_DELAY=512 ARKD_BOARDING_EXIT_DELAY=1024 ARKD_CHECKPOINT_EXIT_DELAY=512 node submodules/NNark/regtest/regtest.mjs start --profile delegate`
   — this is what the `e2e` workflow does. Don't do it when testing unilateral exit: it stretches
   those delays from a few blocks to 8.5 minutes.
-- Passing `--profile boltz` — that profile is gone along with the swaps package. Valid names live in `submodules/NNark/regtest/lib/profiles.mjs`.
-- Expecting Lightning at checkout — the plugin no longer provides it at all (the Boltz rail was removed); it returns with the Arkade intent corridors.
+- Passing `--profile boltz` — that profile is gone along with the swaps package; the peer Lightning node it carried is now `--profile lightning`, and the node's container is `lnd-peer`. Valid names live in `submodules/NNark/regtest/lib/profiles.mjs`.
+- Expecting Lightning at checkout on the `delegate` profile alone — Lightning is settled over the Arkade intent corridors, which need a covenant emulator and a swap solver beside the stack (`--profile emulator,covclaimd,solver`) and `emulator` / `solver-relay` / `solver-pubkey` in `ark.json`. Without them the corridors register and refuse at the point of use, and checkout offers no BOLT11.

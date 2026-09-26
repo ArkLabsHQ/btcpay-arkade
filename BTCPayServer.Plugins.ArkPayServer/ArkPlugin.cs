@@ -2,10 +2,12 @@ using BTCPayServer.Abstractions.Contracts;
 using BTCPayServer.Abstractions.Extensions;
 using BTCPayServer.Abstractions.Models;
 using BTCPayServer.Configuration;
+using BTCPayServer.Lightning;
 using BTCPayServer.Payments;
 using BTCPayServer.PayoutProcessors;
 using BTCPayServer.Payouts;
 using BTCPayServer.Plugins.ArkPayServer.Data;
+using BTCPayServer.Plugins.ArkPayServer.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.Notifications;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Payouts.Ark;
@@ -19,21 +21,25 @@ using NArk.Abstractions.Blockchain;
 using NArk.Abstractions.Intents;
 using NArk.Abstractions.Safety;
 using NArk.Abstractions.Wallets;
+using NArk.Arkade.Hosting;
+using NArk.ArkadeIntents;
+using NArk.ArkadeIntents.Hosting;
 using NArk.Blockchain;
 using NArk.Hosting;
 using NArk.Core.Models.Options;
 using NArk.Core.Services;
 using NArk.Storage.EfCore.Entities;
 using NArk.Storage.EfCore.Hosting;
+using NArk.ArkadeIntents.Services;
 using NBitcoin;
 using System.Text.Json;
 using BTCPayServer.Plugins.ArkPayServer.Services.Policies;
-using BTCPayServer.Plugins.ArkPayServer.Services.Settlement;
+using NArk.Swaps.Policies;
+using NArk.Swaps.Transformers;
 using Microsoft.EntityFrameworkCore;
 using NArk.Core.Sweeper;
 using NArk.Core.Transformers;
-using NArk.Swaps.Policies;
-using NArk.Swaps.Transformers;
+using BTCPayServer.Plugins.ArkPayServer.Services.Settlement;
 using NArk.Abstractions.Contracts;
 using NArk.Abstractions.Settlement;
 
@@ -76,14 +82,23 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         // UI extensions
         RegisterUIExtensions(services);
 
-        // Pre-drop Boltz VHTLCs, kept spendable and sweepable.
-        RegisterLegacyVhtlcServices(services);
+        // The Arkade intent corridors — how this plugin does Lightning.
+        RegisterArkadeIntentServices(services, pluginServices);
+
+        // The two pieces that keep a pre-migration VHTLC drainable, and nothing else.
+        RegisterLegacyVhtlcDrain(services);
+
     }
 
     #region Service Registration
 
     private static void RegisterBtcPayServices(IServiceCollection services)
     {
+        services.AddSingleton<ArkLightningSpendKeyService>();
+        services.AddHostedService<ArkLightningSpendKeyMigration>();
+        services.AddSingleton<ILightningConnectionStringHandler, ArkLightningConnectionStringHandler>();
+        services.AddSingleton<ArkadeLightningAvailabilityService>();
+
         services.AddSingleton<ArkadePaymentMethodHandler>();
         services.AddSingleton<IPaymentMethodHandler>(sp => sp.GetRequiredService<ArkadePaymentMethodHandler>());
 
@@ -119,11 +134,14 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
             {
                 var pattern = $"%{searchText}%";
                 return query.Where(c =>
-                    Microsoft.EntityFrameworkCore.EF.Functions.ILike(c.Script, pattern) ||
-                    Microsoft.EntityFrameworkCore.EF.Functions.ILike(c.Type, pattern) ||
-                    Microsoft.EntityFrameworkCore.EF.Functions.ILike(c.MetadataJson ?? "", pattern));
+                    EF.Functions.ILike(c.Script, pattern) ||
+                    EF.Functions.ILike(c.Type, pattern) ||
+                    EF.Functions.ILike(c.MetadataJson ?? "", pattern));
             };
         });
+
+        // Swap persistence is opt-in on its own package now, and the corridors are what read it.
+        services.AddArkadeEfCoreStorage();
     }
 
     private static void RegisterNArkCore(IServiceCollection services, ArkNetworkConfig networkConfig)
@@ -228,7 +246,7 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
             });
 
         // Wallet provider
-        services.AddSingleton<NArk.Abstractions.Wallets.IWalletProvider, NArk.Core.Wallet.DefaultWalletProvider>();
+        services.AddSingleton<IWalletProvider, NArk.Core.Wallet.DefaultWalletProvider>();
 
         // BoardingUtxoSyncService consumes IBitcoinBlockchain.GetUtxosAsync — the
         // NBXplorer-backed registration above implements it for boarding lookup.
@@ -309,6 +327,7 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
 
         services.AddSingleton<ArkContractInvoiceListener>();
         services.AddHostedService(sp => sp.GetRequiredService<ArkContractInvoiceListener>());
+        services.AddHostedService<ArkadeOnchainSwapInvoiceWatcher>();
 
         services.AddSingleton<BoardingTransactionListener>();
         services.AddHostedService(sp => sp.GetRequiredService<BoardingTransactionListener>());
@@ -329,19 +348,45 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
         services.AddUIExtension("dashboard", "/Views/Ark/ArkActivityDashboardWidget.cshtml");
     }
 
-    /// <summary>
-    /// Keeps VHTLCs funded before the Boltz drop spendable and sweepable. They used to arrive with
-    /// <c>AddArkSwapServices</c>; neither is Boltz-specific. Drop them only once no VHTLC holds a
-    /// balance, or an in-flight refund is stranded silently.
-    /// </summary>
-    private static void RegisterLegacyVhtlcServices(IServiceCollection services)
+    // The emulator gates the intent services (its key is baked into every lockup script); a missing
+    // solver only fails at point of use. The LNURL filter is unconditional: it must run when corridors are dark.
+    private static void RegisterArkadeIntentServices(
+        IServiceCollection services, PluginServiceCollection pluginServices)
     {
-        // [Obsolete] upstream because nothing should create swaps any more; draining the ones that
-        // exist is what it is still for.
-#pragma warning disable CS0618
+        var solverOptions = GetSolverOptions(pluginServices);
+        services.AddSingleton(solverOptions);
+
+        var networkType = DefaultConfiguration.GetNetworkType(
+            pluginServices.BootstrapServices.GetRequiredService<IConfiguration>());
+        var registryNetwork = ArkadeSolverSelector.RegistryNetworkName(networkType);
+
+        // GetService: SolverDiscoveryService only exists once the corridors register below.
+        services.AddSingleton(sp => new ArkadeSolverSelector(
+            solverOptions, registryNetwork, sp.GetService<SolverDiscoveryService>()));
+        services.AddSingleton<ArkadeSolverService>();
+        services.AddSingleton<ArkadeSwapRefresher>();
+
+        services.AddSingleton<ArkadeLNURLPayRequestFilter>();
+        services.AddSingleton<IPluginHookFilter>(sp => sp.GetRequiredService<ArkadeLNURLPayRequestFilter>());
+
+        services.AddUIExtension("ln-payment-method-setup-tabhead", "/Views/Ark/ArkLNSetupTabhead.cshtml");
+
+        if (!ArkadeSolverOptions.HasPinnedEmulatorKey(networkType)) return;
+
+        // Signerless claims are covclaimd's, which runs its own emulator; the lockup carries the leaf
+        // either way, since building it needs the pinned key rather than an endpoint.
+        services.AddArkadeIntentsServices(new ArkadeIntentsOptions { SignerlessFallback = false });
+    }
+
+    // Nothing creates VHTLCs any more, but these keep one still holding sats drainable (claim with the
+    // preimage, refund past locktime). Unconditional so clearing old provider settings can't strand funds.
+    private static void RegisterLegacyVhtlcDrain(IServiceCollection services)
+    {
+        // Obsolete upstream on purpose: this path exists to be emptied, not built on.
+#pragma warning disable CS0612 // Type or member is obsolete
         services.AddSingleton<ISweepPolicy, SwapSweepPolicy>();
-#pragma warning restore CS0618
         services.AddSingleton<IContractTransformer, VHTLCContractTransformer>();
+#pragma warning restore CS0612
     }
 
     #endregion
@@ -383,6 +428,21 @@ public class ArkadePlugin : BaseBTCPayServerPlugin
             ElectrumWsUri: !string.IsNullOrEmpty(fileConfig?.ElectrumWsUri) ? fileConfig.ElectrumWsUri : preset.ElectrumWsUri,
             ElectrumTcpUri: !string.IsNullOrEmpty(fileConfig?.ElectrumTcpUri) ? fileConfig.ElectrumTcpUri : preset.ElectrumTcpUri
         );
+    }
+
+    // Read separately from ArkNetworkConfig because these keys are the plugin's, not the SDK's.
+    private static ArkadeSolverOptions GetSolverOptions(PluginServiceCollection pluginServices)
+    {
+        var configuration = pluginServices.BootstrapServices.GetRequiredService<IConfiguration>();
+        var networkType = DefaultConfiguration.GetNetworkType(configuration);
+        var preset = ArkadeSolverOptions.ForNetwork(networkType);
+
+        var dataDir = new DataDirectories().Configure(configuration).DataDir;
+        var configPath = Path.Combine(dataDir, "ark.json");
+        if (!File.Exists(configPath)) return preset;
+
+        var fileOptions = JsonSerializer.Deserialize<ArkadeSolverOptions>(File.ReadAllText(configPath));
+        return ArkadeSolverOptions.Merge(preset, fileOptions);
     }
 
     private static ArkNetworkConfig? GetNetworkPreset(ChainName networkType)

@@ -18,6 +18,12 @@ public class ArkWalletSettingsRequest
     public bool? BoardingEnabled { get; set; }
 
     /// <summary>
+    /// Offer the fast onchain path when a solver quotes it. Enabling it also enables boarding,
+    /// which is where a swap that never settles refunds to; disabling boarding disables this.
+    /// </summary>
+    public bool? OnchainSwapEnabled { get; set; }
+
+    /// <summary>
     /// Minimum boarding amount in satoshis (must be >= 330).
     /// </summary>
     public long? MinBoardingAmountSats { get; set; }

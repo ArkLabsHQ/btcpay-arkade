@@ -25,8 +25,12 @@ public static class DockerHelper
         return result.StandardOutput;
     }
 
+    /// <param name="container">
+    /// The node to mint on. The solver's own backend is <c>lnd</c>, and lnd refuses self-payments, so
+    /// a test that wants the invoice actually paid has to put one of the two legs on <c>lnd-peer</c>.
+    /// </param>
     public static async Task<string> CreateLndInvoice(long amtSats = 10000, int expirySecs = 30,
-        CancellationToken ct = default)
+        CancellationToken ct = default, string container = "lnd")
     {
         var args = new List<string>
         {
@@ -37,7 +41,7 @@ public static class DockerHelper
             args.AddRange(["--expiry", expirySecs.ToString(CultureInfo.InvariantCulture)]);
         }
 
-        var output = await Exec("lnd", args.ToArray(), ct);
+        var output = await Exec(container, args.ToArray(), ct);
         var invoice = JsonSerializer.Deserialize<JsonObject>(output)?["payment_request"]
                           ?.GetValue<string>()
                       ?? throw new InvalidOperationException($"Invoice creation on LND failed. Output: {output}");

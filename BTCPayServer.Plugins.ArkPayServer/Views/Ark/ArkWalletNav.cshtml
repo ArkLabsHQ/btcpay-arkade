@@ -7,7 +7,7 @@
 @using BTCPayServer.Services.Invoices
 @using BTCPayServer.Views.Stores
 @model BTCPayServer.Components.MainNav.MainNavViewModel
-@inject PaymentMethodHandlerDictionary HandlerDictionary 
+@inject PaymentMethodHandlerDictionary HandlerDictionary
 @{
     var config =
         Model.Store
@@ -64,6 +64,14 @@
                    asp-action="Contracts"
                    asp-route-storeId="@Model.Store.Id"
                    ext-translate="true">Contracts</a>
+            </li>
+            <li class="nav-item nav-item-sub">
+                <a id="StoreNav-Swaps"
+                   class="nav-link @ViewData.ActivePageClass("Swaps", "Ark")"
+                   asp-controller="Ark"
+                   asp-action="Swaps"
+                   asp-route-storeId="@Model.Store.Id"
+                   ext-translate="true">Swaps</a>
             </li>
             <li class="nav-item nav-item-sub">
                 <a id="StoreNav-Vtxos"

@@ -2,7 +2,9 @@ using System.Globalization;
 using BTCPayServer.Data;
 using BTCPayServer.Lightning;
 using BTCPayServer.Payments;
+using BTCPayServer.Payments.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.Exceptions;
+using BTCPayServer.Plugins.ArkPayServer.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Services.Invoices;
 using NArk.Abstractions;
@@ -25,15 +27,14 @@ public class ArkadeSpendingService(
     /// </summary>
     /// <param name="store">Store whose Arkade wallet should be used.</param>
     /// <param name="destination">
-    /// Destination string. Supported formats: bare Arkade address, or a BIP21 URI carrying one
-    /// (as the <c>ark</c> query parameter or as the URI host).
+    /// Destination string. Supported formats: bare Ark address, BIP21 URI (with <c>ark</c> query parameter
+    /// or Ark address host), Lightning BOLT11 invoice (optionally prefixed with <c>lightning:</c>).
     /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The Arkade transaction ID.</returns>
-    /// <exception cref="MalformedPaymentDestination">
-    /// The destination is not an Arkade address — including a BOLT11 invoice, which this wallet has
-    /// no rail to pay since Arkade Lightning was removed.
-    /// </exception>
+    /// <returns>
+    /// On-chain Ark transaction ID for non-Lightning payments. For Lightning payments returns <c>null</c>
+    /// because the payment hash is not surfaced through the current Lightning client API.
+    /// </returns>
     public Task<string?> Spend(StoreData store, string destination, CancellationToken cancellationToken)
         => Spend(store, destination, amountSats: null, inputOutpoints: null, cancellationToken);
 
@@ -42,24 +43,24 @@ public class ArkadeSpendingService(
     /// </summary>
     /// <param name="store">Store whose Arkade wallet should be used.</param>
     /// <param name="destination">
-    /// Destination string. Supported formats: bare Arkade address, or a BIP21 URI carrying one
-    /// (as the <c>ark</c> query parameter or as the URI host).
+    /// Destination string. Supported formats: bare Ark address, BIP21 URI (with <c>ark</c> query parameter
+    /// or Ark address host), Lightning BOLT11 invoice (optionally prefixed with <c>lightning:</c>).
     /// </param>
     /// <param name="amountSats">
     /// Optional amount in satoshis. When provided, overrides any amount embedded in the destination
-    /// (e.g. BIP21 <c>amount</c> query parameter). Required for bare Arkade addresses unless the address
-    /// is embedded inside a BIP21 URI with an amount.
+    /// (e.g. BIP21 <c>amount</c> query parameter). Required for bare Ark addresses unless the address is
+    /// embedded inside a BIP21 URI with an amount. Must be omitted for Lightning destinations because the
+    /// amount is fixed by the BOLT11 invoice.
     /// </param>
     /// <param name="inputOutpoints">
     /// Optional list of VTXO outpoints (in <c>txid:vout</c> form) to spend. When provided, the wallet's
-    /// automatic coin selection is bypassed and only the specified coins are used as inputs.
+    /// automatic coin selection is bypassed and only the specified coins are used as inputs. Must be
+    /// omitted for Lightning destinations because the Lightning client selects its own coins.
     /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The Arkade transaction ID.</returns>
-    /// <exception cref="MalformedPaymentDestination">
-    /// The destination is not an Arkade address — including a BOLT11 invoice, which this wallet has
-    /// no rail to pay since Arkade Lightning was removed.
-    /// </exception>
+    /// <returns>
+    /// Ark transaction ID for non-Lightning payments. For Lightning payments returns <c>null</c>.
+    /// </returns>
     public async Task<string?> Spend(
         StoreData store,
         string destination,
@@ -85,14 +86,46 @@ public class ArkadeSpendingService(
 
         var terms = await clientTransport.GetServerInfoAsync(cancellationToken);
 
-        // Recognised only to say why it cannot be paid — otherwise it falls through and the
-        // merchant is told the destination is malformed, which it is not.
-        if (BOLT11PaymentRequest.TryParse(
-                destination.Replace("lightning:", "", StringComparison.InvariantCultureIgnoreCase),
-                out _, terms.Network))
+        // Lightning destinations: BOLT11 invoice (optionally lightning: prefixed)
+        if (destination.Replace("lightning:", "", StringComparison.InvariantCultureIgnoreCase) is { } lnbolt11 &&
+            BOLT11PaymentRequest.TryParse(lnbolt11, out var bolt11, terms.Network))
         {
-            throw new MalformedPaymentDestination(
-                "Lightning destinations are not supported: the Arkade wallet cannot pay a BOLT11 invoice.");
+            if (bolt11 is null)
+            {
+                throw new MalformedPaymentDestination();
+            }
+
+            if (amountSats.HasValue)
+                throw new MalformedPaymentDestination(
+                    "amountSats is not supported for Lightning destinations: amount is determined by the BOLT11 invoice.");
+
+            if (hasExplicitInputs)
+                throw new MalformedPaymentDestination(
+                    "inputOutpoints is not supported for Lightning destinations: the Lightning client manages coin selection.");
+
+            var lnConfig =
+                store
+                    .GetPaymentMethodConfig<LightningPaymentMethodConfig>(
+                        GetLightningPaymentMethod(),
+                        paymentMethodHandlerDictionary
+                    );
+
+            if (lnConfig is null)
+            {
+                throw new IncompleteArkadeSetupException("lightning compatibility is not enabled");
+            }
+
+            var lnClient = paymentMethodHandlerDictionary.GetLightningHandler("BTC").CreateLightningClient(lnConfig);
+            if (lnClient is not ArkLightningClient)
+            {
+                throw new IncompleteArkadeSetupException("lightning compatibility is not enabled");
+            }
+
+            var resp = await lnClient.Pay(bolt11.ToString(), cancellationToken);
+            // Unknown means funded and in flight; the swaps page follows it from there.
+            return resp.Result is PayResult.Ok or PayResult.Unknown
+                ? null
+                : throw new ArkadePaymentFailedException($"Payment failed: {resp?.ErrorDetail}");
         }
 
         // Resolve destination + amount for Ark-targeted payments.
@@ -236,6 +269,8 @@ public class ArkadeSpendingService(
 
         return resolved.ToArray();
     }
+
+    private static PaymentMethodId GetLightningPaymentMethod() => PaymentTypes.LN.GetPaymentMethodId("BTC");
 
     private T? GetConfig<T>(PaymentMethodId paymentMethodId, StoreData store) where T : class
     {

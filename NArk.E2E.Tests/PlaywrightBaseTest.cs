@@ -130,6 +130,26 @@ public abstract class PlaywrightBaseTest : UnitTestBase, IDisposable
     /// or existing wallet-id) to take the import path. Returns the storeId
     /// once the wizard has redirected away from /initial-setup.
     /// </summary>
+    /// <summary>A store whose Arkade wallet was paired watch-only, so it holds no signer.</summary>
+    protected async Task<string> CreateStoreWithWatchOnlyWalletAsync(string descriptor)
+    {
+        ArgumentNullException.ThrowIfNull(Page);
+        var storeId = await CreateStore();
+        await GoToUrl($"/plugins/ark/stores/{storeId}/initial-setup");
+
+        await Page.EvaluateAsync(
+            "(v) => { var el = document.querySelector('[data-testid=\"watch-only-descriptor-input\"]'); el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }",
+            descriptor);
+        await Page.EvaluateAsync(
+            "document.querySelector('[data-testid=\"import-watch-only-btn\"]').click()");
+
+        await Page.WaitForURLAsync(
+            url => !url.Contains("/initial-setup"),
+            new PageWaitForURLOptions { Timeout = 60_000 });
+
+        return storeId;
+    }
+
     protected async Task<string> CreateStoreWithArkWalletAsync(string? walletInput = null)
     {
         ArgumentNullException.ThrowIfNull(Page);

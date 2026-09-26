@@ -21,8 +21,8 @@ Payments are settled through **Virtual UTXOs (VTXOs)**, Arkade's off-chain Bitco
 ### 1. Arkade Native
 Direct VTXO-to-VTXO off-chain payments within the Arkade network. Instant settlement, zero routing fees. Payers need an Arkade-compatible wallet.
 
-### 2. Lightning via Boltz
-Payers with Lightning wallets pay a BOLT11 invoice. The plugin uses Boltz's trustless submarine swap to convert the Lightning payment into a VTXO in your Arkade wallet. No Lightning node needed on the merchant side.
+### 2. Lightning via the Arkade corridors
+Payers with Lightning wallets pay a BOLT11 invoice. The plugin settles it over an Arkade intent corridor: it negotiates a quote with an Arkade swap solver per payment, and both sides settle into a covenant — receiving takes delivery of one the solver funded, sending funds a lockup the solver takes by revealing the preimage. Trustless, and no Lightning node on the merchant side.
 
 ### 3. Boarding Address
 Payers send on-chain Bitcoin to a Taproot "boarding address." The Arkade operator batches this into the next batch, converting the on-chain UTXO into a VTXO. If the operator is unresponsive, the payer can reclaim funds unilaterally after a timelock.
@@ -42,8 +42,9 @@ BTCPay Server
     ├── ArkadeSpendingService      # Sends payments (payouts, refunds)
     └── NNark (submodule)          # .NET Arkade SDK
         ├── NArk.Core              # Wallet, VTXO logic, HD/SingleKey signers
-        ├── NArk.Storage.EfCore    # PostgreSQL persistence (EF Core)
-        └── NArk.Swaps             # Boltz submarine/reverse swap client
+        ├── NArk.Arkade             # Arkade Script contracts
+        ├── NArk.ArkadeIntents      # Non-interactive swap corridors (RFQ + covenants)
+        └── NArk.Storage.EfCore     # PostgreSQL persistence (EF Core)
 ```
 
 The plugin persists all state (VTXOs, contracts, swaps, intents, wallets) in BTCPay's existing PostgreSQL database via EF Core migrations.
@@ -105,7 +106,7 @@ The setup script will:
 
 1. Go to **Store Settings → Payment Methods**
 2. Enable **Arkade** as a payment method
-3. Optionally enable **Lightning (via Boltz)** if you have a Boltz instance configured
+3. Optionally enable **Lightning** — available once an Arkade swap solver can be reached (see [Lightning configuration](#lightning-configuration))
 
 ### 3. Store Settings
 
@@ -115,6 +116,59 @@ The setup script will:
 | Boarding Minimum | 5000 sats | Minimum amount to display boarding address (floor: 330 sats / P2TR dust) |
 | Sub-dust Payments | Disabled | Accept payments below 330 sats (no dust limit for VTXOs) |
 | Auto-sweep Address | — | Forward all received funds to this on-chain address automatically |
+| Swap Fee | Store pays | Who covers the solver's spread on a receive swap, Lightning or onchain (see below) |
+
+**Swap Fee** decides which leg of a receive swap the order amount pins, and the two sides differ for
+the payer:
+
+- **Store pays** (default): the payer is billed the order amount — the invoice is minted for it, and the
+  onchain swap's HTLC asks for it — and the solver's fee comes out of what the store receives. The
+  invoice is credited with what the payer sent, as it is on any Lightning corridor.
+- **Sender pays**: the store receives the order amount in full and the payer is billed the fee on top.
+  A Lightning invoice then exceeds the amount the customer approved, which LUD-06 wallets refuse. The
+  onchain swap is not offered at all in this mode — it would need an amount the other rails do not
+  share, and one BIP21 carries a single amount — so onchain payers use the boarding address, which
+  takes the order amount and charges no fee.
+
+A store can run a watch-only Arkade wallet, so the plugin enables the SDK's `SignerlessFallback`: a
+claim or refund such a wallet cannot sign goes through the covenant's signerless leaf instead, which
+pays the same pinned address and is co-signed by the covenant emulator.
+
+### 4. Lightning configuration
+
+Lightning is settled over the Arkade intent corridors, configured in the same `ark.json` the
+Arkade network endpoints come from:
+
+```json
+{
+  "emulator": "https://emulator.arkade.sh",
+  "solver-relay": "wss://relay.example.com",
+  "solver-pubkey": "<x-only hex>",
+  "covclaimd": "https://covclaimd.example.com"
+}
+```
+
+| Key | Required | Description |
+|---|---|---|
+| `emulator` | Yes | The covenant emulator that co-signs both corridors' scripts. Its key is one of the parameters the lockup commits to, so without it no corridor can derive an address at all. Defaulted per network for mainnet, mutinynet and regtest. |
+| `solver-relay` | No | The Nostr relay a named solver is reached on. Both sides dial out; neither listens. |
+| `solver-pubkey` | No | A named solver's x-only public key — its identity on the relay. |
+| `covclaimd` | No | A claim daemon a receive swap seals its preimage to, so a claim can finish while this server is down. |
+| `max-fee-bps` | No | The most a solver may charge per swap, in basis points of the amount paid in. Default `100` (1%). |
+| `max-fee-flat-sats` | No | A fixed allowance added on top of `max-fee-bps`, mainly for the L1 miner fee on the onchain corridor. Default `500`. |
+
+`solver-relay` and `solver-pubkey` are only read together: name both to pin one counterparty,
+or leave both out and a solver is chosen per payment from the network's public registry. A
+development stack has to name one — its solver mints a fresh identity per run, so nothing can
+list it.
+
+Every quote is held to that limit, whichever solver it came from. A quote over it is refused
+before anything is funded or handed to a payer: a Lightning invoice is not minted, a payment is
+not made, and checkout drops the onchain swap (offering boarding if it is on). A solver chosen from the
+registry is additionally held to the fee and limits on its own card.
+
+"Configured" here means configured, not connected: both sides of the transport dial out, so the
+first evidence a solver is really there is a quote coming back.
 
 ---
 
@@ -180,9 +234,10 @@ The setup script will:
 - Unified Send wizard: QR scanning, BIP-21 parsing, multi-output, manual coin selection
 
 ### Swaps (Lightning ↔ Arkade)
-- Boltz submarine swaps for incoming Lightning payments
-- Boltz reverse swaps for outgoing Lightning payments
-- Real-time swap lifecycle monitoring
+- Arkade intent corridors for incoming Lightning payments (the solver funds a covenant the store claims)
+- Arkade intent corridors for outgoing Lightning payments (the store funds a lockup the solver takes)
+- A solver quoted per payment — named in `ark.json`, or chosen from the public solver registry
+- Real-time swap lifecycle monitoring, on the **Swaps** page
 - LNURL-pay destination support
 
 ### Payouts
@@ -204,9 +259,14 @@ The setup script will:
 
 ### Running Tests
 
-After running `setup.sh`, start the local regtest environment (Bitcoin + arkd + Boltz/Fulmine) — a cross-platform Node CLI, no WSL required:
+After running `setup.sh`, start the local regtest environment (Bitcoin + arkd + Fulmine) — a cross-platform Node CLI, no WSL required:
 ```bash
-node submodules/NNark/regtest/regtest.mjs start --profile boltz,delegate
+node submodules/NNark/regtest/regtest.mjs start --profile delegate
+```
+
+The Lightning corridors need more of the stack — a covenant emulator, a claim daemon and a swap solver:
+```bash
+node submodules/NNark/regtest/regtest.mjs start --profile emulator,covclaimd,solver,lightning
 ```
 
 On Windows (wraps the same CLI; extra arguments pass through, e.g. `start-test-env stop`):
@@ -307,10 +367,10 @@ The plugin exposes a store-scoped REST API under `/api/v1/stores/{storeId}/arkad
 - `GET /api/v1/stores/{storeId}/arkade/intents` — list pending batch intents.
 - `DELETE /api/v1/stores/{storeId}/arkade/intents/{intentTxId}` — cancel an intent.
 - `GET /api/v1/stores/{storeId}/arkade/contracts` — list address derivations.
-- `GET /api/v1/stores/{storeId}/arkade/swaps` — list Lightning / chain swaps.
 - `GET /api/v1/stores/{storeId}/arkade/server-info` — Ark operator info.
 - `GET /api/v1/stores/{storeId}/arkade/status` — overall service status.
-- `GET /api/v1/stores/{storeId}/arkade/boltz-limits` — Boltz swap limits and fees.
+- `GET /api/v1/stores/{storeId}/arkade/lightning-solver` — the Arkade swap solver this store trades Lightning corridors with.
+- `POST /api/v1/stores/{storeId}/arkade/swaps/{swapId}/refresh` — re-read a swap from the chain and claim or refund it if due; reopens one its deadline closed.
 - `POST /api/v1/stores/{storeId}/arkade/sync` — force a VTXO + boarding sync.
 
 ### Send example
@@ -353,7 +413,6 @@ Pull requests are welcome. For significant changes, open an issue first to discu
 - [Arkade](https://arkadeos.com) — the Ark protocol implementation
 - [Ark Labs](https://arklabs.to) — the team building Arkade
 - [BTCPay Server](https://btcpayserver.org) — the self-hosted payment processor
-- [Boltz Exchange](https://boltz.exchange) — trustless Lightning ↔ on-chain swaps
 
 ---
 

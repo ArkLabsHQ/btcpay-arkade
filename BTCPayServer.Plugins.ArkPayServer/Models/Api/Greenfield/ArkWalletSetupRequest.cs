@@ -20,6 +20,11 @@ public class ArkWalletSetupRequest
     /// Ignored if Wallet is an Ark address (which sets destination automatically).
     /// </summary>
     public string? Destination { get; set; }
+
+    /// <summary>
+    /// If true, also configures Arkade Lightning (LN) for this store. Default: true.
+    /// </summary>
+    public bool EnableLightning { get; set; } = true;
 }
 
 /// <summary>
@@ -30,6 +35,7 @@ public class ArkWalletSetupResponse
     public string WalletId { get; set; } = "";
     public string WalletType { get; set; } = "";
     public bool IsNewWallet { get; set; }
+    public bool LightningEnabled { get; set; }
 
     /// <summary>
     /// The generated mnemonic phrase (only returned for newly generated wallets, not for imports).

@@ -8,9 +8,37 @@ on:
 
 jobs:
   e2e:
-    name: E2E Tests
+    name: E2E Tests${{ matrix.suffix }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.job-minutes }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suffix: ""
+            profile: delegate
+            filter: --filter-not-trait "Category=LightningCorridors" --filter-not-trait "Category=SolverRegistry"
+            solver-image: ""
+            solver-url: ""
+            job-minutes: 30
+            test-minutes: 20
+            vtxo-tree-expiry: "7200"
+            boarding-exit-delay: "1024"
+            checkpoint-exit-delay: "512"
+          # The corridor suites negotiate real swaps, so they need the solver, the covenant emulator
+          # and the claim daemon beside the stack, and horizons long enough for a swap to outlive its
+          # checkout window.
+          - suffix: " (corridors)"
+            profile: intent-solver,covclaimd
+            filter: --filter-trait "Category=LightningCorridors"
+            solver-image: ghcr.io/arkade-os/intent-solver:0.2.0
+            solver-url: http://127.0.0.1:8787
+            job-minutes: 45
+            test-minutes: 25
+            vtxo-tree-expiry: "15360"
+            boarding-exit-delay: "2048"
+            checkpoint-exit-delay: "1536"
 
     services:
       postgres:
@@ -66,12 +94,13 @@ jobs:
           # Moving every delay above 512 makes them seconds, which is the reading
           # the CLI already applies: the wallet now stays spendable for two hours.
           # Safe here because this suite exercises no unilateral-exit timing.
-          ARKD_VTXO_TREE_EXPIRY: "7200"
+          ARKD_VTXO_TREE_EXPIRY: ${{ matrix.vtxo-tree-expiry }}
           ARKD_UNILATERAL_EXIT_DELAY: "512"
           ARKD_PUBLIC_UNILATERAL_EXIT_DELAY: "512"
-          ARKD_BOARDING_EXIT_DELAY: "1024"
-          ARKD_CHECKPOINT_EXIT_DELAY: "512"
-        run: node submodules/NNark/regtest/regtest.mjs start --profile delegate
+          ARKD_BOARDING_EXIT_DELAY: ${{ matrix.boarding-exit-delay }}
+          ARKD_CHECKPOINT_EXIT_DELAY: ${{ matrix.checkpoint-exit-delay }}
+          INTENT_SOLVER_IMAGE: ${{ matrix.solver-image }}
+        run: node submodules/NNark/regtest/regtest.mjs start --profile ${{ matrix.profile }}
         timeout-minutes: 20
 
       - name: Resolve arkd container name
@@ -137,14 +166,20 @@ jobs:
           # by the previous step so cheat-mode targets whichever exists,
           # rather than pinning to a name that goes stale across regtest bumps.
           ARKADE_CHEAT_ARK_CONTAINER: ${{ steps.arkd-container.outputs.name }}
-        run: dotnet test --project NArk.E2E.Tests/NArk.E2E.Tests.csproj --no-build --output Detailed
-        timeout-minutes: 20
+          # The fixture writes ark.json only when this is set; covclaimd and the emulator default to
+          # the ports the stack publishes.
+          ARKADE_E2E_SOLVER_URL: ${{ matrix.solver-url }}
+        # SolverRegistry stays out of both runs: it reaches the public solver registry over the
+        # internet, so a slow GitHub Pages or a delisted solver would fail a build for reasons that
+        # have nothing to do with the commit.
+        run: dotnet test --project NArk.E2E.Tests/NArk.E2E.Tests.csproj --no-build --output Detailed ${{ matrix.filter }}
+        timeout-minutes: ${{ matrix.test-minutes }}
 
       - name: Collect docker logs on failure
         if: failure()
         run: |
           mkdir -p /tmp/e2e-logs
-          for c in bitcoin nbxplorer arkd arkd-wallet lnd boltz boltz-lnd boltz-fulmine; do
+          for c in bitcoin nbxplorer arkd arkd-wallet lnd lnd-peer intent-solver covclaimd emulator strfry; do
             docker logs "$c" > /tmp/e2e-logs/${c}.log 2>&1 || true
           done
 
@@ -152,7 +187,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-logs
+          name: e2e-logs${{ matrix.suffix }}
           path: /tmp/e2e-logs/
 
       - name: Stop Ark regtest stack (denigiri)

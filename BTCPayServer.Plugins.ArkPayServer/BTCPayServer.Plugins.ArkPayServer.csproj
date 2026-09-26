@@ -41,7 +41,16 @@
         <ProjectReference Include="..\submodules\NNark\NArk.Core\NArk.Core.csproj">
             <Private>true</Private>
         </ProjectReference>
+        <ProjectReference Include="..\submodules\NNark\NArk.Arkade\NArk.Arkade.csproj">
+            <Private>true</Private>
+        </ProjectReference>
+        <ProjectReference Include="..\submodules\NNark\NArk.ArkadeIntents\NArk.ArkadeIntents.csproj">
+            <Private>true</Private>
+        </ProjectReference>
         <ProjectReference Include="..\submodules\NNark\NArk.Storage.EfCore\NArk.Storage.EfCore.csproj">
+            <Private>true</Private>
+        </ProjectReference>
+        <ProjectReference Include="..\submodules\NNark\NArk.Storage.EfCore.ArkadeIntents\NArk.Storage.EfCore.ArkadeIntents.csproj">
             <Private>true</Private>
         </ProjectReference>
         <!-- NNark transitive dependencies (must be explicit for plugin publish) -->

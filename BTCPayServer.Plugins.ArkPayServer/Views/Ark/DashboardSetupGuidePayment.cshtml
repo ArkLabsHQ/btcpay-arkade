@@ -6,7 +6,7 @@
 @model BTCPayServer.Models.StoreViewModels.StoreDashboardViewModel
 @inject PaymentMethodHandlerDictionary  PaymentMethodHandlerDictionary
 @{
-    var pm = Context.GetStoreData().GetPaymentMethodConfig<ArkadePaymentMethodConfig>(ArkadePlugin.ArkadePaymentMethodId, PaymentMethodHandlerDictionary);
+    var pm = Context.GetStoreDataOrNull()?.GetPaymentMethodConfig<ArkadePaymentMethodConfig>(ArkadePlugin.ArkadePaymentMethodId, PaymentMethodHandlerDictionary);
     var enabled = !string.IsNullOrEmpty(pm?.WalletId);
 }
 

@@ -1,3 +1,4 @@
+using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Plugins.ArkPayServer.Data;
 using BTCPayServer.Plugins.ArkPayServer.Services;
 using NArk.Abstractions.Contracts;
@@ -9,6 +10,10 @@ namespace BTCPayServer.Plugins.ArkPayServer.Models;
 public class StoreOverviewViewModel
 {
     public string? StoreId { get; set; }
+    public bool IsLightningEnabled { get; set; }
+
+    /// <summary>Who covers the solver's spread on a receive swap, Lightning or onchain.</summary>
+    public ArkadeSwapFeePayer SwapFeePayer { get; set; }
     public bool IsDestinationSweepEnabled { get; set; }
     public ArkBalancesViewModel? Balances { get; set; }
     public string? WalletId { get; set; }
@@ -18,6 +23,9 @@ public class StoreOverviewViewModel
     public string? DefaultAddress { get; set; }
     public bool AllowSubDustAmounts { get; set; }
     public bool BoardingEnabled { get; set; }
+
+    /// <summary>Whether the fast onchain path is offered when a solver quotes it.</summary>
+    public bool OnchainSwapEnabled { get; set; }
     public long MinBoardingAmountSats { get; set; }
 
     /// <summary>
@@ -45,6 +53,13 @@ public class StoreOverviewViewModel
     public string? ArkOperatorUrl { get; set; }
     public bool ArkOperatorConnected { get; set; }
     public string? ArkOperatorError { get; set; }
+    
+    public string? SolverRelayUrl { get; set; }
+
+    public string? SolverPubkey { get; set; }
+
+    // "Configured", not "connected": both sides dial out, so nothing is pinged until a quote comes back.
+    public bool SolverConfigured { get; set; }
 
     // VTXOs for the overview (recent unspent)
     public IReadOnlyCollection<ArkVtxo> RecentVtxos { get; set; } = [];

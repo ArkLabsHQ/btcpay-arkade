@@ -11,6 +11,9 @@ public class ArkPluginDbContext(DbContextOptions<ArkPluginDbContext> options) : 
     public DbSet<VtxoEntity> Vtxos { get; set; }
     public DbSet<ArkIntentEntity> Intents { get; set; }
     public DbSet<ArkIntentVtxoEntity> IntentVtxos { get; set; }
+    
+    public DbSet<ArkadeSwapIntentEntity> ArkadeIntentSwaps { get; set; }
+
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -20,11 +23,11 @@ public class ArkPluginDbContext(DbContextOptions<ArkPluginDbContext> options) : 
             opts.Schema = "BTCPayServer.Plugins.Ark";
         });
 
-        // PostgreSQL-specific: jsonb column types
-        modelBuilder.Entity<ArkWalletContractEntity>(entity =>
+        // Opt-in since the SDK split Arkade swap persistence into its own package: the core
+        // mappings no longer carry ArkadeSwapIntents, so the table only exists if asked for.
+        modelBuilder.ConfigureArkadeEntities(opts =>
         {
-            entity.Property(e => e.ContractDataJson).HasColumnType("jsonb");
-            entity.Property(e => e.MetadataJson).HasColumnType("jsonb");
+            opts.Schema = "BTCPayServer.Plugins.Ark";
         });
     }
 }

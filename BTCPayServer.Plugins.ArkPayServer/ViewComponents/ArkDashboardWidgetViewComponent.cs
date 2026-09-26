@@ -1,6 +1,7 @@
 using BTCPayServer.Data;
 using BTCPayServer.Models.StoreViewModels;
 using BTCPayServer.Plugins.ArkPayServer.Controllers;
+using BTCPayServer.Plugins.ArkPayServer.Lightning;
 using BTCPayServer.Plugins.ArkPayServer.Models;
 using BTCPayServer.Plugins.ArkPayServer.PaymentHandler;
 using BTCPayServer.Services.Invoices;
@@ -24,7 +25,8 @@ public class ArkDashboardWidgetViewComponent(
     ArkController arkController,
     IVtxoStorage vtxoStorage,
     IIntentStorage intentStorage,
-    IWalletStorage walletStorage) : ViewComponent
+    IWalletStorage walletStorage,
+    ArkadeSolverService arkadeSolver) : ViewComponent
 {
     public async Task<IViewComponentResult> InvokeAsync(StoreDashboardViewModel dashboardModel)
     {
@@ -127,6 +129,13 @@ public class ArkDashboardWidgetViewComponent(
                     model.ArkOperatorError = ex.Message;
                 }
             }
+
+            // The Arkade swap solver. Nothing is dialled to report this: both sides of the RFQ
+            // transport dial out and neither listens, so "configured" is the strongest claim
+            // available without opening a negotiation on a dashboard render.
+            model.SolverRelayUrl = arkadeSolver.RelayUri;
+            model.SolverPubkey = arkadeSolver.SolverPubkey;
+            model.SolverConfigured = arkadeSolver.IsConfigured;
 
             return View(model);
         }
